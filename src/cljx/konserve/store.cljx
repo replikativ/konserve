@@ -12,5 +12,6 @@
   (-update-in [this key-vec up-fn] (go [(get-in @state key-vec) ;; HACK, can be inconsistent!
                                         (get-in (swap! state update-in key-vec up-fn) key-vec)])))
 
-(defn new-mem-store []
-  (go (MemAsyncKeyValueStore. (atom {}))))
+(defn new-mem-store
+  ([] (new-mem-store (atom {})))
+  ([init-atom] (go (MemAsyncKeyValueStore. init-atom))))
