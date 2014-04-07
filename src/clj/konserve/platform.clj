@@ -32,7 +32,7 @@
                 (cl/delete-document db doc)
 
                 :else
-                ((fn trans [doc]
+                ((fn trans [doc attempt]
                    (try (cl/update-document db
                                             doc
                                             (fn [{v :edn-value :as old}]
@@ -43,7 +43,9 @@
                         (catch clojure.lang.ExceptionInfo e
                           (log e)
                           (.printStackTrace e)
-                          (trans (cl/get-document db (pr-str fkey)))))) doc))
+                          (if (< attempt 3)
+                            (trans (cl/get-document db (pr-str fkey)) (inc attempt))
+                            (throw e))))) doc 0))
           nil)))
   (-update-in [this key-vec up-fn]
     (go (let [[fkey & rkey] key-vec
@@ -80,9 +82,9 @@
                      [old new])) doc))))))
 
 
-(defn new-couch-store [name]
-  (go (let [db (couch name)]
-        (create! db)
+(defn new-couch-store [db]
+  (let [db (if (string? db) (couch db) db)]
+    (go (create! db)
         (CouchKeyValueStore. db))))
 
 
