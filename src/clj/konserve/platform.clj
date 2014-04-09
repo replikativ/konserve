@@ -41,11 +41,12 @@
                                                                      (assoc-in (read-string v) rkey value)
                                                                      value)))))
                         (catch clojure.lang.ExceptionInfo e
-                          (log e)
-                          (.printStackTrace e)
-                          (if (< attempt 3)
+                          (if (< attempt 10)
                             (trans (cl/get-document db (pr-str fkey)) (inc attempt))
-                            (throw e))))) doc 0))
+                            (do
+                              (log e)
+                              (.printStackTrace e)
+                              (throw e)))))) doc 0))
           nil)))
   (-update-in [this key-vec up-fn]
     (go (let [[fkey & rkey] key-vec
@@ -65,7 +66,7 @@
                 (do (cl/delete-document db doc) [(get-in old rkey) nil])
 
                 :else
-                ((fn trans [doc]
+                ((fn trans [doc attempt]
                    (let [old (-> doc :edn-value read-string (get-in rkey))
                          new* (try (cl/update-document db
                                                        doc
@@ -75,11 +76,14 @@
                                                                                 (update-in (read-string v) rkey up-fn)
                                                                                 (up-fn (read-string v)))))))
                                    (catch clojure.lang.ExceptionInfo e
-                                     (log e)
-                                     (.printStackTrace e)
-                                     (trans (cl/get-document db (pr-str fkey)))))
+                                     (if (< attempt 10)
+                                       (trans (cl/get-document db (pr-str fkey)) (inc attempt))
+                                       (do
+                                         (log e)
+                                         (.printStackTrace e)
+                                         (throw e)))))
                          new (-> new* :edn-value read-string (get-in rkey))]
-                     [old new])) doc))))))
+                     [old new])) doc 0))))))
 
 
 (defn new-couch-store [db]
