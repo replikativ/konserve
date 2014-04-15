@@ -8,6 +8,10 @@
 
 (def log println)
 
+(defn read-string-safe [s]
+  (binding [*read-eval* false]
+    (read-string s)))
+
 (defrecord CouchKeyValueStore [db]
   IAsyncKeyValueStore
   (-get-in [this key-vec]
@@ -16,7 +20,7 @@
                        pr-str
                        (cl/get-document db)
                        :edn-value
-                       read-string)
+                       read-string-safe)
                   rkey))))
   ;; TODO, cleanup and unify with update-in
   (-assoc-in [this key-vec value]
@@ -38,7 +42,7 @@
                                             (fn [{v :edn-value :as old}]
                                               (assoc old
                                                 :edn-value (pr-str (if-not (empty? rkey)
-                                                                     (assoc-in (read-string v) rkey value)
+                                                                     (assoc-in (read-string-safe v) rkey value)
                                                                      value)))))
                         (catch clojure.lang.ExceptionInfo e
                           (if (< attempt 10)
@@ -51,7 +55,7 @@
   (-update-in [this key-vec up-fn]
     (go (let [[fkey & rkey] key-vec
               doc (cl/get-document db (pr-str fkey))
-              old (when doc (-> doc :edn-value read-string))
+              old (when doc (-> doc :edn-value read-string-safe))
               new (if-not (empty? rkey)
                     (update-in old rkey up-fn)
                     (up-fn old))]
@@ -59,7 +63,7 @@
                 [nil (-> (cl/put-document db {:_id (pr-str fkey) ;; TODO might throw on race condition to creation
                                               :edn-value (pr-str new)})
                          :edn-value
-                         read-string
+                         read-string-safe
                          (get-in rkey))]
 
                 (not new)
@@ -67,14 +71,14 @@
 
                 :else
                 ((fn trans [doc attempt]
-                   (let [old (-> doc :edn-value read-string (get-in rkey))
+                   (let [old (-> doc :edn-value read-string-safe (get-in rkey))
                          new* (try (cl/update-document db
                                                        doc
                                                        (fn [{v :edn-value :as old}]
                                                          (assoc old
                                                            :edn-value (pr-str (if-not (empty? rkey)
-                                                                                (update-in (read-string v) rkey up-fn)
-                                                                                (up-fn (read-string v)))))))
+                                                                                (update-in (read-string-safe v) rkey up-fn)
+                                                                                (up-fn (read-string-safe v)))))))
                                    (catch clojure.lang.ExceptionInfo e
                                      (if (< attempt 10)
                                        (trans (cl/get-document db (pr-str fkey)) (inc attempt))
@@ -82,7 +86,7 @@
                                          (log e)
                                          (.printStackTrace e)
                                          (throw e)))))
-                         new (-> new* :edn-value read-string (get-in rkey))]
+                         new (-> new* :edn-value read-string-safe (get-in rkey))]
                      [old new])) doc 0))))))
 
 
