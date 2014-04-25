@@ -10,7 +10,7 @@
 
 (defn read-string-safe [s]
   (binding [*read-eval* false]
-    (read-string s)))
+    (when s (read-string s))))
 
 (defrecord CouchKeyValueStore [db]
   IAsyncKeyValueStore
