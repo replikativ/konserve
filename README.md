@@ -6,6 +6,9 @@ The protocol is implemented at the moment for CouchDB with [clutch](https://gith
 
 ## Usage
 
+Add to your leiningen dependencies:
+    [net.polyc0l0r/konserve "0.1.0"]
+
 From a browser (you need IndexedDB available in your js env) or analogous from a Clojure REPL with CouchDB run:
 
     (ns test-db
