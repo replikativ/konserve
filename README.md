@@ -11,7 +11,7 @@ The protocol is implemented at the moment for CouchDB with [clutch](https://gith
 Add to your leiningen dependencies:
 
 ~~~clojure
-[net.polyc0l0r/konserve "0.1.3"]
+[net.polyc0l0r/konserve "0.1.4"]
 ~~~
 
 From a browser (you need IndexedDB available in your js env) or analogous from a Clojure REPL with CouchDB run:

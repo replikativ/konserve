@@ -10,10 +10,10 @@
 (def log println)
 
 ;; is this binding a good idea? should it be the same in cljs?
-(def ^:dynamic *read-opts* {})
+(def ^:dynamic *read-opts* nil)
 
 (defn read-string-safe [s]
-  (when s (edn/read-string *read-opts* s)))
+  (when s (edn/read-string (or *read-opts* {}) s)))
 
 (defrecord CouchKeyValueStore [db]
   IEDNAsyncKeyValueStore
