@@ -1,16 +1,19 @@
 (ns konserve.platform
   "Platform specific io operations clj."
-  (:use [clojure.set :as set]
-        [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in]])
-  (:require [clojure.core.async :as async
+  (:require [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in]]
+            [clojure.set :as set]
+            [clojure.edn :as edn]
+            [clojure.core.async :as async
              :refer [<! >! timeout chan alt! go go-loop]]
             [com.ashafa.clutch :refer [couch create!] :as cl]))
 
 (def log println)
 
+;; is this binding a good idea? should it be the same in cljs?
+(def ^:dynamic *read-opts* {})
+
 (defn read-string-safe [s]
-  (binding [*read-eval* false]
-    (when s (read-string s))))
+  (when s (edn/read-string *read-opts* s)))
 
 (defrecord CouchKeyValueStore [db]
   IEDNAsyncKeyValueStore
@@ -104,7 +107,13 @@
   (go (println (<! (-assoc-in couch-store ["john"] 42))))
   (go (println (<! (-update-in couch-store ["john"] inc))))
 
-  (go (println (<! (-assoc-in couch-store ["peter" 12383] [3 1 4 5]))))
+  (defrecord Test [a])
+  (go (println (<! (-assoc-in couch-store ["peter"] (Test. 5)))))
 
+  (binding [*read-opts* {:readers {'konserve.platform.Test
+                                   (fn [data] (println "READ:" data))}
+                         :default (fn [tag data] (println "DEFAULT:" tag data))}]
+    #_(read-string-safe "#konserve.platform.Test{:a 3}")
+    (go (println (<! (-get-in couch-store ["peter"])))))
 
   (go (println (<! (-update-in couch-store ["hans" :a] (fnil inc 0))))))

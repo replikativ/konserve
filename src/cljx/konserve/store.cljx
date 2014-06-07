@@ -1,11 +1,11 @@
 (ns ^:shared konserve.store
   "Address globally aggregated immutable key-value store(s)."
-  (:require [konserve.protocols :refer [IAsyncKeyValueStore]]
+  (:require [konserve.protocols :refer [IEDNAsyncKeyValueStore]]
             #+clj [clojure.core.async :refer [go]])
   #+cljs (:require-macros [cljs.core.async.macros :refer [go]]))
 
 (defrecord MemAsyncKeyValueStore [state]
-  IAsyncKeyValueStore
+  IEDNAsyncKeyValueStore
   (-get-in [this key-vec] (go (get-in @state key-vec)))
   (-assoc-in [this key-vec value] (go (swap! state assoc-in key-vec value)
                                       nil))

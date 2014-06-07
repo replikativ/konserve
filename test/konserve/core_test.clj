@@ -1,6 +1,6 @@
 (ns konserve.core-test
   (:require [clojure.test :refer :all]
-            [konserve.core :refer :all]))
+            [konserve.protocols :refer :all]))
 
 (deftest a-test
   (testing "FIXME, I fail."

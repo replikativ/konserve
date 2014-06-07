@@ -1,4 +1,4 @@
-(defproject net.polyc0l0r/konserve "0.1.2"
+(defproject net.polyc0l0r/konserve "0.1.3"
   :description "Durable key-value store protocol with core.async."
   :url "http://github.com/ghubber/konserve"
   :license {:name "Eclipse Public License"
@@ -6,7 +6,7 @@
   :source-paths ["src/clj" "src/cljs"]
   :dependencies [[org.clojure/clojure "1.6.0"]
                  [org.clojure/clojurescript "0.0-2202"]
-                 [org.clojure/core.async "0.1.278.0-76b25b-alpha"]
+                 [org.clojure/core.async "0.1.303.0-886421-alpha"]
                  [com.ashafa/clutch "0.4.0-RC1"]]
 
   :plugins [[lein-cljsbuild "1.0.3"]

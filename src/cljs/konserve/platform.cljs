@@ -163,7 +163,7 @@
       res)))
 
 
-(defn create-store [type db store-name]
+(defn- create-store [type db store-name]
   (log "create-store" type)
   (case type
     :edn (IndexedDBKeyValueStore. db store-name)
@@ -198,18 +198,20 @@
     (cemerick.austin.repls/cljs-repl repl-env))
 
 
-  (go (def my-db (<! (new-indexeddb-store "konserve"))))
+  (go (def my-store (<! (new-indexeddb-store "konserve"))))
+  ;; or
+  (go (def game-store (<! (new-indexeddb-store "game-database" :json))))
 
-  (go (println "get:" (<! (-get-in my-db ["test" :a]))))
+  (go (println "get:" (<! (-get-in my-store ["test" :a]))))
 
-  (go (doseq [i (range 10)]
-        (<! (-assoc-in my-db [i] i))))
+  (let [store game-store]
+    (go (doseq [i (range 10)]
+          (<! (-jassoc-in store [i] (clj->js [i]))))
+        (doseq [i (range 10)]
+          (println (<! (-jget-in store [i]))))))
 
-  (go (doseq [i (range 10)]
-        (println (<! (-get-in my-db [i])))))
+  (go (println (<! (-assoc-in my-store ["test2"] {:a 1 :b 4.2}))))
 
-  (go (println (<! (-assoc-in my-db ["test2"] {:a 1 :b 4.2}))))
+  (go (println (<! (-assoc-in my-store ["test" :a] 43))))
 
-  (go (println (<! (-assoc-in my-db ["test" :a] 43))))
-
-  (go (println (<! (-update-in my-db ["test" :a] inc)))))
+  (go (println (<! (-update-in my-store ["test" :a] inc)))))
