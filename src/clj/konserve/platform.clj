@@ -1,7 +1,7 @@
 (ns konserve.platform
   "Platform specific io operations clj."
   (:use [clojure.set :as set]
-        [konserve.protocols :refer [IAsyncKeyValueStore -get-in -assoc-in -update-in]])
+        [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in]])
   (:require [clojure.core.async :as async
              :refer [<! >! timeout chan alt! go go-loop]]
             [com.ashafa.clutch :refer [couch create!] :as cl]))
@@ -13,7 +13,7 @@
     (when s (read-string s))))
 
 (defrecord CouchKeyValueStore [db]
-  IAsyncKeyValueStore
+  IEDNAsyncKeyValueStore
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec]
       (go (get-in (->> fkey

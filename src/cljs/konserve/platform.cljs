@@ -1,6 +1,7 @@
 (ns konserve.platform
   "Platform specific io operations cljs."
-  (:require [konserve.protocols :refer [IAsyncKeyValueStore -get-in -assoc-in -update-in]]
+  (:require [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in
+                                        IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in]]
             [cljs.reader :refer [read-string]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
@@ -14,7 +15,7 @@
   (.log js/console topic e) (close! res) (throw e))
 
 (defrecord IndexedDBKeyValueStore [db store-name]
-  IAsyncKeyValueStore
+  IEDNAsyncKeyValueStore
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
           res (chan)
@@ -86,9 +87,12 @@
                         (close! res))))))
       res)))
 
+
+
+;; TODO find smart ways to either make edn as fast or share parts of the implementation
 (defrecord IndexedDBJSONKeyValueStore [db store-name]
-  IAsyncKeyValueStore
-  (-get-in [this key-vec]
+  IJSONAsyncKeyValueStore
+  (-jget-in [this key-vec]
     (let [[fkey & rkey] key-vec
           res (chan)
           tx (.transaction db #js [store-name])
@@ -105,7 +109,7 @@
               ;; returns nil
               (close! res)))
       res))
-  (-assoc-in [this key-vec value]
+  (-jassoc-in [this key-vec value]
     (let [[fkey & rkey] key-vec
           res (chan)
           tx (.transaction db #js [store-name] "readwrite")
@@ -129,7 +133,7 @@
                 (set! (.-onsuccess up-req)
                       (fn [e] (close! res))))))
       res))
-  (-update-in [this key-vec up-fn]
+  (-jupdate-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           res (chan)
           tx (.transaction db #js [store-name] "readwrite")
@@ -159,29 +163,13 @@
       res)))
 
 
-(defn new-indexeddb-store [name]
-  (let [res (chan)
-        req (.open js/window.indexedDB name 1)]
-    (set! (.-onerror req)
-          (partial error-handler "ERROR opening DB:" res))
-    (set! (.-onsuccess req)
-          (fn success-handler [e]
-            (log "db-opened:" (.-result req))
-            (put! res (IndexedDBKeyValueStore. (.-result req) name))))
-    (set! (.-onupgradeneeded req)
-          (fn upgrade-handler [e]
-            (let [db (-> e .-target .-result)]
-              (.createObjectStore db name #js {:keyPath "key"}))
-            (log "db upgraded from version: " (.-oldVersion e))))
-    res))
-
 (defn create-store [type db store-name]
   (log "create-store" type)
   (case type
     :edn (IndexedDBKeyValueStore. db store-name)
     :json (IndexedDBJSONKeyValueStore. db store-name)))
 
-(defn new-indexeddb-store 
+(defn new-indexeddb-store
   ([name type]
   (let [res (chan)
         req (.open js/window.indexedDB name 1)]
@@ -197,7 +185,7 @@
               (.createObjectStore db name #js {:keyPath "key"}))
             (log "db upgraded from version: " (.-oldVersion e))))
     res))
-  ([name] 
+  ([name]
    (new-indexeddb-store name :edn)))
 
 
