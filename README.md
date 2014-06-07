@@ -16,7 +16,7 @@ From a browser (you need IndexedDB available in your js env) or analogous from a
 
 ~~~clojure
 (ns test-db
-  (:require [konserve.platform :refer [new-indexeddb-store]))
+  (:require [konserve.platform :refer [new-indexeddb-store]]))
 
 (go (def my-db (<! (new-indexeddb-store "konserve"))))
 
