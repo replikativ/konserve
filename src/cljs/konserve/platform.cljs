@@ -2,6 +2,7 @@
   "Platform specific io operations cljs."
   (:require [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in
                                         IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in]]
+            [konserve.literals :refer [TaggedLiteral]]
             [cljs.reader :refer [read-string]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
@@ -10,11 +11,25 @@
 (defn log [& s]
   (.log js/console (apply str s)))
 
-
 (defn error-handler [topic res e]
   (.log js/console topic e) (close! res) (throw e))
 
-(defrecord IndexedDBKeyValueStore [db store-name]
+
+(extend-protocol IPrintWithWriter
+  konserve.literals.TaggedLiteral
+  (-pr-writer [coll writer opts] (-write writer (str "#" (:tag coll) " " (:value coll)))))
+
+(defn read-string-safe [tag-table s]
+  (binding [cljs.reader/*tag-table* (atom (merge tag-table
+                                                 (select-keys @cljs.reader/*tag-table*
+                                                              #{"inst" "uuid" "queue"})))
+            cljs.reader/*default-data-reader-fn*
+            (atom (fn [tag val]
+                    (konserve.literals.TaggedLiteral. tag val)))]
+    (read-string s)))
+
+
+(defrecord IndexedDBKeyValueStore [db store-name tag-table]
   IEDNAsyncKeyValueStore
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
@@ -26,10 +41,9 @@
             (partial error-handler (str "cannot get-in" fkey) res))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
-                      (put! res (-> r
-                                      (aget "edn_value")
-                                      read-string
-                                      (get-in rkey))))
+                     (put! res (get-in (->> (aget r "edn_value")
+                                            (read-string-safe @tag-table))
+                                       rkey)))
               ;; returns nil
               (close! res)))
       res))
@@ -44,7 +58,7 @@
       (set! (.-onsuccess req)
             (fn read-old [e]
               (let [old (when-let [r (.-result req)]
-                          (-> r (aget "edn_value") read-string))
+                          (->> (aget r "edn_value") (read-string-safe @tag-table)))
                     up-req (if (or value (not (empty? rkey)))
                              (.put obj-store
                                    (clj->js {:key (pr-str fkey)
@@ -69,7 +83,8 @@
       (set! (.-onsuccess req)
             (fn read-old [e]
               (let [old (when-let [r (.-result req)]
-                          (-> r (aget "edn_value") read-string))
+                          (->> (aget r "edn_value")
+                               (read-string-safe @tag-table)))
                     new (if-not (empty? rkey)
                           (update-in old rkey up-fn)
                           (up-fn old))
@@ -163,14 +178,28 @@
       res)))
 
 
-(defn- create-store [type db store-name]
-  (log "create-store" type)
-  (case type
-    :edn (IndexedDBKeyValueStore. db store-name)
-    :json (IndexedDBJSONKeyValueStore. db store-name)))
+(defn new-indexeddb-edn-store
+  "Create an IndexedDB backed edn store with tag-table if you need custom types/records,
+e.g. {'namespace.Symbol (fn [val] ...)}"
+  ([name] (new-indexeddb-edn-store name (atom {})))
+  ([name tag-table]
+     (let [res (chan)
+           req (.open js/window.indexedDB name 1)]
+       (set! (.-onerror req)
+             (partial error-handler "ERROR opening DB:" res))
+       (set! (.-onsuccess req)
+             (fn success-handler [e]
+               (log "db-opened:" (.-result req))
+               (put! res (IndexedDBKeyValueStore. (.-result req) name tag-table))))
+       (set! (.-onupgradeneeded req)
+             (fn upgrade-handler [e]
+               (let [db (-> e .-target .-result)]
+                 (.createObjectStore db name #js {:keyPath "key"}))
+               (log "db upgraded from version: " (.-oldVersion e))))
+       res)))
 
-(defn new-indexeddb-store
-  ([name type]
+(defn new-indexeddb-json-store
+  [name]
   (let [res (chan)
         req (.open js/window.indexedDB name 1)]
     (set! (.-onerror req)
@@ -178,15 +207,13 @@
     (set! (.-onsuccess req)
           (fn success-handler [e]
             (log "db-opened:" (.-result req))
-            (put! res (create-store type (.-result req) name))))
+            (put! res (IndexedDBJSONKeyValueStore. (.-result req) name))))
     (set! (.-onupgradeneeded req)
           (fn upgrade-handler [e]
             (let [db (-> e .-target .-result)]
               (.createObjectStore db name #js {:keyPath "key"}))
             (log "db upgraded from version: " (.-oldVersion e))))
     res))
-  ([name]
-   (new-indexeddb-store name :edn)))
 
 
 (comment
@@ -198,17 +225,21 @@
     (cemerick.austin.repls/cljs-repl repl-env))
 
 
-  (go (def my-store (<! (new-indexeddb-store "konserve"))))
+  (go (def my-store (<! (new-indexeddb-edn-store "konserve"))))
   ;; or
-  (go (def game-store (<! (new-indexeddb-store "game-database" :json))))
+  (go (def game-store (<! (new-indexeddb-json-store "game-database"))))
 
   (go (println "get:" (<! (-get-in my-store ["test" :a]))))
 
-  (let [store game-store]
+  (let [store my-store]
     (go (doseq [i (range 10)]
-          (<! (-jassoc-in store [i] (clj->js [i]))))
+          (<! (-assoc-in store [i] i)))
         (doseq [i (range 10)]
-          (println (<! (-jget-in store [i]))))))
+          (println (<! (-get-in store [i]))))))
+
+  (defrecord Test [a])
+  (go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
+  (go (println (<! (-get-in my-store ["rec-test"]))))
 
   (go (println (<! (-assoc-in my-store ["test2"] {:a 1 :b 4.2}))))
 

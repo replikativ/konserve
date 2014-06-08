@@ -1,5 +1,6 @@
 (ns konserve.platform
   "Platform specific io operations clj."
+  (:use konserve.literals)
   (:require [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in]]
             [clojure.set :as set]
             [clojure.edn :as edn]
@@ -9,13 +10,17 @@
 
 (def log println)
 
-;; is this binding a good idea? should it be the same in cljs?
-(def ^:dynamic *read-opts* nil)
+(defmethod print-method konserve.literals.TaggedLiteral [v ^java.io.Writer w]
+  (.write w (str "#" (:tag v) " " (:value v))))
 
-(defn read-string-safe [s]
-  (when s (edn/read-string (or *read-opts* {}) s)))
+(defn read-string-safe [tag-table s]
+  (when s
+    (edn/read-string  {:readers tag-table
+                       :default (fn [tag literal]
+                                  (konserve.literals.TaggedLiteral. tag literal))}
+                      s)))
 
-(defrecord CouchKeyValueStore [db]
+(defrecord CouchKeyValueStore [db tag-table]
   IEDNAsyncKeyValueStore
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec]
@@ -23,7 +28,7 @@
                        pr-str
                        (cl/get-document db)
                        :edn-value
-                       read-string-safe)
+                       (read-string-safe @tag-table))
                   rkey))))
   ;; TODO, cleanup and unify with update-in
   (-assoc-in [this key-vec value]
@@ -45,7 +50,7 @@
                                             (fn [{v :edn-value :as old}]
                                               (assoc old
                                                 :edn-value (pr-str (if-not (empty? rkey)
-                                                                     (assoc-in (read-string-safe v) rkey value)
+                                                                     (assoc-in (read-string-safe @tag-table v) rkey value)
                                                                      value)))))
                         (catch clojure.lang.ExceptionInfo e
                           (if (< attempt 10)
@@ -58,30 +63,31 @@
   (-update-in [this key-vec up-fn]
     (go (let [[fkey & rkey] key-vec
               doc (cl/get-document db (pr-str fkey))
-              old (when doc (-> doc :edn-value read-string-safe))
+              old (when doc (->> doc :edn-value (read-string-safe @tag-table)))
               new (if-not (empty? rkey)
                     (update-in old rkey up-fn)
                     (up-fn old))]
           (cond (and (not doc) new)
-                [nil (-> (cl/put-document db {:_id (pr-str fkey) ;; TODO might throw on race condition to creation
-                                              :edn-value (pr-str new)})
-                         :edn-value
-                         read-string-safe
-                         (get-in rkey))]
+                [nil (get-in (->> (cl/put-document db {:_id (pr-str fkey) ;; TODO might throw on race condition to creation
+                                                       :edn-value (pr-str new)})
+                                  :edn-value
+                                  (read-string-safe @tag-table))
+                             rkey)]
 
                 (not new)
                 (do (cl/delete-document db doc) [(get-in old rkey) nil])
 
                 :else
                 ((fn trans [doc attempt]
-                   (let [old (-> doc :edn-value read-string-safe (get-in rkey))
+                   (let [old (get-in (->> doc :edn-value (read-string-safe @tag-table))
+                                     rkey)
                          new* (try (cl/update-document db
                                                        doc
                                                        (fn [{v :edn-value :as old}]
                                                          (assoc old
                                                            :edn-value (pr-str (if-not (empty? rkey)
-                                                                                (update-in (read-string-safe v) rkey up-fn)
-                                                                                (up-fn (read-string-safe v)))))))
+                                                                                (update-in (read-string-safe @tag-table v) rkey up-fn)
+                                                                                (up-fn (read-string-safe @tag-table v)))))))
                                    (catch clojure.lang.ExceptionInfo e
                                      (if (< attempt 10)
                                        (trans (cl/get-document db (pr-str fkey)) (inc attempt))
@@ -89,18 +95,27 @@
                                          (log e)
                                          (.printStackTrace e)
                                          (throw e)))))
-                         new (-> new* :edn-value read-string-safe (get-in rkey))]
+                         new (-> (read-string-safe @tag-table (:edn-value new*))
+                                 (get-in rkey))]
                      [old new])) doc 0))))))
 
 
-(defn new-couch-store [db]
+(defn new-couch-store
+  "Constructs a CouchDB store either with name for db or a clutch DB
+object and a tag-table atom, e.g. {'namespace.Symbol (fn [val] ...)}."
+  [db tag-table]
   (let [db (if (string? db) (couch db) db)]
     (go (create! db)
-        (CouchKeyValueStore. db))))
+        (CouchKeyValueStore. db tag-table))))
 
 
 (comment
-  (go (def couch-store (<! (new-couch-store "geschichte"))))
+  (go (def couch-store
+        (<! (new-couch-store "geschichte"
+                             (atom {'konserve.platform.Test
+                                    (fn [data] (println "READ:" data))})))))
+
+  (reset! (:tag-table couch-store) {})
 
   (go (println (<! (-get-in couch-store ["john"]))))
   (get-in (:db couch-store) ["john"])
@@ -109,11 +124,6 @@
 
   (defrecord Test [a])
   (go (println (<! (-assoc-in couch-store ["peter"] (Test. 5)))))
-
-  (binding [*read-opts* {:readers {'konserve.platform.Test
-                                   (fn [data] (println "READ:" data))}
-                         :default (fn [tag data] (println "DEFAULT:" tag data))}]
-    #_(read-string-safe "#konserve.platform.Test{:a 3}")
-    (go (println (<! (-get-in couch-store ["peter"])))))
+  (go (println (<! (-get-in couch-store ["peter"]))))
 
   (go (println (<! (-update-in couch-store ["hans" :a] (fnil inc 0))))))
