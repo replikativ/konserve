@@ -13,7 +13,6 @@
                                         IBinaryAsyncKeyValueStore -bget -bassoc]])
   (:import [java.io FileOutputStream FileInputStream]))
 
-;; investigate tagged literals transit deserialisation problem
 
 ;; TODO safe filename encoding
 (defn dumb-encode [s]
