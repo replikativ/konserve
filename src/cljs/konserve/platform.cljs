@@ -220,9 +220,10 @@ e.g. {'namespace.Symbol (fn [val] ...)}"
   ;; fire up repl
   (do
     (ns dev)
-    (def repl-env (reset! cemerick.austin.repls/browser-repl-env
-                          (cemerick.austin/repl-env)))
-    (cemerick.austin.repls/cljs-repl repl-env))
+    (require 'weasel.repl.websocket)
+    (cemerick.piggieback/cljs-repl
+     :repl-env (weasel.repl.websocket/repl-env
+                :ip "0.0.0.0" :port 9001)))
 
 
   (go (def my-store (<! (new-indexeddb-edn-store "konserve"))))
