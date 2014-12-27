@@ -16,5 +16,5 @@
 
 (defprotocol IBinaryAsyncKeyValueStore
   "Allows binary data byte array storage."
-  (-bget [this key])
-  (-bassoc [this key val] "Assoc byte array value under key in the store."))
+  (-bget [this key] "Returns a platform specific binary representation, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
+  (-bassoc [this key val] "Copies given value (InputStream, Reader, File, byte[] or String on JVM, Blob in JavaScript) under key in the store."))

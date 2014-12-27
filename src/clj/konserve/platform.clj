@@ -1,8 +1,7 @@
 (ns konserve.platform
-  "Platform specific io operations clj."
-  (:require [clojure.core.async :as async
-             :refer [<!! <! >! timeout chan alt! go go-loop]]
-            [clojure.edn :as edn]))
+  "Platform specific operations for Clojure."
+  (:use [konserve.literals])
+  (:require [clojure.edn :as edn]))
 
 (def ^:dynamic log println)
 

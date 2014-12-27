@@ -42,9 +42,11 @@
   (-assoc-in [this key-vec value]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
-          f (io/file (str folder "/" fn))]
+          f (io/file (str folder "/" fn))
+          backup (io/file (str folder "/" fn ".backup"))]
       (go
         (locking fn
+          (.renameTo f backup)
           (let [old (when (.exists f)
                       (let [fis (FileInputStream. f)]
                         (try
@@ -62,18 +64,22 @@
             (try
               (fress/write-object w new)
               (catch Exception e
+                (.renameTo backup f)
                 (log e)
                 (throw e))
               (finally
-                (.close fos)))
+                (.close fos)
+                (.delete backup)))
             nil)))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
-          f (io/file (str folder "/" fn))]
+          f (io/file (str folder "/" fn))
+          backup (io/file (str folder "/" fn ".backup"))]
       (go
         (locking fn
+          (.renameTo f backup)
           (let [old (when (.exists f)
                       (let [fis (FileInputStream. f)]
                         (try
@@ -91,10 +97,12 @@
             (try
               (fress/write-object w new)
               (catch Exception e
+                (.renameTo backup f)
                 (log e)
                 (throw e))
               (finally
-                (.close fos)))
+                (.close fos)
+                (.delete backup)))
             nil)))))
 
   IBinaryAsyncKeyValueStore
@@ -103,48 +111,57 @@
           f (io/file (str folder "/" fn))]
       (go (when (.exists f)
             (locking fn
-              (let [fin (FileInputStream. f)
-                    ba (byte-array (.length f))]
+              (let [fin (FileInputStream. f)]
                 (try
-                  (.read fin ba)
-                  ba
+                  {:input-stream fin
+                   :size (.length f)}
                   (catch Exception e
                     (log e)
-                    (throw e))
-                  (finally
+                    (throw e)
                     (.close fin)))))))))
 
-  (-bassoc [this key bytes]
+  (-bassoc [this key input]
     (let [fn (dumb-encode (pr-str key))
-          f (io/file (str folder "/" fn))]
+          f (io/file (str folder "/" fn))
+          backup (io/file (str folder "/" fn ".backup"))]
       (go
         (locking fn
+          (.renameTo f backup)
           (let [fos (FileOutputStream. f)]
             (try
-              (.write fos bytes)
+              (io/copy input fos)
               (catch Exception e
+                (.renameTo backup f)
                 (log e)
                 (throw e))
               (finally
-                (.close fos)))))))))
+                (.close fos)
+                (.delete backup)))))))))
 
 
 (defn new-fs-store
-  [path tag-table]
-  (let [f (io/file path)
-        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
-    (when-not (.exists f)
-      (.mkdir f))
-    ;; simple test to ensure we can write to the folder
-    (when-not (.createNewFile test-file)
-      (throw (ex-info "Cannot write to folder." {:type :not-writable
-                                                 :folder path})))
-    (.delete test-file)
-    (go
-      (map->FileSystemStore {:folder path :tag-table tag-table}))))
+  "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
+  ([path] (new-fs-store path (atom {})))
+  ([path tag-table]
+   (let [f (io/file path)
+         test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
+     (when-not (.exists f)
+       (.mkdir f))
+     ;; simple test to ensure we can write to the folder
+     (when-not (.createNewFile test-file)
+       (throw (ex-info "Cannot write to folder." {:type :not-writable
+                                                  :folder path})))
+     (.delete test-file)
+     (go
+       (map->FileSystemStore {:folder path :tag-table tag-table})))))
 
 (comment
   (def store (<!! (new-fs-store "/tmp/store" (atom {}))))
+
+  (time (->>  (range 10000)
+              (map #(-assoc-in store [%] (vec (range %))))
+              async/merge
+              <!!))
 
   (<!! (-assoc-in store ["foo" :bar] {:foo "baz"}))
   (<!! (-get-in store ["foo"]))
@@ -153,9 +170,11 @@
   (<!! (-update-in store [:bar] inc))
   (<!! (-get-in store [:bar]))
 
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (<!! (-bassoc store "banana" ba))))
-  (take 10 (map byte (<!! (-bget store "banana"))))
+  (import [java.io ByteArrayInputStream ByteArrayOutputStream])
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))
+        is (io/input-stream ba)]
+    (time (<!! (-bassoc store "banana" is))))
+  (def foo (<!! (-bget store "banana")))
 
   (<!! (-assoc-in store ["monkey" :bar] (int-array (* 10 1024 1024) (int 42))))
   (<!! (-get-in store ["monkey"]))
@@ -172,40 +191,9 @@
 
 
 
-  (import [java.io ByteArrayInputStream ByteArrayOutputStream
-           FileOutputStream FileInputStream])
+
 
   (defrecord Test [t])
-
-  ;; Write data to a stream
-  (def out (ByteArrayOutputStream. 4096))
-  (def fout (FileOutputStream. "/tmp/fout-stream"))
-  (def writer (tr/writer fout :msgpack))
-  (def reader (tr/reader (FileInputStream. "/tmp/fout-stream")
-                         :msgpack))
-
-  (time (tr/write writer (byte-array (* 1024 1024 10) (byte 42))))
-  (def read-in (tr/read reader))
-
-  (take 10 read-in)
-
-  (def fout2 (FileOutputStream. "/tmp/fout-stream2"))
-  (.write (io/writer "/tmp/fout-stream2"))
-
-  #_(transit/write writer (take 1000 (repeatedly (partial rand-int Integer/MAX_VALUE ))))
-
-  #_(transit/write writer "foo")
-  #_(transit/write writer {:a [1 2]})
-  (transit/write writer (pr-str (->Test 5)))
-
-  (println out)
-
-  (.size out)
-
-  (def in (ByteArrayInputStream. (.toByteArray out)))
-  (def reader (transit/reader in :msgpack {:handlers {konserve.platform.Test map->Test}}))
-  (println (type (transit/read reader)))
-
 
   (require '[clojure.java.io :as io])
 
@@ -233,8 +221,7 @@
       res))
 
 
-
-
+  ;; doesn't really lock on quick linux check with outside access
   (locked-access (io/file "/tmp/lock2")
                  (fn [fc]
                    (let [ba (byte-array 1024)
@@ -255,5 +242,6 @@
 
   (locking "foo"
     (println "another lock on foo"))
+
 
   )
