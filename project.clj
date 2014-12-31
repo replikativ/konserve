@@ -1,4 +1,4 @@
-(defproject net.polyc0l0r/konserve "0.2.1"
+(defproject net.polyc0l0r/konserve "0.2.2"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/ghubber/konserve"
   :license {:name "Eclipse Public License"

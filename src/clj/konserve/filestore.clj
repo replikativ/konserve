@@ -9,7 +9,7 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [com.ashafa.clutch :refer [couch create!] :as cl]
-            [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in
+            [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]])
   (:import [java.io FileOutputStream FileInputStream]
            [org.fressian.handlers WriteHandler ReadHandler]))
@@ -22,151 +22,169 @@
                      :value s})))
   (str/replace s #"/" "_DUMBSLASH42_"))
 
-(defrecord FileSystemStore [folder read-handlers write-handlers]
+(defn- get-lock [locks key]
+  (or (get @locks key)
+      (get (swap! locks conj key) key)))
+
+
+(defrecord FileSystemStore [folder read-handlers write-handlers locks cache]
   IEDNAsyncKeyValueStore
+  (-exists? [this key]
+    (locking (get-lock locks key)
+      (let [fn (dumb-encode (pr-str key))
+            f (io/file (str folder "/" fn))
+            res (chan)]
+        (put! res (.exists f))
+        (close! res)
+        res)))
+
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
-          f (io/file (str folder "/" fn))
-          res (chan)]
-      (if-not (.exists f)
-        (close! res)
-        (locking fn
-          (let [fis (FileInputStream. f)]
-            (try
-              (put! res (get-in (fress/read fis
-                                            :handlers (-> (merge @read-handlers
-                                                                 fress/clojure-read-handlers)
-                                                          fress/associative-lookup))
-                                rkey))
-              (catch Exception e
-                (log e)
-                (throw e))
-              (finally
-                (.close fis)
-                (close! res))))))
-      res))
+          f (io/file (str folder "/" fn))]
+      (if-let [c (get-in (@cache fkey) rkey)]
+        (go c)
+        (if-not (.exists f)
+          (go nil)
+          (async/thread
+            (locking (get-lock locks fkey)
+              (let [fis (FileInputStream. f)]
+                (try
+                  (get-in
+                   (fress/read fis
+                               :handlers (-> (merge @read-handlers
+                                                    fress/clojure-read-handlers)
+                                             fress/associative-lookup))
+                   rkey)
+                  (catch Exception e
+                    (log e)
+                    (throw e))
+                  (finally
+                    (.close fis))))))))))
 
   (-assoc-in [this key-vec value]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))
-          res (chan)]
-      (locking fn
-        (let [old (when (.exists f)
-                    (let [fis (FileInputStream. f)]
-                      (try
-                        (fress/read fis
-                                    :handlers (-> (merge @read-handlers
-                                                         fress/clojure-read-handlers)
-                                                  fress/associative-lookup))
-                        (catch Exception e
-                          (log e)
-                          (throw e))
-                        (finally
-                          (.close fis)))))
-              _ (.renameTo f backup)
-              fos (FileOutputStream. f)
-              w (fress/create-writer fos :handlers (-> (merge @write-handlers
-                                                              fress/clojure-write-handlers)
-                                                       fress/associative-lookup
-                                                       fress/inheritance-lookup))
-              new (if-not (empty? rkey)
-                    (assoc-in old rkey value)
-                    value)]
-          (try
-            (fress/write-object w new)
-            (catch Exception e
-              (.renameTo backup f)
-              (log e)
-              (throw e))
-            (finally
-              (.close fos)
-              (.delete backup)))
-          (close! res)))
-      res))
+          backup (io/file (str folder "/" fn ".backup"))]
+      (async/thread
+        (locking (get-lock locks fkey)
+          (let [old (or (@cache fkey)
+                        (when (.exists f)
+                          (locking (get-lock locks fkey)
+                            (let [fis (FileInputStream. f)]
+                              (try
+                                (fress/read fis
+                                            :handlers (-> (merge @read-handlers
+                                                                 fress/clojure-read-handlers)
+                                                          fress/associative-lookup))
+                                (catch Exception e
+                                  (log e)
+                                  (throw e))
+                                (finally
+                                  (.close fis)))))))
+                _ (.renameTo f backup)
+                fos (FileOutputStream. f)
+                w (fress/create-writer fos :handlers (-> (merge @write-handlers
+                                                                fress/clojure-write-handlers)
+                                                         fress/associative-lookup
+                                                         fress/inheritance-lookup))
+                new (if-not (empty? rkey)
+                      (assoc-in old rkey value)
+                      value)]
+            (try
+              (fress/write-object w new)
+              (if (> (count @cache) 1000) ;; TODO make tunable
+                (reset! cache {})
+                (swap! cache assoc fkey new))
+              nil
+              (catch Exception e
+                (.renameTo backup f)
+                (log e)
+                (throw e))
+              (finally
+                (.close fos)
+                (.delete backup))))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))
-          res (chan)]
-      (locking fn
-        (let [old (when (.exists f)
-                    (let [fis (FileInputStream. f)]
-                      (try
-                        (fress/read fis
-                                    :handlers (-> (merge @read-handlers
-                                                         fress/clojure-read-handlers)
-                                                  fress/associative-lookup))
-                        (catch Exception e
-                          (log e)
-                          (throw e))
-                        (finally
-                          (.close fis)))))
-              _ (.renameTo f backup)
-              fos (FileOutputStream. f)
-              w (fress/create-writer fos :handlers (-> (merge @write-handlers
-                                                              fress/clojure-write-handlers)
-                                                       fress/associative-lookup
-                                                       fress/inheritance-lookup))
-              new (if-not (empty? rkey)
-                    (update-in old rkey up-fn)
-                    (up-fn old))]
-          (try
-            (fress/write-object w new)
-            (catch Exception e
-              (.renameTo backup f)
-              (log e)
-              (throw e))
-            (finally
-              (.close fos)
-              (.delete backup)))
-          (put! res [(get-in old rkey)
-                     (get-in new rkey)])
-          (close! res)
-          res))))
+          backup (io/file (str folder "/" fn ".backup"))]
+      (async/thread
+        (locking (get-lock locks fkey)
+          (let [old (or (@cache fkey)
+                        (when (.exists f)
+                          (let [fis (FileInputStream. f)]
+                            (try
+                              (fress/read fis
+                                          :handlers (-> (merge @read-handlers
+                                                               fress/clojure-read-handlers)
+                                                        fress/associative-lookup))
+                              (catch Exception e
+                                (log e)
+                                (throw e))
+                              (finally
+                                (.close fis))))))
+                _ (.renameTo f backup)
+                fos (FileOutputStream. f)
+                w (fress/create-writer fos :handlers (-> (merge @write-handlers
+                                                                fress/clojure-write-handlers)
+                                                         fress/associative-lookup
+                                                         fress/inheritance-lookup))
+                new (if-not (empty? rkey)
+                      (update-in old rkey up-fn)
+                      (up-fn old))]
+            (try
+              (fress/write-object w new)
+              (if (> (count @cache) 1000) ;; TODO dumb cache, make tunable
+                (reset! cache {})
+                (swap! cache assoc fkey new))
+              [(get-in old rkey)
+               (get-in new rkey)]
+              (catch Exception e
+                (.renameTo backup f)
+                (log e)
+                (throw e))
+              (finally
+                (.close fos)
+                (.delete backup))))))))
 
   IBinaryAsyncKeyValueStore
-  (-bget [this key]
+  (-bget [this key locked-cb]
     (let [fn (dumb-encode (pr-str key))
-          f (io/file (str folder "/" fn))
-          res (chan)]
-      (when (.exists f)
-        (locking fn
-          (let [fin (FileInputStream. f)]
-            (try
-              (put! res {:input-stream fin
-                         :size (.length f)})
-              (catch Exception e
-                (log e)
-                (throw e)
-                (.close fin))
-              (finally
-                (close! res))))))
-      res))
+          f (io/file (str folder "/" fn))]
+      (if-not (.exists f)
+        (go nil)
+        (async/thread
+          (locking (get-lock locks key)
+            (let [fin (FileInputStream. f)]
+              (try
+                (locked-cb {:input-stream fin
+                            :size (.length f)
+                            :file f})
+                (catch Exception e
+                  (log e)
+                  (throw e)
+                  (.close fin)))))))))
 
   (-bassoc [this key input]
     (let [fn (dumb-encode (pr-str key))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))
-          res (chan)]
-      (locking fn
-        (.renameTo f backup)
-        (let [fos (FileOutputStream. f)]
-          (try
-            (io/copy input fos)
-            (catch Exception e
-              (.renameTo backup f)
-              (log e)
-              (throw e))
-            (finally
-              (.close fos)
-              (.delete backup)
-              (close! res)))
-          res)))))
+          backup (io/file (str folder "/" fn ".backup"))]
+      (async/thread
+        (locking (get-lock locks key)
+          (.renameTo f backup)
+          (let [fos (FileOutputStream. f)]
+            (try
+              (io/copy input fos)
+              (catch Exception e
+                (.renameTo backup f)
+                (log e)
+                (throw e))
+              (finally
+                (.close fos)
+                (.delete backup)))))))))
 
 
 (def map-reader
@@ -218,8 +236,8 @@
 
 (defn new-fs-store
   "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
-  ([path] (new-fs-store path (atom {}) (atom {})))
-  ([path read-handlers write-handlers]
+  ([path] (new-fs-store path (atom {}) (atom {}) (atom #{})))
+  ([path read-handlers write-handlers locks]
    (let [f (io/file path)
          test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
      (when-not (.exists f)
@@ -241,24 +259,42 @@
      (go
        (map->FileSystemStore {:folder path
                               :read-handlers read-handlers
-                              :write-handlers write-handlers})))))
+                              :write-handlers write-handlers
+                              :locks locks
+                              :cache (atom {})})))))
 
 
 (comment
   (def store (<!! (new-fs-store "/tmp/store")))
 
   ;; investigate https://github.com/stuartsierra/parallel-async
-  (time (->>  (range 10000)
-              (map #(-assoc-in store [%] (vec (range %))))
-              async/merge
-              (async/into [])
-              <!!)) ;; 190 secs
+  (let [res (chan (async/sliding-buffer 1))
+        v (vec (range 5000))]
+    (time (->>  (range 5000)
+                (map #(-assoc-in store [%] v))
+                async/merge
+                (async/pipeline-blocking 4 res identity)
+                <!!))) ;; 190 secs
+  (<!! (-get-in store [4000]))
 
-  (time (doseq [i (range 10000)]
-          (<!! (-assoc-in store [i] (vec (range i)))))) ;; 190 secs
+  (let [res (chan (async/sliding-buffer 1))
+        ba (byte-array (* 10 1024) (byte 42))]
+    (time (->>  (range 10000)
+                (map #(-bassoc store % ba))
+                async/merge
+                (async/pipeline-blocking 4 res identity)
+                #_(async/into [])
+                <!!)))
+
+
+  (let [v (vec (range 5000))]
+    (time (doseq [i (range 10000)]
+            (<!! (-assoc-in store [i] v))))) ;; 190 secs
 
   (time (doseq [i (range 10000)]
           (<!! (-get-in store [i])))) ;; 9 secs
+
+  (<!! (-get-in store [10]))
 
   (<!! (-assoc-in store ["foo"] {:bar {:foo "baz"}}))
   (<!! (-assoc-in store ["foo"] (into {} (map vec (partition 2 (range 1000))))))
@@ -269,8 +305,7 @@
   (type (<!! (-get-in store ["baz"])))
 
   (<!! (-assoc-in store ["bar"] (range 10)))
-  (clojure.pprint/pprint (clojure.reflect/reflect (:input-stream (<!! (-bget store "bar"))) ))
-  (.read (:input-stream (<!! (-bget store "bar"))))
+  (.read (<!! (-bget store "bar" :input-stream)))
   (<!! (-update-in store ["bar"] #(conj % 42)))
   (type (<!! (-get-in store ["bar"])))
 
@@ -287,7 +322,10 @@
   (let [ba (byte-array (* 10 1024 1024) (byte 42))
         is (io/input-stream ba)]
     (time (<!! (-bassoc store "banana" is))))
-  (def foo (<!! (-bget store "banana")))
+  (def foo (<!! (-bget store "banana" identity)))
+  (let [ba (ByteArrayOutputStream.)]
+    (io/copy (io/input-stream (:input-stream foo)) ba)
+    (alength (.toByteArray ba)))
 
   (<!! (-assoc-in store ["monkey" :bar] (int-array (* 10 1024 1024) (int 42))))
   (<!! (-get-in store ["monkey"]))

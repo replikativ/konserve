@@ -58,6 +58,7 @@ In Clojure analogous from a Clojure REPL with CouchDB run:
 
 (<!! (-assoc-in store ["foo" :bar] {:foo "baz"}))
 (<!! (-get-in store ["foo"]))
+(<!! (-exists? store "foo"))
 
 (<!! (-assoc-in store [:bar] 42))
 (<!! (-update-in store [:bar] inc))
@@ -65,7 +66,7 @@ In Clojure analogous from a Clojure REPL with CouchDB run:
 
 (let [ba (byte-array (* 10 1024 1024) (byte 42))]
   (time (<!! (-bassoc store "banana" ba))))
-(take 10 (map byte (:input-stream (<!! (-bget store "banana")))))
+(<!! (-bget store "banana" :input-stream))
 ~~~
 
 ## Tagged Literals
@@ -73,18 +74,27 @@ In Clojure analogous from a Clojure REPL with CouchDB run:
 You can read and write custom records with edn, but you have to supply the proper reader-functions through a store-wide tag-table atom, in the format of `{'namespace.Symbol (fn [val] ...realize proper object...)}` (this might differ depending on the backend atm.), which can be bound to a runtime wide atom in case you don't have different data schemas and code-versions to deal with. You can omit it, if you don't use tagged literals in your edn.
 
 ## TODO
-- fix tagged literals for lists in fressian, generalize also to transit
 - unify error handling (either throw or error messages?)
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
-- allow to iterate keys (model a cursor) and only ask for existence
+- implement generic cached store(s) to wrap durable ones
+- allow to iterate keys (model a cursor)
 - move repl examples to tests
+- calculate patches and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.2.2
+- filestore: locking around java strings is a bad idea, use proper lock objects
+- filestore: do io inside async/thread (like async's pipeline) to not block the async threadpool
+- filestore: implement a naive cache (flushes once > 1000 values)
+- filestore, indexeddb: allow to safely custom deserialize file-inputstream in transaction/lock
+- filestore, indexeddb, memstore: implement -exists?
 
 ### 0.2.1
 - filestore: fix fressian collection types for clojure, expose read-handlers/write-handlers
 - filestore: fix -update-in behaviour for nested values
 - filestore: fix rollback renaming order
+
 ### 0.2.0
 - experimental native ACID file-store for Clojure
 - native binary blob support for file-store, IndexedDB and mem-store

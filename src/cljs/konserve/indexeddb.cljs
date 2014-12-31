@@ -1,6 +1,6 @@
 (ns konserve.indexeddb
   (:require [konserve.platform :refer [log read-string-safe]]
-            [konserve.protocols :refer [IEDNAsyncKeyValueStore -get-in -assoc-in -update-in
+            [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
@@ -10,6 +10,21 @@
 ;; port to transit or cljs.fressian for faster edn encoding
 (defrecord IndexedDBKeyValueStore [db store-name tag-table]
   IEDNAsyncKeyValueStore
+  (-exists? [this key]
+    (let [res (chan)
+          tx (.transaction db #js [store-name])
+          obj-store (.objectStore tx store-name)
+          req (.openCursor obj-store (pr-str key))]
+      (set! (.-onerror req)
+            (partial error-handler
+                     (str "cannot check for existance" key) res))
+      (set! (.-onsuccess req)
+            (fn [e]
+              (put! res (if (.-result (.-target e))
+                          true false))
+              (close! res)))
+      res))
+
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
           res (chan)
@@ -82,7 +97,7 @@
       res))
 
   IBinaryAsyncKeyValueStore
-  (-bget [this key]
+  (-bget [this key lock-cb]
     (let [res (chan)
           tx (.transaction db #js [store-name])
           obj-store (.objectStore tx store-name)
@@ -91,7 +106,7 @@
             (partial error-handler (str "cannot get-in" key) res))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
-                     (put! res (aget r "value")))
+                     (put! res (lock-cb (aget r "value"))))
               ;; returns nil
               (close! res)))
       res))
@@ -217,7 +232,7 @@ e.g. {'namespace.Symbol (fn [val] ...)}
   ;; or
   (-jassoc-in my-store ["test" "bar"] #js {:a 5})
   (go (println (<! (-jget-in my-store ["test"]))))
-  (go (println "get:" (<! (-get-in my-store ["test" :a]))))
+  (go (println (<! (-exists? my-store "testff"))))
 
   (let [store my-store]
     (go (doseq [i (range 10)]
