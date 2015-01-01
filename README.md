@@ -13,7 +13,7 @@ There is a JSON store protocol implemented for IndexedDB in case interoperabilit
 Add to your leiningen dependencies:
 
 ~~~clojure
-[net.polyc0l0r/konserve "0.2.1"]
+[net.polyc0l0r/konserve "0.2.2"]
 ~~~
 
 For simple purposes a memory store is implemented as well:
@@ -74,14 +74,18 @@ In Clojure analogous from a Clojure REPL with CouchDB run:
 You can read and write custom records with edn, but you have to supply the proper reader-functions through a store-wide tag-table atom, in the format of `{'namespace.Symbol (fn [val] ...realize proper object...)}` (this might differ depending on the backend atm.), which can be bound to a runtime wide atom in case you don't have different data schemas and code-versions to deal with. You can omit it, if you don't use tagged literals in your edn.
 
 ## TODO
-- unify error handling (either throw or error messages?)
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
 - implement generic cached store(s) to wrap durable ones
-- allow to iterate keys (model a cursor)
+- allow to iterate keys (model a cursor?)
 - move repl examples to tests
 - calculate patches and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.2.3
+- filestore: fsync on fs operations
+- couchdb: add -exists?
+- remove logging and return ex-info exceptions in go channel
 
 ### 0.2.2
 - filestore: locking around java strings is a bad idea, use proper lock objects

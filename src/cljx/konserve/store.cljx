@@ -2,7 +2,6 @@
   "Address globally aggregated immutable key-value store(s)."
   (:require #+clj
             [clojure.core.async :refer [go]]
-            [clojure.java.io :as io]
             [konserve.protocols :refer [IEDNAsyncKeyValueStore
                                         IBinaryAsyncKeyValueStore]])
   #+cljs (:require-macros [cljs.core.async.macros :refer [go]]))

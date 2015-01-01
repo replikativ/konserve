@@ -1,5 +1,5 @@
 (ns konserve.indexeddb
-  (:require [konserve.platform :refer [log read-string-safe]]
+  (:require [konserve.platform :refer [read-string-safe]]
             [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]]
@@ -16,8 +16,12 @@
           obj-store (.objectStore tx store-name)
           req (.openCursor obj-store (pr-str key))]
       (set! (.-onerror req)
-            (partial error-handler
-                     (str "cannot check for existance" key) res))
+            (fn [e]
+              (put! res (ex-info "Cannot check for existence."
+                                 {:type :access-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn [e]
               (put! res (if (.-result (.-target e))
@@ -32,7 +36,12 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot read edn value."
+                                 {:type :read-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
                      (put! res (get-in (->> (aget r "edn_value")
@@ -48,23 +57,40 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get for assoc-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot read edn value."
+                                 {:type :read-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn read-old [e]
-              (let [old (when-let [r (.-result req)]
-                          (->> (aget r "edn_value") (read-string-safe @tag-table)))
-                    up-req (if (or value (not (empty? rkey)))
-                             (.put obj-store
-                                   (clj->js {:key (pr-str fkey)
-                                             :edn_value
-                                             (pr-str (if-not (empty? rkey)
-                                                       (assoc-in old rkey value)
-                                                       value))}))
-                             (.delete obj-store (pr-str fkey)))]
-                (set! (.-onerror up-req)
-                      (partial error-handler (str "cannot put for assoc-in" fkey) res))
-                (set! (.-onsuccess up-req)
-                      (fn [e] (close! res))))))
+              (try
+                (let [old (when-let [r (.-result req)]
+                            (->> (aget r "edn_value") (read-string-safe @tag-table)))
+                      up-req (if (or value (not (empty? rkey)))
+                               (.put obj-store
+                                     (clj->js {:key (pr-str fkey)
+                                               :edn_value
+                                               (pr-str (if-not (empty? rkey)
+                                                         (assoc-in old rkey value)
+                                                         value))}))
+                               (.delete obj-store (pr-str fkey)))]
+                  (set! (.-onerror up-req)
+                        (fn [e]
+                          (put! res (ex-info "Cannot write edn value."
+                                             {:type :write-error
+                                              :key key
+                                              :error (.-target e)}))
+                          (close! res)))
+                  (set! (.-onsuccess up-req)
+                        (fn [e] (close! res))))
+                (catch :default e
+                  (put! res (ex-info "Cannot parse edn value."
+                                     {:type :read-error
+                                      :key key
+                                      :error (.-target e)}))
+                  (close! res)))))
       res))
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
@@ -73,27 +99,44 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get for update-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot read edn value."
+                                 {:type :read-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn read-old [e]
-              (let [old (when-let [r (.-result req)]
-                          (->> (aget r "edn_value")
-                               (read-string-safe @tag-table)))
-                    new (if-not (empty? rkey)
-                          (update-in old rkey up-fn)
-                          (up-fn old))
-                    up-req (if new
-                             (.put obj-store
-                                   (clj->js {:key (pr-str fkey)
-                                             :edn_value
-                                             (pr-str new)}))
-                             (.delete obj-store (pr-str fkey)))]
-                (set! (.-onerror up-req)
-                      (partial error-handler (str "cannot put for update-in" fkey) res))
-                (set! (.-onsuccess up-req)
-                      (fn [e]
-                        (put! res [(get-in old rkey) (get-in new rkey)])
-                        (close! res))))))
+              (try
+                (let [old (when-let [r (.-result req)]
+                            (->> (aget r "edn_value")
+                                 (read-string-safe @tag-table)))
+                      new (if-not (empty? rkey)
+                            (update-in old rkey up-fn)
+                            (up-fn old))
+                      up-req (if new
+                               (.put obj-store
+                                     (clj->js {:key (pr-str fkey)
+                                               :edn_value
+                                               (pr-str new)}))
+                               (.delete obj-store (pr-str fkey)))]
+                  (set! (.-onerror up-req)
+                        (fn [e]
+                          (put! res (ex-info "Cannot write edn value."
+                                             {:type :write-error
+                                              :key key
+                                              :error (.-target e)}))
+                          (close! res)))
+                  (set! (.-onsuccess up-req)
+                        (fn [e]
+                          (put! res [(get-in old rkey) (get-in new rkey)])
+                          (close! res))))
+                (catch :default e
+                  (put! res (ex-info "Cannot parse edn value."
+                                     {:type :read-error
+                                      :key key
+                                      :error (.-target e)}))
+                  (close! res)))))
       res))
 
   IBinaryAsyncKeyValueStore
@@ -103,7 +146,12 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str key))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get-in" key) res))
+            (fn [e]
+              (put! res (ex-info "Cannot read binary value."
+                                 {:type :read-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
                      (put! res (lock-cb (aget r "value"))))
@@ -117,7 +165,12 @@
           req (.put obj-store #js {:key (pr-str key)
                                    :value blob})]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot put for assoc-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot write binary value."
+                                 {:type :write-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (close! res)))
       res))
@@ -130,7 +183,12 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot write json value."
+                                 {:type :write-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
                      (put! res (-> r
@@ -147,7 +205,12 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get for assoc-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot write json value."
+                                 {:type :write-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn read-old [e]
               (let [old (when-let [r (.-result req)]
@@ -160,7 +223,12 @@
                                                       value)})
                              (.delete obj-store (pr-str fkey)))]
                 (set! (.-onerror up-req)
-                      (partial error-handler (str "cannot put for assoc-in" fkey) res))
+                      (fn [e]
+                        (put! res (ex-info "Cannot write json value."
+                                           {:type :write-error
+                                            :key key
+                                            :error (.-target e)}))
+                        (close! res)))
                 (set! (.-onsuccess up-req)
                       (fn [e] (close! res))))))
       res))
@@ -171,7 +239,12 @@
           obj-store (.objectStore tx store-name)
           req (.get obj-store (pr-str fkey))]
       (set! (.-onerror req)
-            (partial error-handler (str "cannot get for update-in" fkey) res))
+            (fn [e]
+              (put! res (ex-info "Cannot write json value."
+                                 {:type :write-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
       (set! (.-onsuccess req)
             (fn read-old [e]
               (let [old (when-let [r (.-result req)]
@@ -186,7 +259,12 @@
                                              (pr-str new)}))
                              (.delete obj-store (pr-str fkey)))]
                 (set! (.-onerror up-req)
-                      (partial error-handler (str "cannot put for update-in" fkey) res))
+                      (fn [e]
+                        (put! res (ex-info "Cannot write json value."
+                                           {:type :write-error
+                                            :key key
+                                            :error (.-target e)}))
+                        (close! res)))
                 (set! (.-onsuccess up-req)
                       (fn [e]
                         (put! res [(get-in old rkey) (get-in new rkey)])
@@ -201,20 +279,22 @@ e.g. {'namespace.Symbol (fn [val] ...)}
   Be careful not to mix up edn and JSON values."
   ([name] (new-indexeddb-store name (atom {})))
   ([name tag-table]
-     (let [res (chan)
-           req (.open js/window.indexedDB name 1)]
-       (set! (.-onerror req)
-             (partial error-handler "ERROR opening DB:" res))
-       (set! (.-onsuccess req)
-             (fn success-handler [e]
-               (log "db-opened:" (.-result req))
-               (put! res (IndexedDBKeyValueStore. (.-result req) name tag-table))))
-       (set! (.-onupgradeneeded req)
-             (fn upgrade-handler [e]
-               (let [db (-> e .-target .-result)]
-                 (.createObjectStore db name #js {:keyPath "key"}))
-               (log "db upgraded from version: " (.-oldVersion e))))
-       res)))
+   (let [res (chan)
+         req (.open js/window.indexedDB name 1)]
+     (set! (.-onerror req)
+           (fn [e]
+             (put! res (ex-info "Cannot open IndexedDB store."
+                                {:type :db-error
+                                 :error (.-target e)}))
+             (close! res)))
+     (set! (.-onsuccess req)
+           (fn success-handler [e]
+             (put! res (IndexedDBKeyValueStore. (.-result req) name tag-table))))
+     (set! (.-onupgradeneeded req)
+           (fn upgrade-handler [e]
+             (let [db (-> e .-target .-result)]
+               (.createObjectStore db name #js {:keyPath "key"}))))
+     res)))
 
 
 
@@ -230,15 +310,16 @@ e.g. {'namespace.Symbol (fn [val] ...)}
 
   (go (def my-store (<! (new-indexeddb-store "konserve"))))
   ;; or
-  (-jassoc-in my-store ["test" "bar"] #js {:a 5})
+  (-jassoc-in my-store ["test" "bar"] #js {:a 3})
   (go (println (<! (-jget-in my-store ["test"]))))
   (go (println (<! (-exists? my-store "testff"))))
 
   (let [store my-store]
-    (go (doseq [i (range 10)]
-          (<! (-assoc-in store [i] i)))
-        (doseq [i (range 10)]
+    (go (time (doseq [i (range 10000)]
+                (<! (-assoc-in my-store [i] i))))
+        #_(doseq [i (range 10)]
           (println (<! (-get-in store [i]))))))
+  (go (println (<! (-get-in store [999]))))
 
   (defrecord Test [a])
   (go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
@@ -246,13 +327,14 @@ e.g. {'namespace.Symbol (fn [val] ...)}
 
   (go (println (<! (-assoc-in my-store ["test2"] {:a 1 :b 4.2}))))
 
-  (go (println (<! (-assoc-in my-store ["test" :a] 43))))
+  (go (println (<! (-assoc-in my-store ["test"] {:a 43}))))
 
   (go (println (<! (-update-in my-store ["test" :a] inc))))
+  (go (println (<! (-get-in my-store ["test2"]))))
 
 
   (go (println (<! (-bassoc my-store
                             "blob-fun"
                             (new js/Blob #js ["hello worlds"], #js {"type" "text/plain"})))))
-  (go (.log js/console (<! (-bget my-store "blob-fun"))))
+  (go (.log js/console (<! (-bget my-store "blob-fun" identity))))
   )

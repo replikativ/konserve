@@ -3,8 +3,6 @@
   (:use [konserve.literals])
   (:require [clojure.edn :as edn]))
 
-(def ^:dynamic log println)
-
 (defmethod print-method konserve.literals.TaggedLiteral [v ^java.io.Writer w]
   (.write w (str "#" (:tag v) " " (:value v))))
 

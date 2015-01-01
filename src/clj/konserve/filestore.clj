@@ -1,9 +1,10 @@
 (ns konserve.filestore
   "Experimental bare file-system implementation."
   (:use konserve.literals)
-  (:require [konserve.platform :refer [log read-string-safe]]
+  (:require [konserve.platform :refer [read-string-safe]]
             [clojure.java.io :as io]
             [clojure.data.fressian :as fress]
+            #_[taoensso.nippy :as nippy]
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
@@ -11,7 +12,7 @@
             [com.ashafa.clutch :refer [couch create!] :as cl]
             [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]])
-  (:import [java.io FileOutputStream FileInputStream]
+  (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
            [org.fressian.handlers WriteHandler ReadHandler]))
 
 ;; TODO safe filename encoding
@@ -48,17 +49,20 @@
           (go nil)
           (async/thread
             (locking (get-lock locks fkey)
-              (let [fis (FileInputStream. f)]
+              (let [fis (DataInputStream. (FileInputStream. f))]
                 (try
                   (get-in
+                   #_(nippy/thaw-from-in! fis)
                    (fress/read fis
                                :handlers (-> (merge @read-handlers
                                                     fress/clojure-read-handlers)
                                              fress/associative-lookup))
                    rkey)
                   (catch Exception e
-                    (log e)
-                    (throw e))
+                    (ex-info "Could not read key."
+                             {:type :read-error
+                              :key fkey
+                              :exception e}))
                   (finally
                     (.close fis))))))))))
 
@@ -66,89 +70,117 @@
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))]
+          new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
         (locking (get-lock locks fkey)
           (let [old (or (@cache fkey)
                         (when (.exists f)
                           (locking (get-lock locks fkey)
-                            (let [fis (FileInputStream. f)]
+                            (let [fis (DataInputStream. (FileInputStream. f))]
                               (try
+                                #_(nippy/thaw-from-in! fis)
                                 (fress/read fis
                                             :handlers (-> (merge @read-handlers
                                                                  fress/clojure-read-handlers)
                                                           fress/associative-lookup))
                                 (catch Exception e
-                                  (log e)
-                                  (throw e))
+                                  (ex-info "Could not read key."
+                                           {:type :read-error
+                                            :key fkey
+                                            :exception e}))
                                 (finally
                                   (.close fis)))))))
-                _ (.renameTo f backup)
-                fos (FileOutputStream. f)
-                w (fress/create-writer fos :handlers (-> (merge @write-handlers
+                fos (FileOutputStream. new-file)
+                dos (DataOutputStream. fos)
+                fd (.getFD fos)
+                w (fress/create-writer dos :handlers (-> (merge @write-handlers
                                                                 fress/clojure-write-handlers)
                                                          fress/associative-lookup
                                                          fress/inheritance-lookup))
                 new (if-not (empty? rkey)
                       (assoc-in old rkey value)
                       value)]
-            (try
-              (fress/write-object w new)
-              (if (> (count @cache) 1000) ;; TODO make tunable
-                (reset! cache {})
-                (swap! cache assoc fkey new))
-              nil
-              (catch Exception e
-                (.renameTo backup f)
-                (log e)
-                (throw e))
-              (finally
-                (.close fos)
-                (.delete backup))))))))
+            (if (instance? Throwable old)
+              old ;; propagate error
+              (try
+                (if (nil? new)
+                  (.delete f)
+                  (do
+                    #_(nippy/freeze-to-out! dos new)
+                    (fress/write-object w new)
+                    (.sync fd)
+                    (.renameTo new-file f)
+                    (.sync fd)))
+                (if (> (count @cache) 1000) ;; TODO make tunable
+                  (reset! cache {})
+                  (swap! cache assoc fkey new))
+                nil
+                (catch Exception e
+                  (.delete new-file)
+                  (ex-info "Could not write key."
+                           {:type :write-error
+                            :key fkey
+                            :exception e}))
+                (finally
+                  (.close fos)))))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))]
+          new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
         (locking (get-lock locks fkey)
           (let [old (or (@cache fkey)
                         (when (.exists f)
-                          (let [fis (FileInputStream. f)]
+                          (let [fis (DataInputStream. (FileInputStream. f))]
                             (try
+                              #_(nippy/thaw-from-in! fis)
                               (fress/read fis
                                           :handlers (-> (merge @read-handlers
                                                                fress/clojure-read-handlers)
                                                         fress/associative-lookup))
                               (catch Exception e
-                                (log e)
-                                (throw e))
+                                (ex-info "Could not read key."
+                                         {:type :read-error
+                                          :key fkey
+                                          :exception e}))
                               (finally
                                 (.close fis))))))
-                _ (.renameTo f backup)
-                fos (FileOutputStream. f)
-                w (fress/create-writer fos :handlers (-> (merge @write-handlers
+                fos (FileOutputStream. new-file)
+                dos (DataOutputStream. fos)
+                fd (.getFD fos)
+                w (fress/create-writer dos :handlers (-> (merge @write-handlers
                                                                 fress/clojure-write-handlers)
                                                          fress/associative-lookup
                                                          fress/inheritance-lookup))
                 new (if-not (empty? rkey)
                       (update-in old rkey up-fn)
                       (up-fn old))]
-            (try
-              (fress/write-object w new)
-              (if (> (count @cache) 1000) ;; TODO dumb cache, make tunable
-                (reset! cache {})
-                (swap! cache assoc fkey new))
-              [(get-in old rkey)
-               (get-in new rkey)]
-              (catch Exception e
-                (.renameTo backup f)
-                (log e)
-                (throw e))
-              (finally
-                (.close fos)
-                (.delete backup))))))))
+            (if (instance? Throwable old)
+              old ;; return read error
+              (try
+                (if (nil? new)
+                  (.delete f)
+                  (do
+                    #_(nippy/freeze-to-out! dos new)
+                    (fress/write-object w new)
+                    (.sync fd)
+                    (.renameTo new-file f)
+                    (.sync fd)))
+                (if (> (count @cache) 1000) ;; TODO dumb cache, make tunable
+                  (reset! cache {})
+                  (swap! cache assoc fkey new))
+                [(get-in old rkey)
+                 (get-in new rkey)]
+                (catch Exception e
+                  (.delete new-file)
+                  (ex-info "Could not write key."
+                           {:type :write-error
+                            :key fkey
+                            :exception e}))
+                (finally
+                  (.close fos)))))))))
 
   IBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
@@ -158,33 +190,40 @@
         (go nil)
         (async/thread
           (locking (get-lock locks key)
-            (let [fin (FileInputStream. f)]
+            (let [fis (DataInputStream. (FileInputStream. f))]
               (try
-                (locked-cb {:input-stream fin
+                (locked-cb {:input-stream fis
                             :size (.length f)
                             :file f})
                 (catch Exception e
-                  (log e)
-                  (throw e)
-                  (.close fin)))))))))
+                  (ex-info "Could not read key."
+                           {:type :read-error
+                            :key key
+                            :exception e}))
+                (finally
+                  (.close fis)))))))))
 
   (-bassoc [this key input]
     (let [fn (dumb-encode (pr-str key))
           f (io/file (str folder "/" fn))
-          backup (io/file (str folder "/" fn ".backup"))]
+          new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
         (locking (get-lock locks key)
-          (.renameTo f backup)
-          (let [fos (FileOutputStream. f)]
+          (let [fos (DataOutputStream. (FileOutputStream. new-file))
+                fd (.getFD fos)]
             (try
               (io/copy input fos)
+              (.sync fd)
+              (.renameTo new-file f)
+              (.sync fd)
               (catch Exception e
-                (.renameTo backup f)
-                (log e)
-                (throw e))
+                (.delete new-file)
+                (ex-info "Could not write key."
+                         {:type :write-error
+                          :key key
+                          :exception e}))
               (finally
-                (.close fos)
-                (.delete backup)))))))))
+                (.close fos)))))))))
 
 
 (def map-reader
@@ -289,13 +328,14 @@
 
   (let [v (vec (range 5000))]
     (time (doseq [i (range 10000)]
-            (<!! (-assoc-in store [i] v))))) ;; 190 secs
+            (<!! (-assoc-in store [i] i))))) ;; 190 secs
 
   (time (doseq [i (range 10000)]
           (<!! (-get-in store [i])))) ;; 9 secs
 
   (<!! (-get-in store [10]))
 
+  (<!! (-assoc-in store ["foo"] nil))
   (<!! (-assoc-in store ["foo"] {:bar {:foo "baz"}}))
   (<!! (-assoc-in store ["foo"] (into {} (map vec (partition 2 (range 1000))))))
   (<!! (-update-in store ["foo" :bar :foo] #(str % "foo")))

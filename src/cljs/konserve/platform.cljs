@@ -10,17 +10,6 @@
 #_(when-not (= (.indexOf (.- js/document URL) "file://") -1)
   (ws-repl/connect "ws://localhost:9001"))
 
-(defn ^:dynamic log
-  "Bindable log fn, defaults to console.log."
-  [& s]
-  (.log js/console (apply str s)))
-
-(defn error-handler
-  "Rebindable error handler, defaults to console.error."
-  [topic res e]
-  (.error js/console topic e) (close! res) (throw e))
-
-
 (extend-protocol IPrintWithWriter
   konserve.literals.TaggedLiteral
   (-pr-writer [coll writer opts] (-write writer (str "#" (:tag coll) " " (:value coll)))))
