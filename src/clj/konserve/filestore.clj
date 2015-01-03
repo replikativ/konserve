@@ -104,7 +104,9 @@
               old ;; propagate error
               (try
                 (if (nil? new)
-                  (.delete f)
+                  (do
+                    (swap! cache dissoc fkey)
+                    (.delete f))
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
@@ -161,7 +163,9 @@
               old ;; return read error
               (try
                 (if (nil? new)
-                  (.delete f)
+                  (do
+                    (swap! cache dissoc fkey)
+                    (.delete f))
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
@@ -209,10 +213,11 @@
           new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
         (locking (get-lock locks key)
-          (let [fos (DataOutputStream. (FileOutputStream. new-file))
+          (let [fos (FileOutputStream. new-file)
+                dos (DataOutputStream. fos)
                 fd (.getFD fos)]
             (try
-              (io/copy input fos)
+              (io/copy input dos)
               (.sync fd)
               (.renameTo new-file f)
               (.sync fd)
