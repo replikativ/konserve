@@ -74,8 +74,10 @@ In Clojure analogous from a Clojure REPL with CouchDB run:
 You can read and write custom records with edn, but you have to supply the proper reader-functions through a store-wide tag-table atom, in the format of `{'namespace.Symbol (fn [val] ...realize proper object...)}` (this might differ depending on the backend atm.), which can be bound to a runtime wide atom in case you don't have different data schemas and code-versions to deal with. You can omit it, if you don't use tagged literals in your edn.
 
 ## TODO
-- depend on hasch and use uuid hash as key/filename for file-store (and others)
+- factor serialisation protocol
+- factor protocol and implementations? input welcome...
 - implement generic cached store(s) to wrap durable ones
+- depend on hasch and use uuid hash as key/filename for file-store (and others)
 - allow to iterate keys (model a cursor?)
 - move repl examples to tests
 - calculate patches and store base-value and edn patches, to allow fast small nested updates

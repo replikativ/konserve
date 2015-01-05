@@ -9,7 +9,6 @@
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [com.ashafa.clutch :refer [couch create!] :as cl]
             [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]])
   (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
@@ -110,6 +109,7 @@
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
+                    (.flush dos)
                     (.sync fd)
                     (.renameTo new-file f)
                     (.sync fd)))
@@ -169,6 +169,7 @@
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
+                    (.flush dos)
                     (.sync fd)
                     (.renameTo new-file f)
                     (.sync fd)))
@@ -218,6 +219,7 @@
                 fd (.getFD fos)]
             (try
               (io/copy input dos)
+              (.flush dos)
               (.sync fd)
               (.renameTo new-file f)
               (.sync fd)
