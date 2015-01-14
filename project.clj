@@ -1,4 +1,4 @@
-(defproject net.polyc0l0r/konserve "0.2.3-SNAPSHOT"
+(defproject net.polyc0l0r/konserve "0.2.3"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/ghubber/konserve"
   :license {:name "Eclipse Public License"
@@ -9,7 +9,6 @@
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
                  [org.clojure/data.fressian "0.2.0"]
                  #_[com.taoensso/nippy "2.7.0"]
-                 [com.ashafa/clutch "0.4.0"]
                  [weasel "0.4.2"]]
 
   :plugins [[lein-cljsbuild "1.0.3"]

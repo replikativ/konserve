@@ -105,7 +105,8 @@
                 (if (nil? new)
                   (do
                     (swap! cache dissoc fkey)
-                    (.delete f))
+                    (.delete f)
+                    (.sync fd))
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
@@ -119,6 +120,7 @@
                 nil
                 (catch Exception e
                   (.delete new-file)
+                  (.sync fd)
                   (ex-info "Could not write key."
                            {:type :write-error
                             :key fkey
@@ -165,7 +167,8 @@
                 (if (nil? new)
                   (do
                     (swap! cache dissoc fkey)
-                    (.delete f))
+                    (.delete f)
+                    (.sync fd))
                   (do
                     #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
@@ -180,6 +183,7 @@
                  (get-in new rkey)]
                 (catch Exception e
                   (.delete new-file)
+                  (.sync fd)
                   (ex-info "Could not write key."
                            {:type :write-error
                             :key fkey
@@ -225,6 +229,7 @@
               (.sync fd)
               (catch Exception e
                 (.delete new-file)
+                (.sync fd)
                 (ex-info "Could not write key."
                          {:type :write-error
                           :key key
@@ -293,7 +298,7 @@
        (throw (ex-info "Cannot write to folder." {:type :not-writable
                                                   :folder path})))
      (.delete test-file)
-     (swap! read-handlers merge {  ;"map" map-reader ; not necessary, should be due to fressian docs??
+     (swap! read-handlers merge {  ;"map" map-reader ; not necessary, but should be due to fressian docs??
                                  "set" set-reader
                                  ;; TODO list doesn't work, not in org.fressian.Handlers (?!)
                                  "plist" plist-reader
@@ -320,8 +325,8 @@
                 (map #(-assoc-in store [%] v))
                 async/merge
                 (async/pipeline-blocking 4 res identity)
-                <!!))) ;; 190 secs
-  (<!! (-get-in store [4000]))
+                <!!))) ;; 38 secs
+  (<!! (-get-in store [2000]))
 
   (let [res (chan (async/sliding-buffer 1))
         ba (byte-array (* 10 1024) (byte 42))]
@@ -330,17 +335,17 @@
                 async/merge
                 (async/pipeline-blocking 4 res identity)
                 #_(async/into [])
-                <!!)))
+                <!!))) ;; 19 secs
 
 
   (let [v (vec (range 5000))]
     (time (doseq [i (range 10000)]
-            (<!! (-assoc-in store [i] i))))) ;; 190 secs
+            (<!! (-assoc-in store [i] i))))) ;; 19 secs
 
   (time (doseq [i (range 10000)]
-          (<!! (-get-in store [i])))) ;; 9 secs
+          (<!! (-get-in store [i])))) ;; 706 msecs
 
-  (<!! (-get-in store [10]))
+  (<!! (-get-in store [11]))
 
   (<!! (-assoc-in store ["foo"] nil))
   (<!! (-assoc-in store ["foo"] {:bar {:foo "baz"}}))

@@ -1,19 +1,23 @@
 # konserve
 
-A key-value store protocol implemented with [core.async](https://github.com/clojure/core.async) to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores), it is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures.
+A key-value store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores), it is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures.
 
 ## Supported Backends
 
-The protocol is implemented at the moment for CouchDB with [clutch](https://github.com/clojure-clutch/clutch), an experimental file-system store in Clojure and for [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) in ClojureScript. The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. For CouchDB and IndexedDB there is no internal JSON-representation of the underlying store like [transit](https://github.com/cognitect/transit-clj) yet, hence they are fairly slow.  New storage backends, e.g. Riak, MongoDB, Redis, JDBC, WebSQL, Local-Storage are welcome. This was initially implemented as a storage protocol for [geschichte](https://github.com/ghubber/geschichte).
+An experimental file-system store in Clojure and for [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) in ClojureScript are provided as elementary reference implementations for the two most important platforms. The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. For IndexedDB there is no internal JSON-representation of the underlying store like [transit](https://github.com/cognitect/transit-clj) yet, hence they are fairly slow.  New storage backends, e.g. Riak, MongoDB, Redis, JDBC, WebSQL, Local-Storage are welcome. This was initially implemented as a elementary storage protocol for [geschichte](https://github.com/ghubber/geschichte).
 
-There is a JSON store protocol implemented for IndexedDB in case interoperability with a JavaScript application is wanted. Be careful not to collide values with edn, use different stores if reasonable.
+There is a JSON store protocol implemented for IndexedDB in case interoperability with a JavaScript application is wanted. Be careful not to confuse values with edn values, they are stored in separate locations and cannot clash.
+
+### External Backends
+
+The protocol is implemented for CouchDB in a separate project [konserve-couch](https://github.com/ghubber/konserve-couch)
 
 ## Usage
 
 Add to your leiningen dependencies:
 
 ~~~clojure
-[net.polyc0l0r/konserve "0.2.2"]
+[net.polyc0l0r/konserve "0.2.3"]
 ~~~
 
 For simple purposes a memory store is implemented as well:
@@ -75,18 +79,19 @@ You can read and write custom records with edn, but you have to supply the prope
 
 ## TODO
 - factor serialisation protocol
-- factor protocol and implementations? input welcome...
 - implement generic cached store(s) to wrap durable ones
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
-- allow to iterate keys (model a cursor?)
+- allow to iterate keys (model a cursor? or just return a snapshot of keys?)
 - move repl examples to tests
-- calculate patches and store base-value and edn patches, to allow fast small nested updates
+- calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
 
 ### 0.2.3
-- filestore: fsync on fs operations
+- filestore: flush output streams, fsync on fs operations
+- filestore can be considered beta quality
 - couchdb: add -exists?
+- couchdb: move to new project
 - remove logging and return ex-info exceptions in go channel
 
 ### 0.2.2
@@ -107,7 +112,7 @@ You can read and write custom records with edn, but you have to supply the prope
 
 ## License
 
-Copyright © 2014 Christian Weilbach
+Copyright © 2014-2015 Christian Weilbach
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
