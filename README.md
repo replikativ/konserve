@@ -123,7 +123,7 @@ You can read and write custom records with edn, but you have to supply the prope
 
 ## License
 
-Copyright © 2014-2015 Christian Weilbach
+Copyright © 2014-2015 Christian Weilbach & Konrad Kühne
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

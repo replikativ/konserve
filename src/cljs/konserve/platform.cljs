@@ -1,6 +1,6 @@
 (ns konserve.platform
   "Platform specific io operations cljs."
-  (:require [konserve.literals :refer [TaggedLiteral]]
+  (:require [konserve.literals :refer [KTaggedLiteral]]
             [cljs.reader :refer [read-string]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)]
             [weasel.repl :as ws-repl])
@@ -11,7 +11,7 @@
   (ws-repl/connect "ws://localhost:9001"))
 
 (extend-protocol IPrintWithWriter
-  konserve.literals.TaggedLiteral
+  konserve.literals.KTaggedLiteral
   (-pr-writer [coll writer opts] (-write writer (str "#" (:tag coll) " " (:value coll)))))
 
 (defn read-string-safe [tag-table s]
@@ -20,5 +20,5 @@
                                                               #{"inst" "uuid" "queue"})))
             cljs.reader/*default-data-reader-fn*
             (atom (fn [tag val]
-                    (konserve.literals.TaggedLiteral. tag val)))]
+                    (konserve.literals.KTaggedLiteral. tag val)))]
     (read-string s)))
