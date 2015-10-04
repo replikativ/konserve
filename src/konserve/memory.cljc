@@ -1,18 +1,21 @@
-(ns konserve.store
+(ns konserve.memory
   "Address globally aggregated immutable key-value store(s)."
-  (:require #+clj
-            [clojure.core.async :refer [go]]
+  (:require #?(:clj [clojure.core.async :refer [go]])
             [konserve.protocols :refer [IEDNAsyncKeyValueStore
                                         IBinaryAsyncKeyValueStore]])
-  #+cljs (:require-macros [cljs.core.async.macros :refer [go]]))
+  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
-(defrecord MemAsyncKeyValueStore [state tag-table]
+(defrecord MemAsyncKeyValueStore [state]
   IEDNAsyncKeyValueStore
   (-exists? [this key] (go (if (@state key) true false)))
   (-get-in [this key-vec] (go (get-in @state key-vec)))
   (-assoc-in [this key-vec value] (go (swap! state assoc-in key-vec value)
                                       nil))
-  (-update-in [this key-vec up-fn] (go [(get-in @state key-vec) ;; HACK, can be inconsistent! (but only old can be too old); alternatively track old
+  (-update-in [this key-vec up-fn] (go [(get-in @state key-vec)
+                                        ;; HACK, can be inconsistent!
+                                        ;; (but only old can be too
+                                        ;; old); alternatively track
+                                        ;; old
                                         (get-in (swap! state update-in key-vec up-fn) key-vec)]))
   IBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
@@ -25,9 +28,8 @@
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet."
   ([] (new-mem-store (atom {})))
-  ([init-atom] (new-mem-store init-atom (atom {})))
-  ([init-atom tag-table]
-     (go (MemAsyncKeyValueStore. init-atom tag-table))))
+  ([init-atom]
+   (go (map->MemAsyncKeyValueStore {:state init-atom}))))
 
 
 (comment
@@ -37,6 +39,6 @@
   (def store (<!! (new-mem-store)))
 
   (<!! (-bassoc store "foo" (io/input-stream (byte-array 10 (byte 42)))))
-  (<!! (-bget store "foo"))
+  (<!! (-bget store "foo" identity))
 
   )

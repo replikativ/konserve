@@ -1,14 +1,13 @@
 (ns konserve.indexeddb
-  (:require [konserve.platform :refer [read-string-safe]]
+  (:require [incognito.edn :refer [read-string-safe]]
             [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
                                         IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                         IBinaryAsyncKeyValueStore -bget -bassoc]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
-
 ;; port to transit or cljs.fressian for faster edn encoding
-(defrecord IndexedDBKeyValueStore [db store-name tag-table]
+(defrecord IndexedDBKeyValueStore [db store-name read-handlers]
   IEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [res (chan)
@@ -45,7 +44,7 @@
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
                      (put! res (get-in (->> (aget r "edn_value")
-                                            (read-string-safe @tag-table))
+                                            (read-string-safe @read-handlers))
                                        rkey)))
               ;; returns nil
               (close! res)))
@@ -67,7 +66,7 @@
             (fn read-old [e]
               (try
                 (let [old (when-let [r (.-result req)]
-                            (->> (aget r "edn_value") (read-string-safe @tag-table)))
+                            (->> (aget r "edn_value") (read-string-safe @read-handlers)))
                       up-req (if (or value (not (empty? rkey)))
                                (.put obj-store
                                      (clj->js {:key (pr-str fkey)
@@ -110,7 +109,7 @@
               (try
                 (let [old (when-let [r (.-result req)]
                             (->> (aget r "edn_value")
-                                 (read-string-safe @tag-table)))
+                                 (read-string-safe @read-handlers)))
                       new (if-not (empty? rkey)
                             (update-in old rkey up-fn)
                             (up-fn old))
@@ -273,12 +272,12 @@
 
 
 (defn new-indexeddb-store
-  "Create an IndexedDB backed edn store with tag-table if you need custom types/records,
-e.g. {'namespace.Symbol (fn [val] ...)}
+  "Create an IndexedDB backed edn store with read-handlers according to
+  incognito.
 
   Be careful not to mix up edn and JSON values."
   ([name] (new-indexeddb-store name (atom {})))
-  ([name tag-table]
+  ([name read-handlers]
    (let [res (chan)
          req (.open js/window.indexedDB name 1)]
      (set! (.-onerror req)
@@ -289,7 +288,9 @@ e.g. {'namespace.Symbol (fn [val] ...)}
              (close! res)))
      (set! (.-onsuccess req)
            (fn success-handler [e]
-             (put! res (IndexedDBKeyValueStore. (.-result req) name tag-table))))
+             (put! res (map->IndexedDBKeyValueStore {:db (.-result req)
+                                                     :store-name name
+                                                     :read-handlers read-handlers}))))
      (set! (.-onupgradeneeded req)
            (fn upgrade-handler [e]
              (let [db (-> e .-target .-result)]
@@ -302,13 +303,15 @@ e.g. {'namespace.Symbol (fn [val] ...)}
   ;; fire up repl
   (do
     (ns dev)
-    (require 'weasel.repl.websocket)
-    (cemerick.piggieback/cljs-repl
-     :repl-env (weasel.repl.websocket/repl-env
-                :ip "0.0.0.0" :port 9001)))
+    (def repl-env (reset! cemerick.austin.repls/browser-repl-env
+                          (cemerick.austin/repl-env)))
+    (cemerick.austin.repls/cljs-repl repl-env))
 
+  (defrecord Test [a])
+  (Test. 5)
 
-  (go (def my-store (<! (new-indexeddb-store "konserve"))))
+  (go (def my-store (<! (new-indexeddb-store "konserve" (atom {'konserve.indexeddb.Test
+                                                               map->Test})))))
   ;; or
   (-jassoc-in my-store ["test" "bar"] #js {:a 3})
   (go (println (<! (-jget-in my-store ["test"]))))
@@ -318,10 +321,9 @@ e.g. {'namespace.Symbol (fn [val] ...)}
     (go (time (doseq [i (range 10000)]
                 (<! (-assoc-in my-store [i] i))))
         #_(doseq [i (range 10)]
-          (println (<! (-get-in store [i]))))))
-  (go (println (<! (-get-in store [999]))))
+            (println (<! (-get-in store [i]))))))
+  (go (println (<! (-get-in my-store [999]))))
 
-  (defrecord Test [a])
   (go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
   (go (println (<! (-get-in my-store ["rec-test"]))))
 

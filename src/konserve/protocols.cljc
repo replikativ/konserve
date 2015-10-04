@@ -1,4 +1,4 @@
-(ns ^:shared konserve.protocols)
+(ns konserve.protocols)
 
 (defprotocol IEDNAsyncKeyValueStore
   "Allows to access a store similar to hash-map in EDN."

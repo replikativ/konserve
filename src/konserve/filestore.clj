@@ -1,10 +1,10 @@
 (ns konserve.filestore
   "Experimental bare file-system implementation."
-  (:use konserve.literals)
-  (:require [konserve.platform :refer [read-string-safe]]
+  (:require [incognito.fressian :refer [incognito-read-handlers
+                                        incognito-write-handlers]]
+            [incognito.base :as ib]
             [clojure.java.io :as io]
             [clojure.data.fressian :as fress]
-            #_[taoensso.nippy :as nippy]
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
@@ -26,7 +26,7 @@
   (or (get @locks key)
       (get (swap! locks conj key) key)))
 
-
+;; TODO either remove cache or find proper way
 (defrecord FileSystemStore [folder read-handlers write-handlers locks cache]
   IEDNAsyncKeyValueStore
   (-exists? [this key]
@@ -51,10 +51,9 @@
               (let [fis (DataInputStream. (FileInputStream. f))]
                 (try
                   (get-in
-                   #_(nippy/thaw-from-in! fis)
                    (fress/read fis
-                               :handlers (-> (merge @read-handlers
-                                                    fress/clojure-read-handlers)
+                               :handlers (-> (merge fress/clojure-read-handlers
+                                                    (incognito-read-handlers read-handlers))
                                              fress/associative-lookup))
                    rkey)
                   (catch Exception e
@@ -77,10 +76,10 @@
                           (locking (get-lock locks fkey)
                             (let [fis (DataInputStream. (FileInputStream. f))]
                               (try
-                                #_(nippy/thaw-from-in! fis)
                                 (fress/read fis
-                                            :handlers (-> (merge @read-handlers
-                                                                 fress/clojure-read-handlers)
+                                            :handlers (-> (merge
+                                                           fress/clojure-read-handlers
+                                                           (incognito-read-handlers read-handlers))
                                                           fress/associative-lookup))
                                 (catch Exception e
                                   (ex-info "Could not read key."
@@ -92,8 +91,9 @@
                 fos (FileOutputStream. new-file)
                 dos (DataOutputStream. fos)
                 fd (.getFD fos)
-                w (fress/create-writer dos :handlers (-> (merge @write-handlers
-                                                                fress/clojure-write-handlers)
+                w (fress/create-writer dos :handlers (-> (merge
+                                                          fress/clojure-write-handlers
+                                                          (incognito-write-handlers write-handlers))
                                                          fress/associative-lookup
                                                          fress/inheritance-lookup))
                 new (if-not (empty? rkey)
@@ -108,15 +108,14 @@
                     (.delete f)
                     (.sync fd))
                   (do
-                    #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
                     (.flush dos)
                     (.sync fd)
                     (.renameTo new-file f)
                     (.sync fd)))
-                (if (> (count @cache) 1000) ;; TODO make tunable
+                #_(if (> (count @cache) 1000) ;; TODO make tunable
                   (reset! cache {})
-                  (swap! cache assoc fkey new))
+                  (swap! cache assoc fkey (ib/incognito-writer @write-handlers new)))
                 nil
                 (catch Exception e
                   (.delete new-file)
@@ -139,10 +138,10 @@
                         (when (.exists f)
                           (let [fis (DataInputStream. (FileInputStream. f))]
                             (try
-                              #_(nippy/thaw-from-in! fis)
                               (fress/read fis
-                                          :handlers (-> (merge @read-handlers
-                                                               fress/clojure-read-handlers)
+                                          :handlers (-> (merge
+                                                         fress/clojure-read-handlers
+                                                         (incognito-read-handlers read-handlers))
                                                         fress/associative-lookup))
                               (catch Exception e
                                 (ex-info "Could not read key."
@@ -154,8 +153,9 @@
                 fos (FileOutputStream. new-file)
                 dos (DataOutputStream. fos)
                 fd (.getFD fos)
-                w (fress/create-writer dos :handlers (-> (merge @write-handlers
-                                                                fress/clojure-write-handlers)
+                w (fress/create-writer dos :handlers (-> (merge
+                                                          fress/clojure-write-handlers
+                                                          (incognito-write-handlers write-handlers))
                                                          fress/associative-lookup
                                                          fress/inheritance-lookup))
                 new (if-not (empty? rkey)
@@ -170,7 +170,6 @@
                     (.delete f)
                     (.sync fd))
                   (do
-                    #_(nippy/freeze-to-out! dos new)
                     (fress/write-object w new)
                     (.flush dos)
                     (.sync fd)
@@ -178,7 +177,7 @@
                     (.sync fd)))
                 (if (> (count @cache) 1000) ;; TODO dumb cache, make tunable
                   (reset! cache {})
-                  (swap! cache assoc fkey new))
+                  #_(swap! cache assoc fkey new))
                 [(get-in old rkey)
                  (get-in new rkey)]
                 (catch Exception e
@@ -238,56 +237,12 @@
                 (.close fos)))))))))
 
 
-(def map-reader
-  (reify ReadHandler
-    (read [_ reader tag component-count]
-      (let [^List kvs (.readObject reader)]
-        (into {} kvs)))))
-
-(def set-reader
-  (reify ReadHandler
-    (read [_ reader tag component-count]
-      (let [^List l (.readObject reader)]
-        (into #{} l)))))
-
-(def plist-reader
-  (reify ReadHandler
-    (read [_ reader tag component-count]
-      (let [len (.readInt reader)]
-        (->> (range len)
-             (map (fn [_] (.readObject reader)))
-             reverse
-             (into '()))))))
-
-(def plist-writer
-  (reify WriteHandler
-    (write [_ writer plist]
-      (.writeTag writer "plist" 2)
-      (.writeInt writer (count plist))
-      (doseq [e plist]
-        (.writeObject writer e)))))
-
-(def pvec-reader
-  (reify ReadHandler
-    (read [_ reader tag component-count]
-      (let [len (.readInt reader)]
-        (->> (range len)
-             (map (fn [_] (.readObject reader)))
-             (into []))))))
-
-(def pvec-writer
-  (reify WriteHandler
-    (write [_ writer pvec]
-      (.writeTag writer "pvec" 2)
-      (.writeInt writer (count pvec))
-      (doseq [e pvec]
-        (.writeObject writer e)))))
-
-
 
 (defn new-fs-store
   "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
-  ([path] (new-fs-store path (atom {}) (atom {}) (atom #{})))
+  ([path] (new-fs-store path (atom {}) (atom {})))
+  ([path read-handlers write-handlers]
+   (new-fs-store path read-handlers write-handlers (atom #{})))
   ([path read-handlers write-handlers locks]
    (let [f (io/file path)
          test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
@@ -298,15 +253,6 @@
        (throw (ex-info "Cannot write to folder." {:type :not-writable
                                                   :folder path})))
      (.delete test-file)
-     (swap! read-handlers merge {  ;"map" map-reader ; not necessary, but should be due to fressian docs??
-                                 "set" set-reader
-                                 ;; TODO list doesn't work, not in org.fressian.Handlers (?!)
-                                 "plist" plist-reader
-                                 "pvec" pvec-reader})
-     (swap! write-handlers merge {clojure.lang.PersistentList {"plist" plist-writer}
-                                  clojure.lang.PersistentList$EmptyList {"plist" plist-writer}
-                                  clojure.lang.LazySeq {"plist" plist-writer}
-                                  clojure.lang.PersistentVector {"pvec" pvec-writer}})
      (go
        (map->FileSystemStore {:folder path
                               :read-handlers read-handlers
@@ -343,7 +289,7 @@
             (<!! (-assoc-in store [i] i))))) ;; 19 secs
 
   (time (doseq [i (range 10000)]
-          (<!! (-get-in store [i])))) ;; 706 msecs
+          (<!! (-get-in store [i])))) ;; 2706 msecs
 
   (<!! (-get-in store [11]))
 

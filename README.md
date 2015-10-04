@@ -25,15 +25,12 @@ New storage backends, e.g. Riak, MongoDB, Redis, JDBC, WebSQL, Local-Storage are
 ## Usage
 
 Add to your leiningen dependencies:
-
-~~~clojure
-[net.polyc0l0r/konserve "0.2.3"]
-~~~
+[![Clojars Project](http://clojars.org/io.replikativ/konserve/latest-version.svg)](http://clojars.org/io.replikativ/konserve)
 
 For simple purposes a memory store wrapping an Atom is implemented as well:
 ~~~clojure
 (ns test-db
-  (:require [konserve.store :refer [new-mem-store]]))
+  (:require [konserve.memory :refer [new-mem-store]]))
 
 (go (def my-db (<! (new-mem-store)))) ;; or
 (go (def my-db (<! (new-mem-store (atom {:foo 42})))))
@@ -45,7 +42,7 @@ From a Clojure REPL run:
     (:require [konserve.filestore :refer [new-fs-store]]
               [clojure.core.async :as async :refer [<!!]]))
 
-(def store (<!! (new-fs-store "/tmp/store" (atom {}))))
+(def store (<!! (new-fs-store "/tmp/store")))
 
 (<!! (-assoc-in store ["foo" :bar] {:foo "baz"}))
 (<!! (-get-in store ["foo"]))
@@ -86,7 +83,20 @@ In ClojureScript from a browser (you need IndexedDB available in your js env):
 
 ## Tagged Literals
 
-You can read and write custom records with edn, but you have to supply the proper reader-functions through a store-wide tag-table atom, in the format of `{'namespace.Symbol (fn [val] ...realize proper object...)}` (this might differ depending on the backend atm.), which can be bound to a runtime wide atom in case you don't have different data schemas and code-versions to deal with. You can omit it, if you don't use tagged literals besides standard records in your edn.
+You can read and write custom records according to [incognito](https://github.com/replikativ/incognito).
+
+An example for ClojureScript with IndexedDB is:
+~~~clojure
+(defrecord Test [a])
+
+(go (def my-store (<! (new-indexeddb-store "konserve" (atom {'user.Test
+                                                             map->Test})))))
+
+(go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
+(go (println (<! (-get-in my-store ["rec-test"]))))
+~~~
+
+For more examples have a look at the comment blocks at the end of the respective namespaces.
 
 ## TODO
 - factor serialisation protocol
@@ -97,6 +107,12 @@ You can read and write custom records with edn, but you have to supply the prope
 - calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.3.0-beta1
+- filestore: disable cache
+- factor out all tagged literal functions to incognito
+- use reader conditionals
+- bump deps
 
 ### 0.2.3
 - filestore: flush output streams, fsync on fs operations

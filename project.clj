@@ -1,33 +1,21 @@
-(defproject net.polyc0l0r/konserve "0.2.4-SNAPSHOT"
+(defproject io.replikativ/konserve "0.3.0-beta1"
   :description "Durable cross-platform key-value store protocol with core.async."
-  :url "http://github.com/ghubber/konserve"
+  :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :source-paths ["src/clj" "src/cljs"]
-  :dependencies [[org.clojure/clojure "1.6.0"]
-                 [org.clojure/clojurescript "0.0-2511"]
+  :source-paths ["src"]
+  :dependencies [[org.clojure/clojure "1.7.0"]
+                 [org.clojure/clojurescript "1.7.48"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
-                 [org.clojure/data.fressian "0.2.0"]
-                 #_[com.taoensso/nippy "2.7.0"]
-                 [weasel "0.4.2"]]
+                 [io.replikativ/incognito "0.1.1"]]
 
-  :plugins [[lein-cljsbuild "1.0.3"]
-            [com.keminglabs/cljx "0.5.0"]]
+  :plugins [[lein-cljsbuild "1.0.6"]]
 
-  :cljx {:builds [{:source-paths ["src/cljx"]
-                   :output-path "target/classes"
-                   :rules :clj}
-
-                  {:source-paths ["src/cljx"]
-                   :output-path "target/classes"
-                   :rules :cljs}]}
-
-  :prep-tasks [["cljx" "once"] "javac" "compile"]
+  :profiles {:dev {:plugins [[com.cemerick/austin "0.1.6"]]}}
 
   :cljsbuild
   {:builds
-   [{:source-paths ["src/cljs"
-                    "target/classes"]
+   [{:source-paths ["src"]
      :compiler
      {:output-to "resources/public/js/main.js"
       :optimizations :simple
