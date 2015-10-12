@@ -6,7 +6,8 @@
   :source-paths ["src"]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [org.clojure/clojurescript "1.7.48"]
-                 [org.clojure/core.async "0.1.346.0-17112a-alpha"]
+                 [es.topiq/full.async "0.2.8-beta1"]
+                 #_[org.clojure/core.async "0.1.346.0-17112a-alpha"]
                  [io.replikativ/incognito "0.1.2"]]
 
   :plugins [[lein-cljsbuild "1.0.6"]]

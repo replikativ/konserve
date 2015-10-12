@@ -1,13 +1,15 @@
 (ns konserve.indexeddb
   (:require [incognito.edn :refer [read-string-safe]]
+            [konserve.serializers :as ser]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
                                         PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
-                                        PBinaryAsyncKeyValueStore -bget -bassoc]]
+                                        PBinaryAsyncKeyValueStore -bget -bassoc
+                                        -serialize -deserialize]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 ;; port to transit or cljs.fressian for faster edn encoding
-(defrecord IndexedDBKeyValueStore [db store-name read-handlers]
+(defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [res (chan)
@@ -44,11 +46,13 @@
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
                      (put! res (get-in (->> (aget r "edn_value")
+                                            #_(-deserialize serializer _ read-handlers)
                                             (read-string-safe @read-handlers))
                                        rkey)))
               ;; returns nil
               (close! res)))
       res))
+
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           res (chan)
@@ -67,6 +71,7 @@
               (try
                 (let [old (when-let [r (.-result req)]
                             (->> (aget r "edn_value")
+                                 #_(-deserialize serializer read-handlers)
                                  (read-string-safe @read-handlers)))
                       new (if-not (empty? rkey)
                             (update-in old rkey up-fn)
@@ -75,6 +80,7 @@
                                (.put obj-store
                                      (clj->js {:key (pr-str fkey)
                                                :edn_value
+                                               #_(-serialize serializer _ new write-handlers)
                                                (pr-str new)}))
                                (.delete obj-store (pr-str fkey)))]
                   (set! (.-onerror up-req)
@@ -235,7 +241,10 @@
 
   Be careful not to mix up edn and JSON values."
   ([name] (new-indexeddb-store name (atom {})))
-  ([name read-handlers]
+  ([name & {:opts [read-handlers]
+            :or {read-handlers (atom {})
+                 write-handlers (atom {})
+                 serializer (ser/string-serializer)}}]
    (let [res (chan)
          req (.open js/window.indexedDB name 1)]
      (set! (.-onerror req)
@@ -247,8 +256,10 @@
      (set! (.-onsuccess req)
            (fn success-handler [e]
              (put! res (map->IndexedDBKeyValueStore {:db (.-result req)
+                                                     :serializer serializer
                                                      :store-name name
-                                                     :read-handlers read-handlers}))))
+                                                     :read-handlers read-handlers
+                                                     :write-handlers write-handlers}))))
      (set! (.-onupgradeneeded req)
            (fn upgrade-handler [e]
              (let [db (-> e .-target .-result)]
@@ -268,8 +279,10 @@
   (defrecord Test [a])
   (Test. 5)
 
-  (go (def my-store (<! (new-indexeddb-store "konserve" (atom {'konserve.indexeddb.Test
-                                                               map->Test})))))
+  (go (def my-store (<! (new-indexeddb-store "konserve"
+                                             :read-handlers
+                                             (atom {'konserve.indexeddb.Test
+                                                    map->Test})))))
   ;; or
   (-jassoc-in my-store ["test" "bar"] #js {:a 3})
   (go (println (<! (-jget-in my-store ["test"]))))

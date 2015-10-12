@@ -9,10 +9,9 @@
 
 (defprotocol PStoreSerializer
   "Decouples serialization format from storage."
-  (-serialize [this val read-handlers]
-    "Returns a go-channel to synchronize.")
-  (-deserialize [this bytes write-handlers]
-    "Gets a runtime specific byte stream reader, e.g. InputStream for JVM and Blob for JavaScript. Returns a go-channel to synchronize."))
+  (-serialize [this output-stream val read-handlers])
+  (-deserialize [this input-stream write-handlers]
+    "For the JVM we use streams, while for JavaScript we return the value for now."))
 
 
 (defprotocol PJSONAsyncKeyValueStore

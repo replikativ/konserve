@@ -1,18 +1,15 @@
 (ns konserve.filestore
   "Experimental bare file-system implementation."
-  (:require [incognito.fressian :refer [incognito-read-handlers
-                                        incognito-write-handlers]]
-            [incognito.base :as ib]
+  (:require [konserve.serializers :as ser]
             [clojure.java.io :as io]
-            [clojure.data.fressian :as fress]
+
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
-                                        PBinaryAsyncKeyValueStore -bget -bassoc]])
-  (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
-           [org.fressian.handlers WriteHandler ReadHandler]))
+                                        PBinaryAsyncKeyValueStore -bget -bassoc
+                                        -serialize -deserialize]]))
 
 ;; TODO safe filename encoding
 (defn dumb-encode [s]
@@ -26,8 +23,8 @@
   (or (get @locks key)
       (get (swap! locks conj key) key)))
 
-;; TODO either remove cache or find proper way
-(defrecord FileSystemStore [folder read-handlers write-handlers locks cache]
+
+(defrecord FileSystemStore [folder serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (locking (get-lock locks key)
@@ -42,27 +39,23 @@
     (let [[fkey & rkey] key-vec
           fn (dumb-encode (pr-str fkey))
           f (io/file (str folder "/" fn))]
-      (if-let [c (get-in (@cache fkey) rkey)]
-        (go c)
-        (if-not (.exists f)
-          (go nil)
-          (async/thread
-            (locking (get-lock locks fkey)
-              (let [fis (DataInputStream. (FileInputStream. f))]
-                (try
-                  (get-in
-                   (fress/read fis
-                               :handlers (-> (merge fress/clojure-read-handlers
-                                                    (incognito-read-handlers read-handlers))
-                                             fress/associative-lookup))
-                   rkey)
-                  (catch Exception e
-                    (ex-info "Could not read key."
-                             {:type :read-error
-                              :key fkey
-                              :exception e}))
-                  (finally
-                    (.close fis))))))))))
+      (if-not (.exists f)
+        (go nil)
+        (async/thread
+          (locking (get-lock locks fkey)
+            (let [fis (DataInputStream. (FileInputStream. f))
+                  res-ch (chan)]
+              (try
+                (get-in
+                 (-deserialize serializer fis read-handlers)
+                 rkey)
+                (catch Exception e
+                  (ex-info "Could not read key."
+                           {:type :read-error
+                            :key fkey
+                            :exception e}))
+                (finally
+                  (.close fis)))))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
@@ -71,30 +64,20 @@
           new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
         (locking (get-lock locks fkey)
-          (let [old (or (@cache fkey)
-                        (when (.exists f)
-                          (let [fis (DataInputStream. (FileInputStream. f))]
-                            (try
-                              (fress/read fis
-                                          :handlers (-> (merge
-                                                         fress/clojure-read-handlers
-                                                         (incognito-read-handlers read-handlers))
-                                                        fress/associative-lookup))
-                              (catch Exception e
-                                (ex-info "Could not read key."
-                                         {:type :read-error
-                                          :key fkey
-                                          :exception e}))
-                              (finally
-                                (.close fis))))))
+          (let [old (when (.exists f)
+                      (let [fis (DataInputStream. (FileInputStream. f))]
+                        (try
+                          (-deserialize serializer fis read-handlers)
+                          (catch Exception e
+                            (ex-info "Could not read key."
+                                     {:type :read-error
+                                      :key fkey
+                                      :exception e}))
+                          (finally
+                            (.close fis)))))
                 fos (FileOutputStream. new-file)
                 dos (DataOutputStream. fos)
                 fd (.getFD fos)
-                w (fress/create-writer dos :handlers (-> (merge
-                                                          fress/clojure-write-handlers
-                                                          (incognito-write-handlers write-handlers))
-                                                         fress/associative-lookup
-                                                         fress/inheritance-lookup))
                 new (if-not (empty? rkey)
                       (update-in old rkey up-fn)
                       (up-fn old))]
@@ -103,18 +86,14 @@
               (try
                 (if (nil? new)
                   (do
-                    (swap! cache dissoc fkey)
                     (.delete f)
                     (.sync fd))
                   (do
-                    (fress/write-object w new)
+                    (-serialize serializer dos new write-handlers)
                     (.flush dos)
                     (.sync fd)
                     (.renameTo new-file f)
                     (.sync fd)))
-                (if (> (count @cache) 1000) ;; TODO dumb cache, make tunable
-                  (reset! cache {})
-                  #_(swap! cache assoc fkey new))
                 [(get-in old rkey)
                  (get-in new rkey)]
                 (catch Exception e
@@ -177,25 +156,26 @@
 
 (defn new-fs-store
   "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
-  ([path] (new-fs-store path (atom {}) (atom {})))
-  ([path read-handlers write-handlers]
-   (new-fs-store path read-handlers write-handlers (atom #{})))
-  ([path read-handlers write-handlers locks]
-   (let [f (io/file path)
-         test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
-     (when-not (.exists f)
-       (.mkdir f))
-     ;; simple test to ensure we can write to the folder
-     (when-not (.createNewFile test-file)
-       (throw (ex-info "Cannot write to folder." {:type :not-writable
-                                                  :folder path})))
-     (.delete test-file)
-     (go
-       (map->FileSystemStore {:folder path
-                              :read-handlers read-handlers
-                              :write-handlers write-handlers
-                              :locks locks
-                              :cache (atom {})})))))
+  [path & {:keys [serializer read-handlers write-handlers]
+           :or {serializer (ser/fressian-serializer)
+                read-handlers (atom {})
+                write-handlers (atom {})}}]
+  (let [f (io/file path)
+        locks (atom #{})
+        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
+    (when-not (.exists f)
+      (.mkdir f))
+    ;; simple test to ensure we can write to the folder
+    (when-not (.createNewFile test-file)
+      (throw (ex-info "Cannot write to folder." {:type :not-writable
+                                                 :folder path})))
+    (.delete test-file)
+    (go
+      (map->FileSystemStore {:folder path
+                             :serializer serializer
+                             :read-handlers read-handlers
+                             :write-handlers write-handlers
+                             :locks locks}))))
 
 
 (comment
