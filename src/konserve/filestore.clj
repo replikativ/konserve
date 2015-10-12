@@ -9,8 +9,8 @@
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
-                                        IBinaryAsyncKeyValueStore -bget -bassoc]])
+            [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
+                                        PBinaryAsyncKeyValueStore -bget -bassoc]])
   (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
            [org.fressian.handlers WriteHandler ReadHandler]))
 
@@ -28,7 +28,7 @@
 
 ;; TODO either remove cache or find proper way
 (defrecord FileSystemStore [folder read-handlers write-handlers locks cache]
-  IEDNAsyncKeyValueStore
+  PEDNAsyncKeyValueStore
   (-exists? [this key]
     (locking (get-lock locks key)
       (let [fn (dumb-encode (pr-str key))
@@ -63,69 +63,6 @@
                               :exception e}))
                   (finally
                     (.close fis))))))))))
-
-  (-assoc-in [this key-vec value]
-    (let [[fkey & rkey] key-vec
-          fn (dumb-encode (pr-str fkey))
-          f (io/file (str folder "/" fn))
-          new-file (io/file (str folder "/" fn ".new"))]
-      (async/thread
-        (locking (get-lock locks fkey)
-          (let [old (or (@cache fkey)
-                        (when (.exists f)
-                          (locking (get-lock locks fkey)
-                            (let [fis (DataInputStream. (FileInputStream. f))]
-                              (try
-                                (fress/read fis
-                                            :handlers (-> (merge
-                                                           fress/clojure-read-handlers
-                                                           (incognito-read-handlers read-handlers))
-                                                          fress/associative-lookup))
-                                (catch Exception e
-                                  (ex-info "Could not read key."
-                                           {:type :read-error
-                                            :key fkey
-                                            :exception e}))
-                                (finally
-                                  (.close fis)))))))
-                fos (FileOutputStream. new-file)
-                dos (DataOutputStream. fos)
-                fd (.getFD fos)
-                w (fress/create-writer dos :handlers (-> (merge
-                                                          fress/clojure-write-handlers
-                                                          (incognito-write-handlers write-handlers))
-                                                         fress/associative-lookup
-                                                         fress/inheritance-lookup))
-                new (if-not (empty? rkey)
-                      (assoc-in old rkey value)
-                      value)]
-            (if (instance? Throwable old)
-              old ;; propagate error
-              (try
-                (if (nil? new)
-                  (do
-                    (swap! cache dissoc fkey)
-                    (.delete f)
-                    (.sync fd))
-                  (do
-                    (fress/write-object w new)
-                    (.flush dos)
-                    (.sync fd)
-                    (.renameTo new-file f)
-                    (.sync fd)))
-                #_(if (> (count @cache) 1000) ;; TODO make tunable
-                  (reset! cache {})
-                  (swap! cache assoc fkey (ib/incognito-writer @write-handlers new)))
-                nil
-                (catch Exception e
-                  (.delete new-file)
-                  (.sync fd)
-                  (ex-info "Could not write key."
-                           {:type :write-error
-                            :key fkey
-                            :exception e}))
-                (finally
-                  (.close fos)))))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
@@ -190,7 +127,7 @@
                 (finally
                   (.close fos)))))))))
 
-  IBinaryAsyncKeyValueStore
+  PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
     (let [fn (dumb-encode (pr-str key))
           f (io/file (str folder "/" fn))]
@@ -300,6 +237,7 @@
   (type (<!! (-get-in store ["foo"])))
 
   (<!! (-assoc-in store ["baz"] #{1 2 3}))
+  (<!! (-assoc-in store ["baz"] (java.util.HashSet. #{1 2 3})))
   (type (<!! (-get-in store ["baz"])))
 
   (<!! (-assoc-in store ["bar"] (range 10)))

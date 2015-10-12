@@ -2,9 +2,9 @@
 
 Simple durability, made easy.
 
-A key-value store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. `update-in` especially allows to run functions atomically and returns old and new value. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores). It is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures. To store values under non-conflicting keys, have a look at [hasch](https://github.com/ghubber/hasch).
+A key-value store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. `update-in` especially allows to run functions atomically and returns old and new value. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores). It is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures. To store values under non-conflicting keys, have a look at [hasch](https://github.com/replikativ/hasch).
 
-This was initially implemented as an elementary storage protocol for [geschichte](https://github.com/ghubber/geschichte).
+This was initially implemented as an elementary storage protocol for [replikativ](https://github.com/replikativ/replikativ).
 
 ## Supported Backends
 
@@ -30,7 +30,8 @@ Add to your leiningen dependencies:
 For simple purposes a memory store wrapping an Atom is implemented as well:
 ~~~clojure
 (ns test-db
-  (:require [konserve.memory :refer [new-mem-store]]))
+  (:require [konserve.memory :refer [new-mem-store]]
+            [konserve.core :as k]))
 
 (go (def my-db (<! (new-mem-store)))) ;; or
 (go (def my-db (<! (new-mem-store (atom {:foo 42})))))
@@ -40,21 +41,22 @@ From a Clojure REPL run:
 ~~~clojure
 (ns test-db
     (:require [konserve.filestore :refer [new-fs-store]]
+              [konserve.core :as k]
               [clojure.core.async :as async :refer [<!!]]))
 
 (def store (<!! (new-fs-store "/tmp/store")))
 
-(<!! (-assoc-in store ["foo" :bar] {:foo "baz"}))
-(<!! (-get-in store ["foo"]))
-(<!! (-exists? store "foo"))
+(<!! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+(<!! (k/get-in store ["foo"]))
+(<!! (k/exists? store "foo"))
 
-(<!! (-assoc-in store [:bar] 42))
-(<!! (-update-in store [:bar] inc))
-(<!! (-get-in store [:bar]))
+(<!! (k/assoc-in store [:bar] 42))
+(<!! (k/update-in store [:bar] inc))
+(<!! (k/get-in store [:bar]))
 
 (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-  (time (<!! (-bassoc store "banana" ba))))
-(<!! (-bget store "banana" :input-stream))
+  (time (<!! (k/bassoc store "banana" ba))))
+(<!! (k/bget store "banana" :input-stream))
 ~~~
 
 
@@ -66,18 +68,18 @@ In ClojureScript from a browser (you need IndexedDB available in your js env):
 
 (go (def my-db (<! (new-indexeddb-store "konserve"))))
 
-(go (println "get:" (<! (-get-in my-db ["test" :a]))))
+(go (println "get:" (<! (k/get-in my-db ["test" :a]))))
 
 (go (doseq [i (range 10)]
-       (<! (-assoc-in my-db [i] i))))
+       (<! (k/assoc-in my-db [i] i))))
 
 ;; prints 0 to 9 each on a line
 (go (doseq [i (range 10)]
-      (println (<! (-get-in my-db [i])))))
+      (println (<! (k/get-in my-db [i])))))
 
-(go (println (<! (-assoc-in my-db ["test"] {:a 1 :b 4.2}))))
+(go (println (<! (k/assoc-in my-db ["test"] {:a 1 :b 4.2}))))
 
-(go (println (<! (-update-in my-db ["test" :a] inc))))
+(go (println (<! (k/update-in my-db ["test" :a] inc))))
 ;; => "test" contains {:a 2 :b 4.2}
 ~~~
 
@@ -92,14 +94,15 @@ An example for ClojureScript with IndexedDB is:
 (go (def my-store (<! (new-indexeddb-store "konserve" (atom {'user.Test
                                                              map->Test})))))
 
-(go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
-(go (println (<! (-get-in my-store ["rec-test"]))))
+(go (println (<! (k/assoc-in my-store ["rec-test"] (Test. 5)))))
+(go (println (<! (k/get-in my-store ["rec-test"]))))
 ~~~
 
 For more examples have a look at the comment blocks at the end of the respective namespaces.
 
 ## TODO
-- factor serialisation protocol
+- factor serialisation protocol [WIP]
+- port konserve-couchdb backend
 - implement generic cached store(s) to wrap durable ones
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
 - allow to iterate keys (model a cursor? or just return a snapshot of keys?)
@@ -107,6 +110,11 @@ For more examples have a look at the comment blocks at the end of the respective
 - calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.3.0-beta3
+- Wrap protocols in proper Clojure functions in the core namespace.
+- Implement assoc-in in terms of update-in
+- Introduce serialiasation protocol with the help of incognito
 
 ### 0.3.0-beta1
 - filestore: disable cache

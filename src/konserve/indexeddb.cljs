@@ -1,14 +1,14 @@
 (ns konserve.indexeddb
   (:require [incognito.edn :refer [read-string-safe]]
-            [konserve.protocols :refer [IEDNAsyncKeyValueStore -exists? -get-in -assoc-in -update-in
-                                        IJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
-                                        IBinaryAsyncKeyValueStore -bget -bassoc]]
+            [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
+                                        PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
+                                        PBinaryAsyncKeyValueStore -bget -bassoc]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 ;; port to transit or cljs.fressian for faster edn encoding
 (defrecord IndexedDBKeyValueStore [db store-name read-handlers]
-  IEDNAsyncKeyValueStore
+  PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [res (chan)
           tx (.transaction db #js [store-name])
@@ -48,48 +48,6 @@
                                        rkey)))
               ;; returns nil
               (close! res)))
-      res))
-  (-assoc-in [this key-vec value]
-    (let [[fkey & rkey] key-vec
-          res (chan)
-          tx (.transaction db #js [store-name] "readwrite")
-          obj-store (.objectStore tx store-name)
-          req (.get obj-store (pr-str fkey))]
-      (set! (.-onerror req)
-            (fn [e]
-              (put! res (ex-info "Cannot read edn value."
-                                 {:type :read-error
-                                  :key key
-                                  :error (.-target e)}))
-              (close! res)))
-      (set! (.-onsuccess req)
-            (fn read-old [e]
-              (try
-                (let [old (when-let [r (.-result req)]
-                            (->> (aget r "edn_value") (read-string-safe @read-handlers)))
-                      up-req (if (or value (not (empty? rkey)))
-                               (.put obj-store
-                                     (clj->js {:key (pr-str fkey)
-                                               :edn_value
-                                               (pr-str (if-not (empty? rkey)
-                                                         (assoc-in old rkey value)
-                                                         value))}))
-                               (.delete obj-store (pr-str fkey)))]
-                  (set! (.-onerror up-req)
-                        (fn [e]
-                          (put! res (ex-info "Cannot write edn value."
-                                             {:type :write-error
-                                              :key key
-                                              :error (.-target e)}))
-                          (close! res)))
-                  (set! (.-onsuccess up-req)
-                        (fn [e] (close! res))))
-                (catch :default e
-                  (put! res (ex-info "Cannot parse edn value."
-                                     {:type :read-error
-                                      :key key
-                                      :error (.-target e)}))
-                  (close! res)))))
       res))
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
@@ -138,7 +96,7 @@
                   (close! res)))))
       res))
 
-  IBinaryAsyncKeyValueStore
+  PBinaryAsyncKeyValueStore
   (-bget [this key lock-cb]
     (let [res (chan)
           tx (.transaction db #js [store-name])
@@ -174,7 +132,7 @@
             (fn [e] (close! res)))
       res))
 
-  IJSONAsyncKeyValueStore
+  PJSONAsyncKeyValueStore
   (-jget-in [this key-vec]
     (let [[fkey & rkey] key-vec
           res (chan)
