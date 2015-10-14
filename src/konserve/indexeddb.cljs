@@ -8,7 +8,7 @@
             [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
-;; port to transit or cljs.fressian for faster edn encoding
+
 (defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
@@ -45,9 +45,7 @@
               (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
-                     (put! res (get-in (->> (aget r "edn_value")
-                                            #_(-deserialize serializer _ read-handlers)
-                                            (read-string-safe @read-handlers))
+                     (put! res (get-in (-deserialize serializer (aget r "edn_value") read-handlers)
                                        rkey)))
               ;; returns nil
               (close! res)))
@@ -70,9 +68,7 @@
             (fn read-old [e]
               (try
                 (let [old (when-let [r (.-result req)]
-                            (->> (aget r "edn_value")
-                                 #_(-deserialize serializer read-handlers)
-                                 (read-string-safe @read-handlers)))
+                            (-deserialize serializer (aget r "edn_value") read-handlers))
                       new (if-not (empty? rkey)
                             (update-in old rkey up-fn)
                             (up-fn old))
@@ -80,8 +76,7 @@
                                (.put obj-store
                                      (clj->js {:key (pr-str fkey)
                                                :edn_value
-                                               #_(-serialize serializer _ new write-handlers)
-                                               (pr-str new)}))
+                                               (-serialize serializer _ new write-handlers)}))
                                (.delete obj-store (pr-str fkey)))]
                   (set! (.-onerror up-req)
                         (fn [e]
@@ -240,8 +235,8 @@
   incognito.
 
   Be careful not to mix up edn and JSON values."
-  ([name] (new-indexeddb-store name (atom {})))
-  ([name & {:opts [read-handlers]
+  ([name] (new-indexeddb-store name))
+  ([name & {:keys [read-handlers write-handlers serializer]
             :or {read-handlers (atom {})
                  write-handlers (atom {})
                  serializer (ser/string-serializer)}}]
@@ -286,13 +281,16 @@
   ;; or
   (-jassoc-in my-store ["test" "bar"] #js {:a 3})
   (go (println (<! (-jget-in my-store ["test"]))))
-  (go (println (<! (-exists? my-store "testff"))))
+  (go (println (<! (-exists? my-store 1))))
 
-  (let [store my-store]
-    (go (time (doseq [i (range 10000)]
-                (<! (-assoc-in my-store [i] i))))
-        #_(doseq [i (range 10)]
-            (println (<! (-get-in store [i]))))))
+  (go (doseq [i (range 10)]
+        (println (<! (-get-in my-store [i])))))
+
+  (go (time
+       (doseq [i (range 10)]
+         (<! (-update-in my-store [i] (fn [_] (inc i)))))
+       #_(doseq [i (range 10)]
+         (println (<! (-get-in my-store [i]))))))
   (go (println (<! (-get-in my-store [999]))))
 
   (go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))

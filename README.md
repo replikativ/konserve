@@ -1,6 +1,6 @@
 # konserve
 
-Simple durability, made easy.
+*Simple durability, made easy.*
 
 A key-value store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. `update-in` especially allows to run functions atomically and returns old and new value. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores). It is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures. To store values under non-conflicting keys, have a look at [hasch](https://github.com/replikativ/hasch).
 
@@ -8,7 +8,7 @@ This was initially implemented as an elementary storage protocol for [replikativ
 
 ## Supported Backends
 
-A beta-quality file-system store in Clojure and [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) for ClojureScript are provided as elementary reference implementations for the two most important platforms. No setup and no additional dependencies are needed.
+A file-system store in Clojure and [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) for ClojureScript are provided as elementary reference implementations for the two most important platforms. No setup and no additional dependencies are needed.
 
 ### fs-store
 The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. It also allows to access values as a normal file-system file, e.g. to open it with a native database like HDF5 in Java.
@@ -21,6 +21,15 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 The protocol is implemented for CouchDB in a separate project [konserve-couch](https://github.com/ghubber/konserve-couch)
 
 New storage backends, e.g. Riak, MongoDB, Redis, JDBC, WebSQL, Local-Storage are welcome.
+
+## Serialization formats
+
+Different formats for `edn` serialization like [fressian](https://github.com/clojure/data.fressian), [transit](http://blog.cognitect.com/blog/2014/7/22/transit) or a simple `pr-str` version are supported and can be combined with different stores. Stores have reasonable default setting. You can also extend the serialization protocol to other formats if you need it. You also need to provide [incognito](https://github.com/replikativ/incognito) support for records, if you need them.
+
+### Tagged Literals
+
+You can read and write custom records according to [incognito](https://github.com/replikativ/incognito).
+
 
 ## Usage
 
@@ -83,10 +92,6 @@ In ClojureScript from a browser (you need IndexedDB available in your js env):
 ;; => "test" contains {:a 2 :b 4.2}
 ~~~
 
-## Tagged Literals
-
-You can read and write custom records according to [incognito](https://github.com/replikativ/incognito).
-
 An example for ClojureScript with IndexedDB is:
 ~~~clojure
 (defrecord Test [a])
@@ -100,9 +105,11 @@ An example for ClojureScript with IndexedDB is:
 
 For more examples have a look at the comment blocks at the end of the respective namespaces.
 
+
 ## TODO
-- factor serialisation protocol [WIP]
-- port konserve-couchdb backend
+- add transit cljs support (once it is declared stable)
+- add transaction support
+- update konserve-couchdb backend
 - implement generic cached store(s) to wrap durable ones
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
 - allow to iterate keys (model a cursor? or just return a snapshot of keys?)
@@ -114,7 +121,7 @@ For more examples have a look at the comment blocks at the end of the respective
 ### 0.3.0-beta3
 - Wrap protocols in proper Clojure functions in the core namespace.
 - Implement assoc-in in terms of update-in
-- Introduce serialiasation protocol with the help of incognito
+- Introduce serialiasation protocol with the help of incognito and decouple stores
 
 ### 0.3.0-beta1
 - filestore: disable cache
