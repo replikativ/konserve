@@ -9,7 +9,10 @@
             [clojure.string :as str]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
-                                        -serialize -deserialize]]))
+                                        -serialize -deserialize]])
+  (:import [java.io
+            DataInputStream DataOutputStream
+            FileInputStream FileOutputStream]))
 
 ;; TODO safe filename encoding
 (defn dumb-encode [s]
