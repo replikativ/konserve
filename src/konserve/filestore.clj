@@ -188,7 +188,7 @@
   (let [res (chan (async/sliding-buffer 1))
         v (vec (range 5000))]
     (time (->>  (range 5000)
-                (map #(-assoc-in store [%] v))
+                (map #(-update-in store [%] (fn [_] v)))
                 async/merge
                 (async/pipeline-blocking 4 res identity)
                 <!!))) ;; 38 secs

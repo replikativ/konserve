@@ -1,5 +1,5 @@
 (ns konserve.core
-  (:refer-clojure :exclude [get-in update-in assoc-in])
+  (:refer-clojure :exclude [get-in update-in assoc-in exists?])
   (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]))
 
 
