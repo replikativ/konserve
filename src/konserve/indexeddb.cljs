@@ -45,7 +45,7 @@
               (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]
-                     (put! res (get-in (-deserialize serializer (aget r "edn_value") read-handlers)
+                     (put! res (get-in (-deserialize serializer read-handlers (aget r "edn_value"))
                                        rkey)))
               ;; returns nil
               (close! res)))
@@ -68,7 +68,7 @@
             (fn read-old [e]
               (try
                 (let [old (when-let [r (.-result req)]
-                            (-deserialize serializer (aget r "edn_value") read-handlers))
+                            (-deserialize serializer  read-handlers (aget r "edn_value")))
                       new (if-not (empty? rkey)
                             (update-in old rkey up-fn)
                             (up-fn old))
@@ -76,7 +76,7 @@
                                (.put obj-store
                                      (clj->js {:key (pr-str fkey)
                                                :edn_value
-                                               (-serialize serializer _ new write-handlers)}))
+                                               (-serialize serializer _ write-handlers new)}))
                                (.delete obj-store (pr-str fkey)))]
                   (set! (.-onerror up-req)
                         (fn [e]

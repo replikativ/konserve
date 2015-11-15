@@ -12,13 +12,13 @@
 #?(:clj
    (defrecord FressianSerializer []
      PStoreSerializer
-     (-deserialize [_ bytes read-handlers]
+     (-deserialize [_ read-handlers bytes]
        (fress/read bytes
                    :handlers (-> (merge fress/clojure-read-handlers
                                         (incognito-read-handlers read-handlers))
                                  fress/associative-lookup)))
 
-     (-serialize [_ bytes val write-handlers]
+     (-serialize [_ bytes write-handlers val]
        (let [w (fress/create-writer bytes :handlers (-> (merge
                                                          fress/clojure-write-handlers
                                                          (incognito-write-handlers write-handlers))
@@ -33,9 +33,9 @@
 
 (defrecord StringSerializer []
   PStoreSerializer
-  (-deserialize [_ s read-handlers]
+  (-deserialize [_ read-handlers s]
     (read-string-safe @read-handlers s))
-  (-serialize [_ output-stream val _]
+  (-serialize [_ output-stream _ val]
     #?(:clj
        (binding [clojure.core/*out* output-stream]
          (pr val))

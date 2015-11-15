@@ -50,7 +50,7 @@
                   res-ch (chan)]
               (try
                 (get-in
-                 (-deserialize serializer fis read-handlers)
+                 (-deserialize serializer read-handlers fis)
                  rkey)
                 (catch Exception e
                   (ex-info "Could not read key."
@@ -70,7 +70,7 @@
           (let [old (when (.exists f)
                       (let [fis (DataInputStream. (FileInputStream. f))]
                         (try
-                          (-deserialize serializer fis read-handlers)
+                          (-deserialize serializer read-handlers fis)
                           (catch Exception e
                             (ex-info "Could not read key."
                                      {:type :read-error
@@ -92,7 +92,7 @@
                     (.delete f)
                     (.sync fd))
                   (do
-                    (-serialize serializer dos new write-handlers)
+                    (-serialize serializer dos write-handlers new)
                     (.flush dos)
                     (.sync fd)
                     (.renameTo new-file f)

@@ -24,7 +24,8 @@
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
   [store key-vec val]
-  (update-in store key-vec (fn [_] val)))
+  (update-in store key-vec (fn [_] val))
+  nil)
 
 
 (defn bget [store key locked-cb]

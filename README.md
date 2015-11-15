@@ -18,7 +18,7 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 
 ### External Backends
 
-The protocol is implemented for CouchDB in a separate project [konserve-couch](https://github.com/ghubber/konserve-couch)
+The protocol is implemented for CouchDB in a separate project [konserve-couch](https://github.com/whilo/konserve-couch)
 
 New storage backends, e.g. Riak, MongoDB, Redis, JDBC, WebSQL, Local-Storage are welcome.
 
