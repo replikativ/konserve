@@ -117,8 +117,8 @@ For more examples have a look at the comment blocks at the end of the respective
 
 ## Changelog
 
-### 0.3.0 and 0.3.1
-- return nil on assoc-in
+### 0.3.0 - 0.3.2
+- fix return value of assoc-in
 
 ### 0.3.0-beta3
 - Wrap protocols in proper Clojure functions in the core namespace.
