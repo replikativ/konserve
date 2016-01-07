@@ -1,6 +1,8 @@
 (ns konserve.core
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
-  (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]))
+  (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
+            #?(:clj [clojure.core.async :refer [go]]))
+  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go go-loop]])))
 
 
 (defn exists? [store key]
@@ -25,7 +27,7 @@
   the key-vec (nested maps and vectors) are newly created."
   [store key-vec val]
   (update-in store key-vec (fn [_] val))
-  nil)
+  (go nil))
 
 
 (defn bget [store key locked-cb]

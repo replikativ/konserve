@@ -109,7 +109,6 @@ For more examples have a look at the comment blocks at the end of the respective
 ## TODO
 - add transit cljs support (once it is declared stable)
 - add transaction support
-- update konserve-couchdb backend
 - implement generic cached store(s) to wrap durable ones
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
 - allow to iterate keys (model a cursor? or just return a snapshot of keys?)
@@ -117,6 +116,9 @@ For more examples have a look at the comment blocks at the end of the respective
 - calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.3.0 and 0.3.1
+- return nil on assoc-in
 
 ### 0.3.0-beta3
 - Wrap protocols in proper Clojure functions in the core namespace.
