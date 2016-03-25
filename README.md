@@ -117,6 +117,9 @@ For more examples have a look at the comment blocks at the end of the respective
 
 ## Changelog
 
+### 0.3.4
+- use fixed incognito version
+
 ### 0.3.0 - 0.3.2
 - fix return value of assoc-in
 
@@ -156,7 +159,7 @@ For more examples have a look at the comment blocks at the end of the respective
 
 ## License
 
-Copyright © 2014-2015 Christian Weilbach & Konrad Kühne
+Copyright © 2014-2016 Christian Weilbach & Konrad Kühne
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

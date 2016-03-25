@@ -5,7 +5,7 @@
                                         PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]]
-            [cljs.core.async :as async :refer (take! <! >! put! close! chan)])
+            [cljs.core.async :as async :refer (take! <! >! put! close! chan poll!)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 
@@ -68,27 +68,42 @@
             (fn read-old [e]
               (try
                 (let [old (when-let [r (.-result req)]
-                            (-deserialize serializer  read-handlers (aget r "edn_value")))
-                      new (if-not (empty? rkey)
-                            (update-in old rkey up-fn)
-                            (up-fn old))
-                      up-req (if new
-                               (.put obj-store
-                                     (clj->js {:key (pr-str fkey)
-                                               :edn_value
-                                               (-serialize serializer _ write-handlers new)}))
-                               (.delete obj-store (pr-str fkey)))]
-                  (set! (.-onerror up-req)
-                        (fn [e]
-                          (put! res (ex-info "Cannot write edn value."
-                                             {:type :write-error
-                                              :key key
-                                              :error (.-target e)}))
-                          (close! res)))
-                  (set! (.-onsuccess up-req)
-                        (fn [e]
-                          (put! res [(get-in old rkey) (get-in new rkey)])
-                          (close! res))))
+                            (-deserialize serializer read-handlers (aget r "edn_value")))
+                      up-chan (if-not (empty? rkey)
+                                (up-fn (get-in old rkey))
+                                (up-fn old))
+                      new (atom {:done? false
+                                 :res nil})
+                      _ (take! up-chan #(reset! new {:done? true :res %}))
+                      finish (fn []
+                               (let [up-req (if (:res @new)
+                                              (.put obj-store
+                                                    (clj->js {:key (pr-str fkey)
+                                                              :edn_value
+                                                              (-serialize serializer _ write-handlers (:res @new))}))
+                                              (.delete obj-store (pr-str fkey)))]
+                                 (set! (.-onerror up-req)
+                                       (fn [e]
+                                         (put! res (ex-info "Cannot write edn value."
+                                                            {:type :write-error
+                                                             :key key
+                                                             :error (.-target e)}))
+                                         (close! res)))
+                                 (set! (.-onsuccess up-req)
+                                       (fn [e]
+                                         (put! res [(get-in old rkey) (get-in (:res @new) rkey)])
+                                         (close! res)))))]
+                  (fn poll-loop []
+                    (if (:done? @new)
+                      (finish)
+                      (let [dummy-req (.get obj-store (pr-str fkey))]
+                        (set! (.-onerror dummy-req)
+                              (fn [e]
+                                (put! res (ex-info "Cannot poll, this should never happen."
+                                                   {:type :read-error
+                                                    :key key
+                                                    :error (.-target e)}))))
+                        (set! (.-onsuccess dummy-req) (fn [_] (poll-loop)))))))
                 (catch :default e
                   (put! res (ex-info "Cannot parse edn value."
                                      {:type :read-error
@@ -264,12 +279,10 @@
 
 
 (comment
-  ;; fire up repl
-  (do
-    (ns dev)
-    (def repl-env (reset! cemerick.austin.repls/browser-repl-env
-                          (cemerick.austin/repl-env)))
-    (cemerick.austin.repls/cljs-repl repl-env))
+  ;; jack in figwheel cljs REPL
+  (require 'figwheel-sidecar.repl-api)
+  (figwheel-sidecar.repl-api/cljs-repl)
+
 
   (defrecord Test [a])
   (Test. 5)
