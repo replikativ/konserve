@@ -7,7 +7,6 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/clojurescript "1.8.34"]
                  [org.clojure/core.async "0.2.374"]
-                 #_[es.topiq/full.async "0.2.8-beta1"]
                  [io.replikativ/full.async "0.9.1-SNAPSHOT"]
 
                  [io.replikativ/incognito "0.2.0"]]
