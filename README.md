@@ -113,6 +113,9 @@ There are experimental javascript bindings in the `konserve.js` namespace:
 goog.require("konserve.js");
 
 konserve.js.new_mem_store(function(s) { store = s; });
+# or
+konserve.js.new_indexeddb_store("test_store", function(s) { store = s; })
+
 konserve.js.exists(store, ["foo"], function(v) { console.log(v); });
 konserve.js.assoc_in(store, ["foo"], 42, function(v) {});
 konserve.js.get_in(store,

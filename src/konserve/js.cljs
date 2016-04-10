@@ -1,12 +1,16 @@
 (ns konserve.js
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
   (:require [konserve.memory :as mem]
+            [konserve.indexeddb :as idb]
             [konserve.core :as k]
             [cljs.core.async :refer [take!]]))
 
 
 (defn ^:export new-mem-store [cb]
   (take! (mem/new-mem-store) cb))
+
+(defn ^:export new-indexeddb-store [name cb]
+  (take! (idb/new-indexeddb-store name) cb))
 
 (defn ^:export exists [store k cb]
   (take! (k/exists? store (js->clj k)) cb))
