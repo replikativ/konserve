@@ -105,10 +105,27 @@ An example for ClojureScript with IndexedDB is:
 
 For more examples have a look at the comment blocks at the end of the respective namespaces.
 
+## JavaScript bindings
+
+There are experimental javascript bindings in the `konserve.js` namespace:
+
+~~~javascript
+goog.require("konserve.js");
+
+konserve.js.new_mem_store(function(s) { store = s; });
+konserve.js.exists(store, ["foo"], function(v) { console.log(v); });
+konserve.js.assoc_in(store, ["foo"], 42, function(v) {});
+konserve.js.get_in(store,
+                   ["foo"],
+                   function(v) { console.log(v); });
+konserve.js.update_in(store,
+                      ["foo"],
+                      function(v) { return v+1; },
+                      function(res) { console.log("Result:", res); });
+~~~
 
 ## TODO
 - add transit cljs support (once it is declared stable)
-- add transaction support
 - implement generic cached store(s) to wrap durable ones
 - depend on hasch and use uuid hash as key/filename for file-store (and others)
 - allow to iterate keys (model a cursor? or just return a snapshot of keys?)
@@ -116,6 +133,9 @@ For more examples have a look at the comment blocks at the end of the respective
 - calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
 ## Changelog
+
+### 0.3.6
+- experimental JavaScript bindings
 
 ### 0.3.4
 - use fixed incognito version
