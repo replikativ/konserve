@@ -128,10 +128,10 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
+- store real key as part of value and use hasch for filestore (allows arbitrary key size)
+- allow to iterate keys (model a cursor? or just return a snapshot of keys?)
 - add transit cljs support (once it is declared stable)
 - implement generic cached store(s) to wrap durable ones
-- depend on hasch and use uuid hash as key/filename for file-store (and others)
-- allow to iterate keys (model a cursor? or just return a snapshot of keys?)
 - move repl examples to tests
 - calculate deltas and store base-value and edn patches, to allow fast small nested updates
 
