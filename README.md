@@ -63,6 +63,9 @@ From a Clojure REPL run:
 (<!! (k/update-in store [:bar] inc))
 (<!! (k/get-in store [:bar]))
 
+(<!! (k/append store :error-log {:type :horrible}))
+(<!! (k/log store :error-log))
+
 (let [ba (byte-array (* 10 1024 1024) (byte 42))]
   (time (<!! (k/bassoc store "banana" ba))))
 (<!! (k/bget store "banana" :input-stream))
@@ -128,14 +131,17 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
-- store real key as part of value and use hasch for filestore (allows arbitrary key size)
-- allow to iterate keys (model a cursor? or just return a snapshot of keys?)
 - add transit cljs support (once it is declared stable)
 - implement generic cached store(s) to wrap durable ones
-- move repl examples to tests
-- calculate deltas and store base-value and edn patches, to allow fast small nested updates
+- more backends
 
 ## Changelog
+
+### 0.4.0
+- store the key in the filestore and allow to iterate stored keys (not binary atm.)
+- implement append functions to have high throughput append-only logs
+- use core.async based locking on top-level API for all stores
+- allow to delete a file-store
 
 ### 0.3.6
 - experimental JavaScript bindings

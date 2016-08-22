@@ -1,24 +1,52 @@
 (ns konserve.core
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
-  (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]))
+  (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
+            [hasch.core :refer [uuid]]
+            #?(:clj [clojure.core.async :refer [chan]]
+               :cljs [cljs.core.async :refer [chan]])
+            #?(:clj [full.async :refer [go-try <? put?]]
+               :cljs [full.async :refer [put?]]))
+  #?(:cljs (:require-macros [full.async :refer [go-try <?]])))
 
+
+(defn get-lock [store key]
+  (or (get @(:locks store) key)
+      (let [c (chan)]
+        (put? c :unlocked)
+        (get (swap! (:locks store) assoc key c) key))))
+
+#?(:clj
+   (defmacro go-try-locked [store key & code]
+     `(go-try
+       (let [l# (get-lock ~store ~key)]
+         (try
+           (<? l#)
+           ~@code
+           (finally
+             (put? l# :unlocked)))))))
 
 (defn exists? [store key]
   "Checks whether value is in the store."
-  (-exists? store key))
+  (go-try-locked
+   store key
+   (<? (-exists? store key))))
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
   not resolvable."
   [store key-vec]
-  (-get-in store key-vec))
+  (go-try-locked
+   store (first key-vec)
+   (<? (-get-in store key-vec))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   [store key-vec fn]
-  (-update-in store key-vec fn))
+  (go-try-locked
+   store (first key-vec)
+   (<? (-update-in store key-vec fn))))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
@@ -27,18 +55,55 @@
   (update-in store key-vec (fn [_] val)))
 
 
+(defn append
+  "Append the Element to the log at the given key. This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
+  [store key elem]
+  (go-try-locked
+   store key
+   (let [head (<? (-get-in store [key]))
+         [append-log? prev-id] head
+         new-elem {:prev prev-id
+                   :elem elem}
+         id (uuid new-elem)]
+     (when (and head (not= append-log? :append-log))
+       (throw (ex-info "This is not an append-log." {:key key})))
+     (<? (-update-in store [id] (fn [_] new-elem)))
+     (<? (-update-in store [key] (fn [_] [:append-log id])))
+     nil)))
+
+(defn log
+  "Loads the whole append log stored at "
+  [store key]
+  (go-try
+   (let [[append-log? id] (<? (get-in store [key]))] ;; atomic read
+     ;; all other values are immutable:
+     (when-not (= append-log? :append-log)
+       (throw (ex-info "This is not an append-log." {:key key})))
+     (when id
+       (loop [{:keys [prev elem]} (<? (get-in store [id]))
+              hist '()]
+         (if prev
+           (recur (<? (get-in store [prev]))
+                  (conj hist elem))
+           (conj hist elem)))))))
+
+
 (defn bget [store key locked-cb]
   "Calls locked-cb with a platform specific binary representation inside
   the lock, e.g. wrapped InputStream on the JVM and Blob in
   JavaScript. You need to properly close/dispose the object when you
   are done!"
-  (-bget store key locked-cb))
+  (go-try-locked
+   store key
+   (<? (-bget store key locked-cb))))
 
 
 (defn bassoc [store key val]
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
-  (-bassoc store key val))
+  (go-try-locked
+   store key
+   (<? (-bassoc store key val))))
 
 
 (comment
@@ -51,10 +116,29 @@
 
 
   ;; clj
-  (require '[konserve.filestore :refer [new-fs-store]]
-           '[clojure.core.async :refer [<!! chan] :as async])
+  (require '[konserve.filestore :refer [new-fs-store list-keys]]
+           '[konserve.memory :refer [new-mem-store]]
+           '[clojure.core.async :refer [<!! >!! chan] :as async])
 
   (def store (<!! (new-fs-store "/tmp/store")))
+
+  (def store (<!! (new-mem-store)))
+
+  (<!! (list-keys store))
+
+  (<!! (get-lock store :foo))
+  (put? (get-lock store :foo) :unlocked)
+
+  (<!! (append store :foo :bars))
+  (<!! (log store :foo))
+  (<!! (get-in store [(<!! (get-in store [:foo]))]))
+
+  (doseq [i (range 1000)]
+    (<!! (append store :bar i)))
+
+  (<!! (log store :bar))
+
+  (<!! (assoc-in store [{:nanofoo :bar}] :foo))
 
   ;; investigate https://github.com/stuartsierra/parallel-async
   (let [res (chan (async/sliding-buffer 1))

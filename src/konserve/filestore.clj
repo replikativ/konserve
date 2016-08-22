@@ -1,159 +1,183 @@
 (ns konserve.filestore
-  "Experimental bare file-system implementation."
+  "Bare file-system implementation."
   (:require [konserve.serializers :as ser]
+            [konserve.core :refer [go-try-locked]]
             [clojure.java.io :as io]
+            [hasch.core :refer [uuid]]
 
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
+                                        PAppendStore -append -log
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream]))
 
-;; TODO safe filename encoding
-(defn dumb-encode [s]
-  (when (re-find #"_DUMBSLASH42_" s)
-    (throw (ex-info "Collision in encoding!"
-                    {:type :dumbslash-found
-                     :value s})))
-  (str/replace s #"/" "_DUMBSLASH42_"))
+(defn delete-store
+  "Permanently deletes the folder of the store with all files."
+  [folder]
+  (let [f (io/file folder)]
+    (doseq [c (.list f)]
+      (.delete (io/file (str folder "/" c))))
+    (.delete f)))
 
-(defn- get-lock [locks key]
-  (or (get @locks key)
-      (get (swap! locks conj key) key)))
+
+(defn list-keys
+  "Lists all keys in this binary store. This operation *does not block concurrent operations* and might return an outdated key set. Keys of binary blobs are not tracked atm."
+  [{:keys [folder serializer read-handlers] :as store}]
+  (let [fns (->> (io/file folder)
+                 .list
+                 seq
+                 (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                                      %))
+                 (map (fn [fn]
+                        (go-try-locked
+                         store fn
+                         (let [f (io/file (str folder "/" fn))]
+                           (when (.exists f)
+                             (let [fis (DataInputStream. (FileInputStream. f))
+                                   res-ch (chan)]
+                               (try
+                                 (first (-deserialize serializer read-handlers fis))
+                                 (catch Exception e
+                                   (ex-info "Could not read key."
+                                            {:type :read-error
+                                             :key fn
+                                             :exception e}))
+                                 (finally
+                                   (.close fis)))))))))
+                 async/merge
+                 (async/into #{}))]
+        fns))
 
 
 (defrecord FileSystemStore [folder serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
-    (locking (get-lock locks key)
-      (let [fn (dumb-encode (pr-str key))
-            f (io/file (str folder "/" fn))
-            res (chan)]
-        (put! res (.exists f))
-        (close! res)
-        res)))
+    (let [fn (uuid key)
+          f (io/file (str folder "/" fn))
+          res (chan)]
+      (put! res (.exists f))
+      (close! res)
+      res))
+
 
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
-          fn (dumb-encode (pr-str fkey))
+          fn (uuid fkey)
           f (io/file (str folder "/" fn))]
       (if-not (.exists f)
         (go nil)
         (async/thread
-          (locking (get-lock locks fkey)
-            (let [fis (DataInputStream. (FileInputStream. f))
-                  res-ch (chan)]
-              (try
-                (get-in
-                 (-deserialize serializer read-handlers fis)
-                 rkey)
-                (catch Exception e
-                  (ex-info "Could not read key."
-                           {:type :read-error
-                            :key fkey
-                            :exception e}))
-                (finally
-                  (.close fis)))))))))
+          (let [fis (DataInputStream. (FileInputStream. f))
+                res-ch (chan)]
+            (try
+              (get-in
+               (second (-deserialize serializer read-handlers fis)) 
+               rkey)
+              (catch Exception e
+                (ex-info "Could not read key."
+                         {:type :read-error
+                          :key fkey
+                          :exception e}))
+              (finally
+                (.close fis))))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
-          fn (dumb-encode (pr-str fkey))
+          fn (uuid fkey)
           f (io/file (str folder "/" fn))
           new-file (io/file (str folder "/" fn ".new"))]
       (async/thread
-        (locking (get-lock locks fkey)
-          (let [old (when (.exists f)
-                      (let [fis (DataInputStream. (FileInputStream. f))]
-                        (try
-                          (-deserialize serializer read-handlers fis)
-                          (catch Exception e
-                            (ex-info "Could not read key."
-                                     {:type :read-error
-                                      :key fkey
-                                      :exception e}))
-                          (finally
-                            (.close fis)))))
-                fos (FileOutputStream. new-file)
-                dos (DataOutputStream. fos)
-                fd (.getFD fos)
-                new (if-not (empty? rkey)
-                      (update-in old rkey up-fn)
-                      (up-fn old))]
-            (if (instance? Throwable old)
-              old ;; return read error
-              (try
-                (if (nil? new)
-                  (do
-                    (.delete f)
-                    (.sync fd))
-                  (do
-                    (-serialize serializer dos write-handlers new)
-                    (.flush dos)
-                    (.sync fd)
-                    (.renameTo new-file f)
-                    (.sync fd)))
-                [(get-in old rkey)
-                 (get-in new rkey)]
-                (catch Exception e
-                  (.delete new-file)
-                  (.sync fd)
-                  (ex-info "Could not write key."
-                           {:type :write-error
-                            :key fkey
-                            :exception e}))
-                (finally
-                  (.close fos)))))))))
-
-  PBinaryAsyncKeyValueStore
-  (-bget [this key locked-cb]
-    (let [fn (dumb-encode (pr-str key))
-          f (io/file (str folder "/" fn))]
-      (if-not (.exists f)
-        (go nil)
-        (async/thread
-          (locking (get-lock locks key)
-            (let [fis (DataInputStream. (FileInputStream. f))]
-              (try
-                (locked-cb {:input-stream fis
-                            :size (.length f)
-                            :file f})
-                (catch Exception e
-                  (ex-info "Could not read key."
-                           {:type :read-error
-                            :key key
-                            :exception e}))
-                (finally
-                  (.close fis)))))))))
-
-  (-bassoc [this key input]
-    (let [fn (dumb-encode (pr-str key))
-          f (io/file (str folder "/" fn))
-          new-file (io/file (str folder "/" fn ".new"))]
-      (async/thread
-        (locking (get-lock locks key)
-          (let [fos (FileOutputStream. new-file)
-                dos (DataOutputStream. fos)
-                fd (.getFD fos)]
+        (let [old (when (.exists f)
+                    (let [fis (DataInputStream. (FileInputStream. f))]
+                      (try
+                        (second (-deserialize serializer read-handlers fis)) 
+                        (catch Exception e
+                          (ex-info "Could not read key."
+                                   {:type :read-error
+                                    :key fkey
+                                    :exception e}))
+                        (finally
+                          (.close fis)))))
+              fos (FileOutputStream. new-file)
+              dos (DataOutputStream. fos)
+              fd (.getFD fos)
+              new (if-not (empty? rkey)
+                    (update-in old rkey up-fn)
+                    (up-fn old))]
+          (if (instance? Throwable old)
+            old ;; return read error
             (try
-              (io/copy input dos)
-              (.flush dos)
-              (.sync fd)
-              (.renameTo new-file f)
-              (.sync fd)
+              (if (nil? new)
+                (do
+                  (.delete f)
+                  (.sync fd))
+                (do
+                  (-serialize serializer dos write-handlers [key-vec new])
+                  (.flush dos)
+                  (.sync fd)
+                  (.renameTo new-file f)
+                  (.sync fd)))
+              [(get-in old rkey)
+               (get-in new rkey)]
               (catch Exception e
                 (.delete new-file)
                 (.sync fd)
                 (ex-info "Could not write key."
                          {:type :write-error
+                          :key fkey
+                          :exception e}))
+              (finally
+                (.close fos))))))))
+
+  PBinaryAsyncKeyValueStore
+  (-bget [this key locked-cb]
+    (let [fn (uuid key)
+          f (io/file (str folder "/B_" fn))]
+      (if-not (.exists f)
+        (go nil)
+        (async/thread
+          (let [fis (DataInputStream. (FileInputStream. f))]
+            (try
+              (locked-cb {:input-stream fis
+                          :size (.length f)
+                          :file f})
+              (catch Exception e
+                (ex-info "Could not read key."
+                         {:type :read-error
                           :key key
                           :exception e}))
               (finally
-                (.close fos)))))))))
+                (.close fis))))))))
+
+  (-bassoc [this key input]
+    (let [fn (uuid key)
+          f (io/file (str folder "/B_" fn))
+          new-file (io/file (str folder "/B_" fn ".new"))]
+      (async/thread
+        (let [fos (FileOutputStream. new-file)
+              dos (DataOutputStream. fos)
+              fd (.getFD fos)]
+          (try
+            (io/copy input dos)
+            (.flush dos)
+            (.sync fd)
+            (.renameTo new-file f)
+            (.sync fd)
+            (catch Exception e
+              (.delete new-file)
+              (.sync fd)
+              (ex-info "Could not write key."
+                       {:type :write-error
+                        :key key
+                        :exception e}))
+            (finally
+              (.close fos))))))))
 
 
 
@@ -164,7 +188,7 @@
                 read-handlers (atom {})
                 write-handlers (atom {})}}]
   (let [f (io/file path)
-        locks (atom #{})
+        locks (atom {})
         test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
     (when-not (.exists f)
       (.mkdir f))
