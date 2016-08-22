@@ -116,11 +116,13 @@
 
 
   ;; clj
-  (require '[konserve.filestore :refer [new-fs-store list-keys]]
+  (require '[konserve.filestore :refer [new-fs-store list-keys delete-store]]
            '[konserve.memory :refer [new-mem-store]]
            '[clojure.core.async :refer [<!! >!! chan] :as async])
 
   (def store (<!! (new-fs-store "/tmp/store")))
+
+  (delete-store "/tmp/store")
 
   (def store (<!! (new-mem-store)))
 
@@ -133,8 +135,20 @@
   (<!! (log store :foo))
   (<!! (get-in store [(<!! (get-in store [:foo]))]))
 
-  (doseq [i (range 1000)]
-    (<!! (append store :bar i)))
+  (let [numbers (doall (range 1024))]
+    (time
+     (doseq [i (range 1000)]
+       (<!! (assoc-in store [i] numbers)))))
+  ;; fs-store: ~7.2 secs on my old laptop
+  ;; mem-store: ~0.186 secs
+
+  (let [numbers (doall (range (* 1024 1024)))]
+    (time
+     (doseq [i (range 10)]
+       (<!! (assoc-in store [i] numbers)))))
+  ;; fs-store: ~46 secs, large files: 1 million ints each
+  ;; mem-store: ~0.003 secs
+
 
   (<!! (log store :bar))
 
