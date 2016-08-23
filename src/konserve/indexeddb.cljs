@@ -9,7 +9,7 @@
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 
-(defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers]
+(defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [res (chan)
@@ -269,7 +269,8 @@
                                                      :serializer serializer
                                                      :store-name name
                                                      :read-handlers read-handlers
-                                                     :write-handlers write-handlers}))))
+                                                     :write-handlers write-handlers
+                                                     :locks (atom {})}))))
      (set! (.-onupgradeneeded req)
            (fn upgrade-handler [e]
              (let [db (-> e .-target .-result)]

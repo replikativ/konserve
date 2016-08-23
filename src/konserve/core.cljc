@@ -61,31 +61,52 @@
   (go-try-locked
    store key
    (let [head (<? (-get-in store [key]))
-         [append-log? prev-id] head
-         new-elem {:prev prev-id
+         [append-log? last-id first-id] head
+         new-elem {:next nil
                    :elem elem}
-         id (uuid new-elem)]
+         id (uuid)]
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (<? (-update-in store [id] (fn [_] new-elem)))
-     (<? (-update-in store [key] (fn [_] [:append-log id])))
+     (when first-id
+       (<? (-update-in store [last-id :next] (fn [_] id))))
+     (<? (-update-in store [key] (fn [_] [:append-log id (or first-id id)])))
      nil)))
 
 (defn log
   "Loads the whole append log stored at "
   [store key]
   (go-try
-   (let [[append-log? id] (<? (get-in store [key]))] ;; atomic read
+   (let [head (<? (get-in store [key]));; atomic read
+         [append-log? last-id first-id] head] 
      ;; all other values are immutable:
-     (when-not (= append-log? :append-log)
+     (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
-     (when id
-       (loop [{:keys [prev elem]} (<? (get-in store [id]))
-              hist '()]
-         (if prev
-           (recur (<? (get-in store [prev]))
+     (when first-id
+       (loop [{:keys [next elem]} (<? (get-in store [first-id]))
+              hist []]
+         (if next
+           (recur (<? (get-in store [next]))
                   (conj hist elem))
            (conj hist elem)))))))
+
+(defn reduce-log
+  "Loads the whole append log stored at "
+  [store key reduce-fn acc]
+  (go-try
+   (let [head (<? (get-in store [key]));; atomic read
+         [append-log? last-id first-id] head] 
+     ;; all other values are immutable:
+     (when (and head (not= append-log? :append-log))
+       (throw (ex-info "This is not an append-log." {:key key})))
+     (if first-id
+       (loop [{:keys [next elem]} (<? (get-in store [first-id]))
+              acc acc]
+         (if next
+           (recur (<? (get-in store [next]))
+                  (reduce-fn acc elem))
+           (reduce-fn acc elem)))
+       acc))))
 
 
 (defn bget [store key locked-cb]
@@ -131,9 +152,10 @@
   (<!! (get-lock store :foo))
   (put? (get-lock store :foo) :unlocked)
 
-  (<!! (append store :foo :bars))
+  (<!! (append store :foo :barss))
   (<!! (log store :foo))
-  (<!! (get-in store [(<!! (get-in store [:foo]))]))
+  (<!! (get-in store [:foo]))
+  (<!! (get-in store []))
 
   (let [numbers (doall (range 1024))]
     (time

@@ -27,7 +27,13 @@
       (<?? (append store :foo {:bar 42}))
       (<?? (append store :foo {:bar 43}))
       (is (= (<?? (log store :foo))
-             '({:bar 42}{:bar 43}))))))
+             '({:bar 42}{:bar 43})))
+      (is (= (<?? (reduce-log store
+                              :foo
+                              (fn [acc elem]
+                                (conj acc elem))
+                              []))
+             [{:bar 42} {:bar 43}])))))
 
 
 (deftest filestore-test
