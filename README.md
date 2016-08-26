@@ -49,7 +49,7 @@ It is not necessarily fast depending on the usage pattern. The general idea is t
 
 ## Serialization formats
 
-Different formats for `edn` serialization like [fressian](https://github.com/clojure/data.fressian), [transit](http://blog.cognitect.com/blog/2014/7/22/transit) or a simple `pr-str` version are supported and can be combined with different stores. Stores have reasonable default setting. You can also extend the serialization protocol to other formats if you need it. You also need to provide [incognito](https://github.com/replikativ/incognito) support for records, if you need them.
+Different formats for `edn` serialization like [fressian](https://github.com/clojure/data.fressian), [transit](http://blog.cognitect.com/blog/2014/7/22/transit) or a simple `pr-str` version are supported and can be combined with different stores. Stores have a reasonable default setting. You can also extend the serialization protocol to other formats if you need it. You also need to provide [incognito](https://github.com/replikativ/incognito) support for records, if you need them.
 
 ### Tagged Literals
 

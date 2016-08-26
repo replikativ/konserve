@@ -2,18 +2,29 @@
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
   (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
             [hasch.core :refer [uuid]]
-            #?(:clj [clojure.core.async :refer [chan]]
-               :cljs [cljs.core.async :refer [chan]])
+            #?(:clj [clojure.core.async :refer [chan poll!]]
+               :cljs [cljs.core.async :refer [chan poll!]])
             #?(:clj [full.async :refer [go-try <? put?]]
                :cljs [full.async :refer [put?]]))
-  #?(:cljs (:require-macros [full.async :refer [go-try <?]])))
+  #?(:cljs (:require-macros [full.async :refer [go-try <?]]
+                            [konserve.core :refer [go-try-locked]])))
 
 
-(defn get-lock [store key]
-  (or (get @(:locks store) key)
-      (let [c (chan)]
-        (put? c :unlocked)
-        (get (swap! (:locks store) assoc key c) key))))
+(defn get-lock [{:keys [locks] :as store} key]
+  (#?(:clj locking :cljs do) locks
+    (when (> (count @locks) 0)
+      (swap! locks (fn [locks]
+                     (reduce (fn [new-locks [k lc]]
+                               (if (poll! lc) new-locks
+                                   ;; active, retain!
+                                   (assoc new-locks k lc)))
+                             {}
+                             locks))))
+    (or (get @locks key)
+        (let [c (chan)]
+          (put? c :unlocked)
+          (get (swap! locks assoc key c) key)))))
+
 
 #?(:clj
    (defmacro go-try-locked [store key & code]
@@ -170,6 +181,13 @@
        (<!! (assoc-in store [i] numbers)))))
   ;; fs-store: ~46 secs, large files: 1 million ints each
   ;; mem-store: ~0.003 secs
+
+
+  ;; check lock retaining:
+  (let [numbers (range (* 10 1024 1024))]
+    (assoc-in store [42] numbers))
+
+  (get-lock store 42)
 
 
   (<!! (log store :bar))
