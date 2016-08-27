@@ -162,6 +162,9 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.1
+- fix cljs support
+
 ### 0.4.0
 - store the key in the filestore and allow to iterate stored keys (not binary atm.)
 - implement append functions to have high throughput append-only logs
