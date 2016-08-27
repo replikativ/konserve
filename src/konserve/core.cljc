@@ -10,20 +10,14 @@
                             [konserve.core :refer [go-try-locked]])))
 
 
+;; TODO we keep one chan for each key in memory
+;; as async ops seem to infer with the atom state changes
+;; and cause deadlock
 (defn get-lock [{:keys [locks] :as store} key]
-  (#?(:clj locking :cljs do) locks
-    (when (> (count @locks) 0)
-      (swap! locks (fn [locks]
-                     (reduce (fn [new-locks [k lc]]
-                               (if (poll! lc) new-locks
-                                   ;; active, retain!
-                                   (assoc new-locks k lc)))
-                             {}
-                             locks))))
-    (or (get @locks key)
-        (let [c (chan)]
-          (put? c :unlocked)
-          (get (swap! locks assoc key c) key)))))
+  (or (get @locks key)
+      (let [c (chan)]
+        (put? c :unlocked)
+        (get (swap! locks assoc key c) key))))
 
 
 #?(:clj
