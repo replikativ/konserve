@@ -2,13 +2,27 @@
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
   (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
             [hasch.core :refer [uuid]]
-            #?(:clj [clojure.core.async :refer [chan poll!]]
-               :cljs [cljs.core.async :refer [chan poll!]])
+            #?(:clj [clojure.core.async :refer [chan poll! put! <!]]
+               :cljs [cljs.core.async :refer [chan poll! put! <!]])
             #?(:clj [full.async :refer [go-try <? put?]]
                :cljs [full.async :refer [put?]]))
   #?(:cljs (:require-macros [full.async :refer [go-try <?]]
                             [konserve.core :refer [go-try-locked]])))
 
+
+;; support logging also in clj macroexpansion for cljs
+#?(:clj
+   (defn- cljs-env?
+     "Take the &env from a macro, and tell whether we are expanding into cljs."
+     [env]
+     (boolean (:ns env))))
+
+#?(:clj
+   (defmacro if-cljs
+     "Return then if we are generating cljs code and else for Clojure code.
+     https://groups.google.com/d/msg/clojurescript/iBY5HaQda4A/w1lAQi9_AwsJ"
+     [then else]
+     (if (cljs-env? &env) then else)))
 
 ;; TODO we keep one chan for each key in memory
 ;; as async ops seem to infer with the atom state changes
@@ -16,22 +30,31 @@
 (defn get-lock [{:keys [locks] :as store} key]
   (or (get @locks key)
       (let [c (chan)]
-        (put? c :unlocked)
+        (put! c :unlocked)
         (get (swap! locks assoc key c) key))))
 
 
 #?(:clj
    (defmacro go-try-locked [store key & code]
-     `(go-try
-       (let [l# (get-lock ~store ~key)]
-         (try
-           (<? l#)
-           ~@code
-           (finally
-             (put? l# :unlocked)))))))
+     (if-cljs
+      `(go-try
+         (let [l# (get-lock ~store ~key)]
+           (try
+             (cljs.core.async/<! l#)
+             ~@code
+             (finally
+               (cljs.core.async/put! l# :unlocked)))))
+      `(go-try
+        (let [l# (get-lock ~store ~key)]
+          (try
+            (<! l#)
+            ~@code
+            (finally
+              (put! l# :unlocked))))))))
 
-(defn exists? [store key]
+(defn exists?
   "Checks whether value is in the store."
+  [store key]
   (go-try-locked
    store key
    (<? (-exists? store key))))
