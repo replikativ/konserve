@@ -158,6 +158,8 @@ konserve.js.update_in(store,
 ## TODO
 - add transit cljs support (once it is declared stable)
 - implement generic cached store(s) to wrap durable ones
+- evaluate: store small files of filestore in subdirectories to avoid
+  inefficient file system behaviour
 - more backends
 
 ## Changelog

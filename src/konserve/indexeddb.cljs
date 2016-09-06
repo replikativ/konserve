@@ -1,5 +1,6 @@
 (ns konserve.indexeddb
   (:require [incognito.edn :refer [read-string-safe]]
+            [konserve.core :as k]
             [konserve.serializers :as ser]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
                                         PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
@@ -40,7 +41,7 @@
             (fn [e]
               (put! res (ex-info "Cannot read edn value."
                                  {:type :read-error
-                                  :key key
+                                  :key key-vec
                                   :error (.-target e)}))
               (close! res)))
       (set! (.-onsuccess req)
@@ -61,7 +62,7 @@
             (fn [e]
               (put! res (ex-info "Cannot read edn value."
                                  {:type :read-error
-                                  :key key
+                                  :key key-vec
                                   :error (.-target e)}))
               (close! res)))
       (set! (.-onsuccess req)
@@ -69,46 +70,31 @@
               (try
                 (let [old (when-let [r (.-result req)]
                             (-deserialize serializer read-handlers (aget r "edn_value")))
-                      up-chan (if-not (empty? rkey)
-                                (up-fn (get-in old rkey))
-                                (up-fn old))
-                      new (atom {:done? false
-                                 :res nil})
-                      _ (take! up-chan #(reset! new {:done? true :res %}))
-                      finish (fn []
-                               (let [up-req (if (:res @new)
-                                              (.put obj-store
-                                                    (clj->js {:key (pr-str fkey)
-                                                              :edn_value
-                                                              (-serialize serializer _ write-handlers (:res @new))}))
-                                              (.delete obj-store (pr-str fkey)))]
-                                 (set! (.-onerror up-req)
-                                       (fn [e]
-                                         (put! res (ex-info "Cannot write edn value."
-                                                            {:type :write-error
-                                                             :key key
-                                                             :error (.-target e)}))
-                                         (close! res)))
-                                 (set! (.-onsuccess up-req)
-                                       (fn [e]
-                                         (put! res [(get-in old rkey) (get-in (:res @new) rkey)])
-                                         (close! res)))))]
-                  (fn poll-loop []
-                    (if (:done? @new)
-                      (finish)
-                      (let [dummy-req (.get obj-store (pr-str fkey))]
-                        (set! (.-onerror dummy-req)
-                              (fn [e]
-                                (put! res (ex-info "Cannot poll, this should never happen."
-                                                   {:type :read-error
-                                                    :key key
-                                                    :error (.-target e)}))))
-                        (set! (.-onsuccess dummy-req) (fn [_] (poll-loop)))))))
+                      up (if-not (empty? rkey)
+                           (update-in old rkey up-fn)
+                           (up-fn old))]
+                  (let [up-req (if up
+                                 (.put obj-store
+                                       (clj->js {:key (pr-str fkey)
+                                                 :edn_value
+                                                 (-serialize serializer nil write-handlers up)}))
+                                 (.delete obj-store (pr-str fkey)))]
+                    (set! (.-onerror up-req)
+                          (fn [e]
+                            (put! res (ex-info "Cannot write edn value."
+                                               {:type :write-error
+                                                :key key-vec
+                                                :error (.-target e)}))
+                            (close! res)))
+                    (set! (.-onsuccess up-req)
+                          (fn [e]
+                            (put! res [(get-in old rkey) up])
+                            (close! res)))))
                 (catch :default e
                   (put! res (ex-info "Cannot parse edn value."
                                      {:type :read-error
-                                      :key key
-                                      :error (.-target e)}))
+                                      :key key-vec
+                                      :error e}))
                   (close! res)))))
       res))
 
@@ -250,32 +236,31 @@
   incognito.
 
   Be careful not to mix up edn and JSON values."
-  ([name] (new-indexeddb-store name))
-  ([name & {:keys [read-handlers write-handlers serializer]
-            :or {read-handlers (atom {})
-                 write-handlers (atom {})
-                 serializer (ser/string-serializer)}}]
-   (let [res (chan)
-         req (.open js/window.indexedDB name 1)]
-     (set! (.-onerror req)
-           (fn [e]
-             (put! res (ex-info "Cannot open IndexedDB store."
-                                {:type :db-error
-                                 :error (.-target e)}))
-             (close! res)))
-     (set! (.-onsuccess req)
-           (fn success-handler [e]
-             (put! res (map->IndexedDBKeyValueStore {:db (.-result req)
-                                                     :serializer serializer
-                                                     :store-name name
-                                                     :read-handlers read-handlers
-                                                     :write-handlers write-handlers
-                                                     :locks (atom {})}))))
-     (set! (.-onupgradeneeded req)
-           (fn upgrade-handler [e]
-             (let [db (-> e .-target .-result)]
-               (.createObjectStore db name #js {:keyPath "key"}))))
-     res)))
+  [name & {:keys [read-handlers write-handlers serializer]
+           :or {read-handlers (atom {})
+                write-handlers (atom {})
+                serializer (ser/string-serializer)}}]
+  (let [res (chan)
+        req (.open js/window.indexedDB name 1)]
+    (set! (.-onerror req)
+          (fn [e]
+            (put! res (ex-info "Cannot open IndexedDB store."
+                               {:type :db-error
+                                :error (.-target e)}))
+            (close! res)))
+    (set! (.-onsuccess req)
+          (fn success-handler [e]
+            (put! res (map->IndexedDBKeyValueStore {:db (.-result req)
+                                                    :serializer serializer
+                                                    :store-name name
+                                                    :read-handlers read-handlers
+                                                    :write-handlers write-handlers
+                                                    :locks (atom {})}))))
+    (set! (.-onupgradeneeded req)
+          (fn upgrade-handler [e]
+            (let [db (-> e .-target .-result)]
+              (.createObjectStore db name #js {:keyPath "key"}))))
+    res))
 
 
 

@@ -2,20 +2,20 @@
   (:refer-clojure :exclude [get-in update-in assoc-in exists?])
   (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
             [hasch.core :refer [uuid]]
-            #?(:clj [clojure.core.async :refer [chan poll! put! <!]]
+            #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]])
             #?(:clj [full.async :refer [go-try <? put?]]
                :cljs [full.async :refer [put?]]))
   #?(:cljs (:require-macros [full.async :refer [go-try <?]]
+                            [cljs.core.async.macros :refer [go]]
                             [konserve.core :refer [go-try-locked]])))
 
 
-;; support logging also in clj macroexpansion for cljs
-#?(:clj
-   (defn- cljs-env?
-     "Take the &env from a macro, and tell whether we are expanding into cljs."
-     [env]
-     (boolean (:ns env))))
+(defn- cljs-env?
+  "Take the &env from a macro, and tell whether we are expanding into cljs."
+  [env]
+  (boolean (:ns env)))
+
 
 #?(:clj
    (defmacro if-cljs
@@ -23,6 +23,8 @@
      https://groups.google.com/d/msg/clojurescript/iBY5HaQda4A/w1lAQi9_AwsJ"
      [then else]
      (if (cljs-env? &env) then else)))
+
+
 
 ;; TODO we keep one chan for each key in memory
 ;; as async ops seem to infer with the atom state changes
@@ -33,24 +35,25 @@
         (put! c :unlocked)
         (get (swap! locks assoc key c) key))))
 
-
 #?(:clj
    (defmacro go-try-locked [store key & code]
-     (if-cljs
-      `(go-try
-         (let [l# (get-lock ~store ~key)]
-           (try
-             (cljs.core.async/<! l#)
-             ~@code
-             (finally
-               (cljs.core.async/put! l# :unlocked)))))
-      `(go-try
-        (let [l# (get-lock ~store ~key)]
-          (try
-            (<! l#)
-            ~@code
-            (finally
-              (put! l# :unlocked))))))))
+     (let [res`(if-cljs
+                (cljs.core.async.macros/go
+                  (let [l# (get-lock ~store ~key)]
+                    (try
+                      (cljs.core.async/<! l#)
+                      ~@code
+                      (finally
+                        (cljs.core.async/put! l# :unlocked)))))
+                (go
+                  (let [l# (get-lock ~store ~key)]
+                    (try
+                      (<! l#)
+                      ~@code
+                      (finally
+                        (put! l# :unlocked))))))]
+       res)))
+
 
 (defn exists?
   "Checks whether value is in the store."
@@ -99,7 +102,7 @@
      (when first-id
        (<? (-update-in store [last-id :next] (fn [_] id))))
      (<? (-update-in store [key] (fn [_] [:append-log id (or first-id id)])))
-     nil)))
+     [first-id id])))
 
 (defn log
   "Loads the whole append log stored at "
