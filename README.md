@@ -164,6 +164,10 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.2
+- simplify and fix indexeddb
+- do clean locking with syntactic macro sugar
+
 ### 0.4.1
 - fix cljs support
 
