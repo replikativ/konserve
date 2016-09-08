@@ -1,7 +1,7 @@
 (ns konserve.filestore
   "Bare file-system implementation."
   (:require [konserve.serializers :as ser]
-            [konserve.core :refer [go-try-locked]]
+            [konserve.core :refer [go-locked]]
             [clojure.java.io :as io]
             [hasch.core :refer [uuid]]
 
@@ -35,7 +35,7 @@
                  (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
                                       %))
                  (map (fn [fn]
-                        (go-try-locked
+                        (go-locked
                          store fn
                          (let [f (io/file (str folder "/" fn))]
                            (when (.exists f)
@@ -72,28 +72,30 @@
           f (io/file (str folder "/" fn))]
       (if-not (.exists f)
         (go nil)
-        (async/thread
-          (let [fis (DataInputStream. (FileInputStream. f))
-                res-ch (chan)]
-            (try
-              (get-in
-               (second (-deserialize serializer read-handlers fis)) 
-               rkey)
-              (catch Exception e
-                (ex-info "Could not read key."
-                         {:type :read-error
-                          :key fkey
-                          :exception e}))
-              (finally
-                (.close fis))))))))
+        (let [fis (DataInputStream. (FileInputStream. f))
+              res-ch (chan)]
+          (try
+            (put! res-ch
+                  (get-in
+                   (second (-deserialize serializer read-handlers fis)) 
+                   rkey))
+            res-ch
+            (catch Exception e
+              (put! res-ch (ex-info "Could not read key."
+                                   {:type :read-error
+                                    :key fkey
+                                    :exception e}))
+              res-ch)
+            (finally
+              (.close fis)
+              (close! res-ch)))))))
 
   (-update-in [this key-vec up-fn]
     (let [[fkey & rkey] key-vec
           fn (uuid fkey)
           f (io/file (str folder "/" fn))
           new-file (io/file (str folder "/" fn ".new"))]
-      (async/thread
-        (let [old (when (.exists f)
+      (let [old (when (.exists f)
                     (let [fis (DataInputStream. (FileInputStream. f))]
                       (try
                         (second (-deserialize serializer read-handlers fis)) 
@@ -109,9 +111,10 @@
               fd (.getFD fos)
               new (if-not (empty? rkey)
                     (update-in old rkey up-fn)
-                    (up-fn old))]
+                    (up-fn old))
+            res-ch (chan)]
           (if (instance? Throwable old)
-            old ;; return read error
+            (put! res-ch old) ;; return read error
             (try
               (if (nil? new)
                 (do
@@ -123,17 +126,20 @@
                   (.sync fd)
                   (.renameTo new-file f)
                   (.sync fd)))
-              [(get-in old rkey)
-               (get-in new rkey)]
+              (put! res-ch [(get-in old rkey)
+                           (get-in new rkey)])
+              res-ch
               (catch Exception e
                 (.delete new-file)
                 (.sync fd)
-                (ex-info "Could not write key."
-                         {:type :write-error
-                          :key fkey
-                          :exception e}))
+                (put! res-ch (ex-info "Could not write key."
+                                     {:type :write-error
+                                      :key fkey
+                                      :exception e}))
+                res-ch)
               (finally
-                (.close fos))))))))
+                (.close fos)
+                (close! res-ch)))))))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]

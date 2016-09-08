@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve "0.4.2"
+(defproject io.replikativ/konserve "0.4.3"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
@@ -6,7 +6,7 @@
   :source-paths ["src"]
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/clojurescript "1.8.34"]
-                 [io.replikativ/full.async "0.9.1.3"]
+                 [org.clojure/core.async "0.2.385"]
                  [io.replikativ/hasch "0.3.1"]
 
                  [io.replikativ/incognito "0.2.0"]]

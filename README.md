@@ -164,6 +164,9 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.3
+- remove full.async until binding issues are resolved
+
 ### 0.4.2
 - simplify and fix indexeddb
 - do clean locking with syntactic macro sugar

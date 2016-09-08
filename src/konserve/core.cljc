@@ -3,12 +3,9 @@
   (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
             [hasch.core :refer [uuid]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
-               :cljs [cljs.core.async :refer [chan poll! put! <!]])
-            #?(:clj [full.async :refer [go-try <? put?]]
-               :cljs [full.async :refer [put?]]))
-  #?(:cljs (:require-macros [full.async :refer [go-try <?]]
-                            [cljs.core.async.macros :refer [go]]
-                            [konserve.core :refer [go-try-locked]])))
+               :cljs [cljs.core.async :refer [chan poll! put! <!]]))
+  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go <!]]
+                            [konserve.core :refer [go-locked]])))
 
 
 (defn- cljs-env?
@@ -24,8 +21,6 @@
      [then else]
      (if (cljs-env? &env) then else)))
 
-
-
 ;; TODO we keep one chan for each key in memory
 ;; as async ops seem to infer with the atom state changes
 ;; and cause deadlock
@@ -36,7 +31,7 @@
         (get (swap! locks assoc key c) key))))
 
 #?(:clj
-   (defmacro go-try-locked [store key & code]
+   (defmacro go-locked [store key & code]
      (let [res`(if-cljs
                 (cljs.core.async.macros/go
                   (let [l# (get-lock ~store ~key)]
@@ -58,26 +53,26 @@
 (defn exists?
   "Checks whether value is in the store."
   [store key]
-  (go-try-locked
+  (go-locked
    store key
-   (<? (-exists? store key))))
+   (<! (-exists? store key))))
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
   not resolvable."
   [store key-vec]
-  (go-try-locked
+  (go-locked
    store (first key-vec)
-   (<? (-get-in store key-vec))))
+   (<! (-get-in store key-vec))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   [store key-vec fn]
-  (go-try-locked
+  (go-locked
    store (first key-vec)
-   (<? (-update-in store key-vec fn))))
+   (<! (-update-in store key-vec fn))))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
@@ -89,52 +84,52 @@
 (defn append
   "Append the Element to the log at the given key. This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
   [store key elem]
-  (go-try-locked
+  (go-locked
    store key
-   (let [head (<? (-get-in store [key]))
+   (let [head (<! (-get-in store [key]))
          [append-log? last-id first-id] head
          new-elem {:next nil
                    :elem elem}
          id (uuid)]
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
-     (<? (-update-in store [id] (fn [_] new-elem)))
+     (<! (-update-in store [id] (fn [_] new-elem)))
      (when first-id
-       (<? (-update-in store [last-id :next] (fn [_] id))))
-     (<? (-update-in store [key] (fn [_] [:append-log id (or first-id id)])))
+       (<! (-update-in store [last-id :next] (fn [_] id))))
+     (<! (-update-in store [key] (fn [_] [:append-log id (or first-id id)])))
      [first-id id])))
 
 (defn log
   "Loads the whole append log stored at "
   [store key]
-  (go-try
-   (let [head (<? (get-in store [key]));; atomic read
+  (go
+   (let [head (<! (get-in store [key]));; atomic read
          [append-log? last-id first-id] head] 
      ;; all other values are immutable:
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (when first-id
-       (loop [{:keys [next elem]} (<? (get-in store [first-id]))
+       (loop [{:keys [next elem]} (<! (get-in store [first-id]))
               hist []]
          (if next
-           (recur (<? (get-in store [next]))
+           (recur (<! (get-in store [next]))
                   (conj hist elem))
            (conj hist elem)))))))
 
 (defn reduce-log
   "Loads the whole append log stored at "
   [store key reduce-fn acc]
-  (go-try
-   (let [head (<? (get-in store [key]));; atomic read
+  (go
+   (let [head (<! (get-in store [key]));; atomic read
          [append-log? last-id first-id] head] 
      ;; all other values are immutable:
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (if first-id
-       (loop [{:keys [next elem]} (<? (get-in store [first-id]))
+       (loop [{:keys [next elem]} (<! (get-in store [first-id]))
               acc acc]
          (if next
-           (recur (<? (get-in store [next]))
+           (recur (<! (get-in store [next]))
                   (reduce-fn acc elem))
            (reduce-fn acc elem)))
        acc))))
@@ -145,17 +140,17 @@
   the lock, e.g. wrapped InputStream on the JVM and Blob in
   JavaScript. You need to properly close/dispose the object when you
   are done!"
-  (go-try-locked
+  (go-locked
    store key
-   (<? (-bget store key locked-cb))))
+   (<! (-bget store key locked-cb))))
 
 
 (defn bassoc [store key val]
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
-  (go-try-locked
+  (go-locked
    store key
-   (<? (-bassoc store key val))))
+   (<! (-bassoc store key val))))
 
 
 (comment
@@ -181,7 +176,7 @@
   (<!! (list-keys store))
 
   (<!! (get-lock store :foo))
-  (put? (get-lock store :foo) :unlocked)
+  (put! (get-lock store :foo) :unlocked)
 
   (<!! (append store :foo :barss))
   (<!! (log store :foo))
