@@ -6,10 +6,6 @@
   (-get-in [this key-vec] "Returns the value stored described by key-vec or nil if the path is not resolvable.")
   (-update-in [this key-vec up-fn] "Updates a position described by key-vec by applying up-fn and storing the result atomically. Returns a vector [old new] of the previous value and the result of applying up-fn (the newly stored value)." ))
 
-(defprotocol PAppendStore
-  (-append [this key elem] "Append an element to the log at this key.")
-  (-log [this key] "Return the log at the key."))
-
 
 (defprotocol PStoreSerializer
   "Decouples serialization format from storage."

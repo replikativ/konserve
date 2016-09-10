@@ -10,7 +10,6 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
-                                        PAppendStore -append -log
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]])
   (:import [java.io
