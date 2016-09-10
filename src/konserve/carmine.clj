@@ -18,9 +18,8 @@
 
 
 
-;; TODO if redis guarantees fsync in order of messages (never lose intermediary writes)
-;; then it should be possible to not force redis to fsync here
-
+;; TODO document how redis guarantees fsync in order of messages (never loses
+;; intermediary writes) on a single peer
 
 (defrecord CarmineStore [conn serializer read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
@@ -39,13 +38,7 @@
         (go nil)
         (let [res-ch (chan)]
           (try
-            #_(println (map byte (car/wcar conn (car/parse-raw (car/get id)))))
-            #_(println (-deserialize serializer read-handlers
-                                   (ByteArrayInputStream. (byte-array (drop 2 (car/wcar conn (car/parse-raw (car/get id))))))))
             (let [bais (ByteArrayInputStream. (car/wcar conn (car/parse-raw (car/get id))))]
-              ;; drop carmine header of 2 bytes
-              (.read bais)
-              (.read bais)
               (put! res-ch
                     (get-in
                      (second (-deserialize serializer read-handlers bais))
@@ -68,9 +61,6 @@
           (let [old-bin (car/wcar conn (car/parse-raw (car/get id)))
                 old (when old-bin
                       (let [bais (ByteArrayInputStream. (car/wcar conn (car/parse-raw (car/get id))))]
-                        ;; drop carmine header of 2 bytes
-                        (.read bais)
-                        (.read bais)
                         (second (-deserialize serializer write-handlers bais))))
                 new (if (empty? rkey)
                       (up-fn old)
@@ -78,7 +68,7 @@
             (when new
               (let [baos (ByteArrayOutputStream.)]
                 (-serialize serializer baos write-handlers [key-vec new])
-                (car/wcar conn (car/parse-raw (car/set id (.toByteArray baos))))))
+                (car/wcar conn (car/set id (car/raw (.toByteArray baos))))))
             (put! res-ch [(get-in old rkey)
                           (get-in new rkey)]))
           res-ch
@@ -100,10 +90,8 @@
           (try
             (let [bin (car/wcar conn (car/parse-raw (car/get id)))
                   bais (ByteArrayInputStream. bin)]
-              (.read bais)
-              (.read bais)
               (locked-cb {:input-stream bais
-                          :size (- (count bin) 2)}))
+                          :size (count bin)}))
             (catch Exception e
               (ex-info "Could not read key."
                        {:type :read-error
@@ -114,7 +102,8 @@
     (let [id (uuid key)]
       (go
         (try
-          (car/wcar conn (car/parse-raw (car/set id input)))
+          (car/wcar conn (car/set id (car/raw input)))
+          nil
           (catch Exception e
             (ex-info "Could not write key."
                      {:type :write-error
@@ -142,13 +131,13 @@
   (drop 2 (byte-array [1 2 3]))
 
 
-  (<!! (-exists? store "bar"))
+  (<!! (-exists? store "bars"))
 
-  (<!! (-update-in store ["bar"] (fn [_] 1)))
+  (<!! (-update-in store ["bars"] (fn [_] 1)))
 
-  (<!! (-update-in store ["bar"] inc))
+  (<!! (-update-in store ["bars"] inc))
 
-  (<!! (-get-in store ["bar"]))
+  (<!! (-get-in store ["bars"]))
 
 
   (<!! (-bassoc store "bbar" (byte-array (range 5))))
