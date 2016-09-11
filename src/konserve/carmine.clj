@@ -112,13 +112,21 @@
 
 
 
+(defn new-carmine-store
+  ([]
+   (new-carmine-store {:pool {} :spec {}}))
+  ([carmine-conn & {:keys [serializer read-handlers write-handlers]
+                    :or {serializer (ser/fressian-serializer)
+                         read-handlers (atom {})
+                         write-handlers (atom {})}}]
+   (go (map->CarmineStore {:conn carmine-conn
+                           :read-handlers read-handlers
+                           :write-handlers write-handlers
+                           :serializer serializer
+                           :locks (atom {})}))))
 
 (comment
-  (def store (map->CarmineStore {:conn {:pool {} :spec {}}
-                                 :read-handlers (atom {})
-                                 :write-handlers (atom {})
-                                 :serializer (ser/fressian-serializer)
-                                 :locks (atom {})}))
+  (def store (<!! (new-carmine-store)))
 
 
   (let [numbers (doall (range 1024))]
