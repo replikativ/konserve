@@ -82,7 +82,8 @@
 
 
 (defn append
-  "Append the Element to the log at the given key. This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
+  "Append the Element to the log at the given key or create a new append log there.
+  This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
   [store key elem]
   (go-locked
    store key
@@ -126,12 +127,12 @@
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (if first-id
-       (loop [{:keys [next elem]} (<! (get-in store [first-id]))
+       (loop [id first-id
               acc acc]
-         (if next
-           (recur (<! (get-in store [next]))
-                  (reduce-fn acc elem))
-           (reduce-fn acc elem)))
+         (let [{:keys [next elem]} (<! (get-in store [id]))]
+           (if (and next (not= id last-id))
+             (recur next (reduce-fn acc elem))
+             (reduce-fn acc elem))))
        acc))))
 
 

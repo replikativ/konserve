@@ -9,9 +9,7 @@
                  [org.clojure/core.async "0.2.385"]
                  [io.replikativ/hasch "0.3.1"]
 
-                 [io.replikativ/incognito "0.2.0"]
-
-                 [com.taoensso/carmine "2.14.0"]]
+                 [io.replikativ/incognito "0.2.0"]]
 
   :plugins [[lein-cljsbuild "1.1.2"]]
 
