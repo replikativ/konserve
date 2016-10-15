@@ -54,7 +54,7 @@
         fns))
 
 
-(defrecord FileSystemStore [folder serializer read-handlers write-handlers locks]
+(defrecord FileSystemStore [folder serializer read-handlers write-handlers locks config]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [fn (uuid key)
@@ -118,13 +118,16 @@
               (if (nil? new)
                 (do
                   (.delete f)
-                  (.sync fd))
+                  (when (:fsync config)
+                    (.sync fd)))
                 (do
                   (-serialize serializer dos write-handlers [key-vec new])
                   (.flush dos)
-                  (.sync fd)
+                  (when (:fsync config)
+                    (.sync fd))
                   (.renameTo new-file f)
-                  (.sync fd)))
+                  (when (:fsync config)
+                    (.sync fd))))
               (put! res-ch [(get-in old rkey)
                            (get-in new rkey)])
               res-ch
@@ -171,9 +174,11 @@
           (try
             (io/copy input dos)
             (.flush dos)
-            (.sync fd)
+            (when (:fsync config)
+              (.sync fd))
             (.renameTo new-file f)
-            (.sync fd)
+            (when (:fsync config)
+              (.sync fd))
             (catch Exception e
               (.delete new-file)
               (.sync fd)
@@ -188,10 +193,11 @@
 
 (defn new-fs-store
   "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
-  [path & {:keys [serializer read-handlers write-handlers]
+  [path & {:keys [serializer read-handlers write-handlers config]
            :or {serializer (ser/fressian-serializer)
                 read-handlers (atom {})
-                write-handlers (atom {})}}]
+                write-handlers (atom {})
+                config {:fsync true}}}]
   (let [f (io/file path)
         locks (atom {})
         test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
@@ -207,7 +213,8 @@
                              :serializer serializer
                              :read-handlers read-handlers
                              :write-handlers write-handlers
-                             :locks locks}))))
+                             :locks locks
+                             :config config}))))
 
 
 (comment

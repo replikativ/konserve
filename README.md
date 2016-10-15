@@ -11,7 +11,7 @@ This was initially implemented as an elementary storage protocol for [replikativ
 A file-system store in Clojure and [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) for ClojureScript are provided as elementary reference implementations for the two most important platforms. No setup and no additional dependencies are needed.
 
 ### fs-store
-The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. It also allows to access values as a normal file-system file, e.g. to open it with a native database like HDF5 in Java.
+The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. It also allows to access values as a normal file-system file, e.g. to open it with a native database like HDF5 in Java. You can decide not to fsync on every write by a configuration of `{:fsync false}`.
 
 
 ### IndexedDB
