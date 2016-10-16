@@ -19,6 +19,7 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 
 ### External Backends
 
+- LevelDB: [konserve-leveldb](https://github.com/replikativ/konserve-leveldb).
 - CouchDB: [konserve-clutch](https://github.com/replikativ/konserve-clutch).
 - Redis: [konserve-carmine](https://github.com/replikativ/konserve-carmine).
 
@@ -161,14 +162,19 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
+- always call locked-cb for bget
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
 - implement generic cached store(s) to wrap durable ones
 - evaluate: store small files of filestore in subdirectories to avoid
-  inefficient file system behaviour
+  file system rebalances (?)
 - more backends
 
 ## Changelog
+
+
+### 0.4.4
+- make fsync configurable
 
 ### 0.4.3
 - remove full.async until binding issues are resolved

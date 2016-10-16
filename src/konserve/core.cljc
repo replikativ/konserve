@@ -22,7 +22,7 @@
      (if (cljs-env? &env) then else)))
 
 ;; TODO we keep one chan for each key in memory
-;; as async ops seem to infer with the atom state changes
+;; as async ops seem to interfere with the atom state changes
 ;; and cause deadlock
 (defn get-lock [{:keys [locks] :as store} key]
   (or (get @locks key)
