@@ -4,7 +4,7 @@
             [hasch.core :refer [uuid]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]]))
-  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go <!]]
+  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
                             [konserve.core :refer [go-locked]])))
 
 
