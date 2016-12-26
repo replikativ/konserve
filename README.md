@@ -1,4 +1,4 @@
-# konserve
+# konserve [![CircleCI](https://circleci.com/gh/replikativ/konserve.svg?style=svg)](https://circleci.com/gh/replikativ/konserve)
 
 [*Simple durability, made flexible.*](https://whilo.github.io/articles/16/unified-storage-io)
 
