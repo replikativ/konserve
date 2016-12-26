@@ -173,6 +173,7 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
+- support distinct dissoc (not implicit key-removal on assoc-in store key nil)
 - always call locked-cb for bget
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
@@ -183,6 +184,8 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.5
+- bump deps
 
 ### 0.4.4
 - make fsync configurable

@@ -1,15 +1,17 @@
-(defproject io.replikativ/konserve "0.4.4"
+(defproject io.replikativ/konserve "0.4.5"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src"]
-  :dependencies [[org.clojure/clojure "1.9.0-alpha12"]
-                 [org.clojure/clojurescript "1.9.229"]
-                 [org.clojure/core.async "0.2.385"]
-                 [io.replikativ/hasch "0.3.1"]
+  :dependencies [[org.clojure/clojure "1.9.0-alpha14" :scope "provided"]
+                 [org.clojure/clojurescript "1.9.229" :scope "provided"]
+                 [org.clojure/core.async "0.2.391"]
 
-                 [io.replikativ/incognito "0.2.0"]]
+                 [org.clojure/data.fressian "0.2.1"] ;; for filestore
+                 [io.replikativ/incognito "0.2.1"]
+
+                 [io.replikativ/hasch "0.3.4"]]
 
   :plugins [[lein-cljsbuild "1.1.4"]]
 
@@ -20,8 +22,6 @@
                    :plugins [[lein-figwheel "0.5.0-2"]]}}
 
   :clean-targets ^{:protect false} ["target" "out" "resources/public/js"]
-
-  :aot :all
 
   :cljsbuild
   {:builds
