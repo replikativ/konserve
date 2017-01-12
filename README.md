@@ -105,11 +105,24 @@ From a Clojure REPL run:
 ~~~
 
 
-In ClojureScript from a browser (you need IndexedDB available in your js env):
+In a ClojureScript REPL you can evaluate the expressions from the REPL each
+wrapped in a go-block.
+
+For simple purposes a memory store wrapping an Atom is implemented as well:
 ~~~clojure
 (ns test-db
-  (:require [konserve.indexeddb :refer [new-indexeddb-store]])
-  (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
+  (:require [konserve.memory :refer [new-mem-store]]
+            [konserve.core :as k]))
+
+(go (def my-db (<! (new-mem-store)))) ;; or
+(go (def my-db (<! (new-mem-store (atom {:foo 42})))))
+~~~
+
+
+In ClojureScript from a browser (you need IndexedDB available in your js env):
+~~~clojure
+(ns test-db (:require [konserve.indexeddb :refer [new-indexeddb-store]])
+(:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 (go (def my-db (<! (new-indexeddb-store "konserve"))))
 
@@ -128,28 +141,19 @@ In ClojureScript from a browser (you need IndexedDB available in your js env):
 ;; => "test" contains {:a 2 :b 4.2}
 ~~~
 
-An example for ClojureScript with IndexedDB is:
+For non-REPL code execution you have to put all channel operations in one
+top-level go-block for them to be sychronized:
 ~~~clojure
-(defrecord Test [a])
+(ns test-db (:require [konserve.indexeddb :refer [new-indexeddb-store]])
+(:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
-(go (def my-store (<! (new-indexeddb-store "konserve" (atom {'user.Test
-                                                             map->Test})))))
+(go (def my-db (<! (new-indexeddb-store "konserve")))
 
-(go (println (<! (k/assoc-in my-store ["rec-test"] (Test. 5)))))
-(go (println (<! (k/get-in my-store ["rec-test"]))))
+    (println "get:" (<! (k/get-in my-db ["test" :a])))
+
+    (doseq [i (range 10)]
+       (<! (k/assoc-in my-db [i] i))))
 ~~~
-
-For simple purposes a memory store wrapping an Atom is implemented as well:
-~~~clojure
-(ns test-db
-  (:require [konserve.memory :refer [new-mem-store]]
-            [konserve.core :as k]))
-
-(go (def my-db (<! (new-mem-store)))) ;; or
-(go (def my-db (<! (new-mem-store (atom {:foo 42})))))
-~~~
-
-
 
 For more examples have a look at the comment blocks at the end of the respective namespaces.
 
