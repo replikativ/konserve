@@ -36,6 +36,8 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 
 New storage backends, e.g. MongoDB, JDBC, WebSQL, Local-Storage are welcome.
 
+There is also a [system component](https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj) for the internal backends.
+
 ## Benchmarks
 
 Due to its simplicity it is also fairly fast as it directly serializes Clojure, e.g. with fressian, to durable storage. The file-store is CPU bound atm. More detailed benchmarks are welcome :).
