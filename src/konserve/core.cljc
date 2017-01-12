@@ -1,6 +1,6 @@
 (ns konserve.core
-  (:refer-clojure :exclude [get-in update-in assoc-in exists?])
-  (:require [konserve.protocols :refer [-exists? -get-in -update-in -bget -bassoc]]
+  (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
+  (:require [konserve.protocols :refer [-exists? -get-in -update-in -dissoc -bget -bassoc]]
             [hasch.core :refer [uuid]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]]))
@@ -80,6 +80,13 @@
   [store key-vec val]
   (update-in store key-vec (fn [_] val)))
 
+(defn dissoc
+  "Removes an entry from the store. "
+  [store key]
+  (go-locked
+   store key
+   (<! (-dissoc store key))))
+
 
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
@@ -136,19 +143,21 @@
        acc))))
 
 
-(defn bget [store key locked-cb]
+(defn bget 
   "Calls locked-cb with a platform specific binary representation inside
   the lock, e.g. wrapped InputStream on the JVM and Blob in
   JavaScript. You need to properly close/dispose the object when you
   are done!"
+  [store key locked-cb]
   (go-locked
    store key
    (<! (-bget store key locked-cb))))
 
 
-(defn bassoc [store key val]
+(defn bassoc 
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
+  [store key val]
   (go-locked
    store key
    (<! (-bassoc store key val))))

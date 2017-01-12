@@ -1,5 +1,5 @@
 (ns konserve.core-test
-  (:refer-clojure :exclude [get-in update-in assoc-in exists?])
+  (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!!]]
             [konserve.core :refer :all]
@@ -15,6 +15,9 @@
       (<!! (assoc-in store [:foo] :bar))
       (is (= (<!! (get-in store [:foo]))
              :bar))
+      (<!! (dissoc store :foo))
+      (is (= (<!! (get-in store [:foo]))
+             nil))
       (<!! (bassoc store :binbar (byte-array (range 10))))
       (<!! (bget store :binbar (fn [{:keys [input-stream]}]
                                  (is (= (map byte (slurp input-stream))
@@ -46,13 +49,18 @@
       (<!! (assoc-in store [:foo] :bar))
       (is (= (<!! (get-in store [:foo]))
              :bar))
+      (is (= (<!! (list-keys store))
+             #{[:foo]}))
+      (<!! (dissoc store :foo))
+      (is (= (<!! (get-in store [:foo]))
+             nil))
       (<!! (bassoc store :binbar (byte-array (range 10))))
       (<!! (bget store :binbar (fn [{:keys [input-stream]}]
                                  (is (= (map byte (slurp input-stream))
                                         (range 10))))))
 
       (is (= (<!! (list-keys store))
-             #{[:foo]})))))
+             #{})))))
 
 
 

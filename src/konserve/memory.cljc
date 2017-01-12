@@ -11,6 +11,7 @@
   (-get-in [this key-vec] (go (get-in @state key-vec)))
   (-update-in [this key-vec up-fn] (go [(get-in @state key-vec)
                                         (get-in (swap! state update-in key-vec up-fn) key-vec)]))
+  (-dissoc [this key] (go (swap! state dissoc key) nil))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
@@ -32,13 +33,13 @@
 
 
 (comment
-  (require '[clojure.core.async :refer [<!!]]
-           '[konserve.protocols :refer [-bget -bassoc -append -log]]
+  (require '[clojure.core.async :refer [<!! go <!]]
+           '[konserve.protocols :refer [-bget -bassoc]]
            '[clojure.java.io :as io])
   (def store (<!! (new-mem-store)))
 
-  (<!! (-append store :foo :bar))
-  (<!! (-log store :foo))
+  (go (def foo (<! (new-mem-store))))
+
 
   (<!! (-bassoc store "foo" (io/input-stream (byte-array 10 (byte 42)))))
   (<!! (-bget store "foo" identity))

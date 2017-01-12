@@ -9,7 +9,8 @@
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get-in -update-in
+            [konserve.protocols :refer [PEDNAsyncKeyValueStore
+                                        -exists? -get-in -update-in -dissoc
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]])
   (:import [java.io
@@ -115,19 +116,13 @@
           (if (instance? Throwable old)
             (put! res-ch old) ;; return read error
             (try
-              (if (nil? new)
-                (do
-                  (.delete f)
-                  (when (:fsync config)
-                    (.sync fd)))
-                (do
-                  (-serialize serializer dos write-handlers [key-vec new])
-                  (.flush dos)
-                  (when (:fsync config)
-                    (.sync fd))
-                  (.renameTo new-file f)
-                  (when (:fsync config)
-                    (.sync fd))))
+              (-serialize serializer dos write-handlers [key-vec new])
+              (.flush dos)
+              (when (:fsync config)
+                (.sync fd))
+              (.renameTo new-file f)
+              (when (:fsync config)
+                (.sync fd))
               (put! res-ch [(get-in old rkey)
                            (get-in new rkey)])
               res-ch
@@ -142,6 +137,17 @@
               (finally
                 (.close fos)
                 (close! res-ch)))))))
+
+  (-dissoc [this key]
+    (go
+      (let [fn (uuid key)
+            f (io/file (str folder "/" fn))
+            fos (FileOutputStream. f)
+            fd (.getFD fos)]
+        (.delete f)
+        (when (:fsync config)
+          (.sync fd))
+        nil)))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]

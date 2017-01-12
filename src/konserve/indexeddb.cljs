@@ -73,12 +73,10 @@
                       up (if-not (empty? rkey)
                            (update-in old rkey up-fn)
                            (up-fn old))]
-                  (let [up-req (if up
-                                 (.put obj-store
-                                       (clj->js {:key (pr-str fkey)
-                                                 :edn_value
-                                                 (-serialize serializer nil write-handlers up)}))
-                                 (.delete obj-store (pr-str fkey)))]
+                  (let [up-req (.put obj-store
+                                     (clj->js {:key (pr-str fkey)
+                                               :edn_value
+                                               (-serialize serializer nil write-handlers up)}))]
                     (set! (.-onerror up-req)
                           (fn [e]
                             (put! res (ex-info "Cannot write edn value."
@@ -96,6 +94,23 @@
                                       :key key-vec
                                       :error e}))
                   (close! res)))))
+      res))
+
+  (-dissoc [this key]
+    (let [res (chan)
+          tx (.transaction db #js [store-name] "readwrite")
+          obj-store (.objectStore tx store-name)
+          up-req (.delete obj-store (pr-str key))]
+      (set! (.-onerror up-req)
+            (fn [e]
+              (put! res (ex-info "Cannot write edn value."
+                                 {:type :write-error
+                                  :key key
+                                  :error (.-target e)}))
+              (close! res)))
+      (set! (.-onsuccess up-req)
+            (fn [e]
+              (close! res)))
       res))
 
   PBinaryAsyncKeyValueStore

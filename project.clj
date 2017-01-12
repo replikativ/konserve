@@ -1,12 +1,12 @@
-(defproject io.replikativ/konserve "0.4.5"
+(defproject io.replikativ/konserve "0.4.8"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src"]
   :dependencies [[org.clojure/clojure "1.9.0-alpha14" :scope "provided"]
-                 [org.clojure/clojurescript "1.9.229" :scope "provided"]
-                 [org.clojure/core.async "0.2.391"]
+                 [org.clojure/clojurescript "1.9.293" :scope "provided"]
+                 [org.clojure/core.async "0.2.395"]
 
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
                  [io.replikativ/incognito "0.2.1"]

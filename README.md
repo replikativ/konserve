@@ -78,16 +78,6 @@ You can read and write custom records according to [incognito](https://github.co
 Add to your leiningen dependencies:
 [![Clojars Project](http://clojars.org/io.replikativ/konserve/latest-version.svg)](http://clojars.org/io.replikativ/konserve)
 
-For simple purposes a memory store wrapping an Atom is implemented as well:
-~~~clojure
-(ns test-db
-  (:require [konserve.memory :refer [new-mem-store]]
-            [konserve.core :as k]))
-
-(go (def my-db (<! (new-mem-store)))) ;; or
-(go (def my-db (<! (new-mem-store (atom {:foo 42})))))
-~~~
-
 From a Clojure REPL run:
 ~~~clojure
 (ns test-db
@@ -104,6 +94,7 @@ From a Clojure REPL run:
 (<!! (k/assoc-in store [:bar] 42))
 (<!! (k/update-in store [:bar] inc))
 (<!! (k/get-in store [:bar]))
+(<!! (k/dissoc store :bar))
 
 (<!! (k/append store :error-log {:type :horrible}))
 (<!! (k/log store :error-log))
@@ -148,6 +139,18 @@ An example for ClojureScript with IndexedDB is:
 (go (println (<! (k/get-in my-store ["rec-test"]))))
 ~~~
 
+For simple purposes a memory store wrapping an Atom is implemented as well:
+~~~clojure
+(ns test-db
+  (:require [konserve.memory :refer [new-mem-store]]
+            [konserve.core :as k]))
+
+(go (def my-db (<! (new-mem-store)))) ;; or
+(go (def my-db (<! (new-mem-store (atom {:foo 42})))))
+~~~
+
+
+
 For more examples have a look at the comment blocks at the end of the respective namespaces.
 
 ## JavaScript bindings
@@ -173,7 +176,6 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
-- support distinct dissoc (not implicit key-removal on assoc-in store key nil)
 - always call locked-cb for bget
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
@@ -183,6 +185,9 @@ konserve.js.update_in(store,
 - more backends
 
 ## Changelog
+
+### 0.4.7
+- support distinct dissoc (not implicit key-removal on assoc-in store key nil)
 
 ### 0.4.5
 - bump deps
