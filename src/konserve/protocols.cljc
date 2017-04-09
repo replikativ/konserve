@@ -1,10 +1,12 @@
-(ns konserve.protocols)
+(ns konserve.protocols
+  #?(:cljs (:refer-clojure :exclude [-dissoc])))
 
 (defprotocol PEDNAsyncKeyValueStore
   "Allows to access a store similar to hash-map in EDN."
   (-exists? [this key] "Checks whether value is in the store.")
   (-get-in [this key-vec] "Returns the value stored described by key-vec or nil if the path is not resolvable.")
   (-update-in [this key-vec up-fn] "Updates a position described by key-vec by applying up-fn and storing the result atomically. Returns a vector [old new] of the previous value and the result of applying up-fn (the newly stored value)." )
+  (-assoc-in [this key-vec val])
   (-dissoc [this key]))
 
 

@@ -2,7 +2,8 @@
   "Address globally aggregated immutable key-value store(s)."
   (:require #?(:clj [clojure.core.async :refer [go]])
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
-                                        PBinaryAsyncKeyValueStore]])
+                                        PBinaryAsyncKeyValueStore
+                                        -update-in]])
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
 (defrecord MemAsyncKeyValueStore [state read-handlers write-handlers locks]
@@ -11,6 +12,7 @@
   (-get-in [this key-vec] (go (get-in @state key-vec)))
   (-update-in [this key-vec up-fn] (go [(get-in @state key-vec)
                                         (get-in (swap! state update-in key-vec up-fn) key-vec)]))
+  (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
   (-dissoc [this key] (go (swap! state dissoc key) nil))
 
   PBinaryAsyncKeyValueStore

@@ -96,6 +96,8 @@
                   (close! res)))))
       res))
 
+  (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
+
   (-dissoc [this key]
     (let [res (chan)
           tx (.transaction db #js [store-name] "readwrite")

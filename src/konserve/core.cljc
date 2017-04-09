@@ -1,6 +1,7 @@
 (ns konserve.core
   (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
-  (:require [konserve.protocols :refer [-exists? -get-in -update-in -dissoc -bget -bassoc]]
+  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
+                                        -update-in -dissoc -bget -bassoc]]
             [hasch.core :refer [uuid]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]]))
@@ -78,7 +79,9 @@
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
   [store key-vec val]
-  (update-in store key-vec (fn [_] val)))
+  (go-locked
+   store (first key-vec)
+   (<! (-assoc-in store key-vec val))))
 
 (defn dissoc
   "Removes an entry from the store. "

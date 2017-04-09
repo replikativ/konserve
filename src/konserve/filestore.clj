@@ -138,6 +138,8 @@
                 (.close fos)
                 (close! res-ch)))))))
 
+  (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
+
   (-dissoc [this key]
     (go
       (let [fn (uuid key)
