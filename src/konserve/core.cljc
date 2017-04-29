@@ -29,7 +29,10 @@
   (or (get @locks key)
       (let [c (chan)]
         (put! c :unlocked)
-        (get (swap! locks assoc key c) key))))
+        (get (swap! locks (fn [old]
+                            (if (old key) old
+                                (assoc old key c))))
+             key))))
 
 #?(:clj
    (defmacro go-locked [store key & code]
@@ -166,6 +169,7 @@
    (<! (-bassoc store key val))))
 
 
+
 (comment
   (require '[clojure.core.async :refer [<!! chan go] :as async])
   ;; cljs
@@ -181,6 +185,11 @@
            '[clojure.core.async :refer [<!! >!! chan] :as async])
 
   (def store (<!! (new-fs-store "/tmp/store")))
+
+  (doseq [i (range 1000)]
+    (<!! (update-in store [:foo] (fn [j] (if-not j i (+ j i))))))
+
+  (<!! (get-in store [:foo]))
 
   (delete-store "/tmp/store")
 

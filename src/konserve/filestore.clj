@@ -39,8 +39,7 @@
                          store fn
                          (let [f (io/file (str folder "/" fn))]
                            (when (.exists f)
-                             (let [fis (DataInputStream. (FileInputStream. f))
-                                   res-ch (chan)]
+                             (let [fis (DataInputStream. (FileInputStream. f))]
                                (try
                                  (first (-deserialize serializer read-handlers fis))
                                  (catch Exception e
@@ -67,35 +66,31 @@
 
 
   (-get-in [this key-vec]
-    (let [[fkey & rkey] key-vec
-          fn (uuid fkey)
-          f (io/file (str folder "/" fn))]
-      (if-not (.exists f)
-        (go nil)
-        (let [fis (DataInputStream. (FileInputStream. f))
-              res-ch (chan)]
-          (try
-            (put! res-ch
-                  (get-in
-                   (second (-deserialize serializer read-handlers fis)) 
-                   rkey))
-            res-ch
-            (catch Exception e
-              (put! res-ch (ex-info "Could not read key."
-                                   {:type :read-error
-                                    :key fkey
-                                    :exception e}))
-              res-ch)
-            (finally
-              (.close fis)
-              (close! res-ch)))))))
+    (async/thread
+      (let [[fkey & rkey] key-vec
+            fn (uuid fkey)
+            f (io/file (str folder "/" fn))]
+        (when (.exists f)
+          (let [fis (DataInputStream. (FileInputStream. f))]
+            (try
+              (get-in
+               (second (-deserialize serializer read-handlers fis)) 
+               rkey)
+              (catch Exception e
+                (ex-info "Could not read key."
+                         {:type :read-error
+                          :key fkey
+                          :exception e}))
+              (finally
+                (.close fis))))))))
 
   (-update-in [this key-vec up-fn]
-    (let [[fkey & rkey] key-vec
-          fn (uuid fkey)
-          f (io/file (str folder "/" fn))
-          new-file (io/file (str folder "/" fn ".new"))]
-      (let [old (when (.exists f)
+    (async/thread
+      (let [[fkey & rkey] key-vec
+            fn (uuid fkey)
+            f (io/file (str folder "/" fn))
+            new-file (io/file (str folder "/" fn ".new"))]
+        (let [old (when (.exists f)
                     (let [fis (DataInputStream. (FileInputStream. f))]
                       (try
                         (second (-deserialize serializer read-handlers fis)) 
@@ -111,10 +106,9 @@
               fd (.getFD fos)
               new (if-not (empty? rkey)
                     (update-in old rkey up-fn)
-                    (up-fn old))
-            res-ch (chan)]
+                    (up-fn old))]
           (if (instance? Throwable old)
-            (put! res-ch old) ;; return read error
+            old ;; return read error
             (try
               (-serialize serializer dos write-handlers [key-vec new])
               (.flush dos)
@@ -123,25 +117,22 @@
               (.renameTo new-file f)
               (when (:fsync config)
                 (.sync fd))
-              (put! res-ch [(get-in old rkey)
-                           (get-in new rkey)])
-              res-ch
+              [(get-in old rkey)
+               (get-in new rkey)]
               (catch Exception e
                 (.delete new-file)
                 (.sync fd)
-                (put! res-ch (ex-info "Could not write key."
-                                     {:type :write-error
-                                      :key fkey
-                                      :exception e}))
-                res-ch)
+                (ex-info "Could not write key."
+                         {:type :write-error
+                          :key fkey
+                          :exception e}))
               (finally
-                (.close fos)
-                (close! res-ch)))))))
+                (.close fos))))))))
 
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
 
   (-dissoc [this key]
-    (go
+    (async/thread
       (let [fn (uuid key)
             f (io/file (str folder "/" fn))
             fos (FileOutputStream. f)
@@ -223,6 +214,8 @@
                              :write-handlers write-handlers
                              :locks locks
                              :config config}))))
+
+
 
 
 (comment
