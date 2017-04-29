@@ -194,6 +194,10 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.9
+- fix a racecondition in the lock creation
+- do not drain the threadpool for the filestore
+
 ### 0.4.7
 - support distinct dissoc (not implicit key-removal on assoc-in store key nil)
 
