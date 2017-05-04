@@ -86,6 +86,11 @@ From a Clojure REPL run:
     (:require [konserve.filestore :refer [new-fs-store]]
               [konserve.core :as k]
               [clojure.core.async :as async :refer [<!!]]))
+              
+              
+;; Note: We use the thread blocking operations <!! here only to synchronize
+;; with the REPL. <!! does not compose well with async contexts, so prefer
+;; composing your application with go and <! instead.
 
 (def store (<!! (new-fs-store "/tmp/store")))
 
