@@ -123,10 +123,10 @@
           req (.get obj-store (pr-str key))]
       (set! (.-onerror req)
             (fn [e]
-              (put! res (ex-info "Cannot read binary value."
-                                 {:type :read-error
-                                  :key key
-                                  :error (.-target e)}))
+              (lock-cb (ex-info "Cannot read binary value."
+                                {:type :read-error
+                                 :key key
+                                 :error (.-target e)}))
               (close! res)))
       (set! (.-onsuccess req)
             (fn [e] (when-let [r (.-result req)]

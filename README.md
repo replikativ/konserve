@@ -187,9 +187,9 @@ konserve.js.update_in(store,
 ~~~
 
 ## TODO
-- always call locked-cb for bget
-- optimize append-log
-- check directory fsync for filestore http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
+- add stress tests with https://github.com/madthanu/alice (for filestore)
+- verify proper directory fsync for filestore 
+  http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
 - implement generic cached store(s) to wrap durable ones

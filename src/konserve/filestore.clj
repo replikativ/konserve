@@ -161,10 +161,10 @@
                           :size (.length f)
                           :file f})
               (catch Exception e
-                (ex-info "Could not read key."
-                         {:type :read-error
-                          :key key
-                          :exception e}))
+                (locked-cb (ex-info "Could not read key."
+                                    {:type :read-error
+                                     :key key
+                                     :exception e})))
               (finally
                 (.close fis))))))))
 
