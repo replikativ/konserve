@@ -178,7 +178,8 @@
               (.sync fd))
             (.renameTo new-file f)
             (when (:fsync config)
-              (.sync fd))
+              (.sync fd)
+              (.sync (.getFD (io/file folder))))
             (catch Exception e
               (.delete new-file)
               (.sync fd)
