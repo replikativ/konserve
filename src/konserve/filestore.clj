@@ -116,7 +116,8 @@
                 (.sync fd))
               (.renameTo new-file f)
               (when (:fsync config)
-                (.sync fd))
+                (.sync fd)
+                (.sync (.getFD (io/file folder))))
               [(get-in old rkey)
                (get-in new rkey)]
               (catch Exception e
