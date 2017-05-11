@@ -17,6 +17,11 @@
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream]))
 
+
+;; A useful overview over fsync on Linux:
+;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
+
+
 (defn delete-store
   "Permanently deletes the folder of the store with all files."
   [folder]
