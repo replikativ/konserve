@@ -188,6 +188,7 @@ konserve.js.update_in(store,
 
 ## TODO
 - add stress tests with https://github.com/madthanu/alice (for filestore)
+- implement https://github.com/maxogden/abstract-blob-store for cljs
 - verify proper directory fsync for filestore 
   http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
 - evaluate bytearrays for binary values

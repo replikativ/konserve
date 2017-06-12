@@ -10,13 +10,13 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
-                                        -exists? -get-in -update-in -dissoc
+                                        -exists? -get-in -update-in -dissoc -assoc-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]])
   (:import [java.io
             DataInputStream DataOutputStream
-            FileInputStream FileOutputStream]))
-
+            FileInputStream FileOutputStream]
+           [java.nio.file Files StandardCopyOption]))
 
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
@@ -119,10 +119,11 @@
               (.flush dos)
               (when (:fsync config)
                 (.sync fd))
-              (.renameTo new-file f)
+              (Files/move (.toPath new-file) (.toPath f)
+                          (into-array [StandardCopyOption/ATOMIC_MOVE]))
               (when (:fsync config)
                 (.sync fd)
-                (.sync (.getFD (io/file folder))))
+                #_(.sync (.getFD (FileInputStream. (io/file folder)))))
               [(get-in old rkey)
                (get-in new rkey)]
               (catch Exception e
@@ -181,10 +182,12 @@
             (.flush dos)
             (when (:fsync config)
               (.sync fd))
-            (.renameTo new-file f)
+            #_(.renameTo new-file f)
+            (Files/move (.toPath new-file) (.toPath f)
+                        (into-array [StandardCopyOption/ATOMIC_MOVE]))
             (when (:fsync config)
               (.sync fd)
-              (.sync (.getFD (io/file folder))))
+              #_(.sync (.getFD (FileInputStream. (io/file folder)))))
             (catch Exception e
               (.delete new-file)
               (.sync fd)
@@ -198,7 +201,6 @@
 
 
 (defn new-fs-store
-  "Note that filename length is usually restricted as are pr-str'ed keys at the moment."
   [path & {:keys [serializer read-handlers write-handlers config]
            :or {serializer (ser/fressian-serializer)
                 read-handlers (atom {})
@@ -346,6 +348,7 @@
 
 
   (.createNewFile (io/file "/tmp/lock2"))
+
   (.renameTo (io/file "/tmp/lock2") (io/file "/tmp/lock-test"))
 
 
