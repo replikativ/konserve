@@ -55,9 +55,10 @@
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (bassoc store :binbar (byte-array (range 10))))
-      (<!! (bget store :binbar (fn [{:keys [input-stream]}]
-                                 (is (= (map byte (slurp input-stream))
-                                        (range 10))))))
+      (let [binbar (atom nil)]
+        (<!! (bget store :binbar (fn [{:keys [input-stream]}]
+                                   (reset! binbar (map byte (slurp input-stream))))))
+        (is (= @binbar (range 10))))
 
       (is (= (<!! (list-keys store))
              #{})))))

@@ -15,17 +15,22 @@
                                         -serialize -deserialize]])
   (:import [java.io
             DataInputStream DataOutputStream
-            FileInputStream FileOutputStream]
-           [java.nio.channels FileChannel]
-           [java.nio.file Files StandardCopyOption FileSystems Path OpenOption]))
+            FileInputStream FileOutputStream
+            ByteArrayInputStream]
+           [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
+           [java.nio ByteBuffer]
+           [java.nio.file Files StandardCopyOption FileSystems Path OpenOption
+            StandardOpenOption]))
 
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
 
 
 (defn- sync-folder [folder]
-  (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))]
-    (.force (FileChannel/open p (into-array OpenOption [])) true)))
+  (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))
+        fc (FileChannel/open p (into-array OpenOption []))]
+    (.force fc true)
+    (.close fc)))
 
 
 (defn delete-store
@@ -81,7 +86,52 @@
 
 
   (-get-in [this key-vec]
-    (async/thread
+    (let [[fkey & rkey] key-vec
+          fn (uuid fkey)
+          f (io/file (str folder "/" fn))
+          res-ch (chan)]
+      (if-not (.exists f)
+        (close! res-ch)
+        (try
+          (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                                           (str folder "/" fn)
+                                                           (into-array String []))
+                                                 (into-array StandardOpenOption
+                                                             [StandardOpenOption/READ]))
+                bb (ByteBuffer/allocate (.size ac))]
+            (.read ac
+                   bb
+                   0
+                   nil
+                   (proxy [CompletionHandler] []
+                     (completed [res att]
+                       (let [bais (ByteArrayInputStream. (.array bb))]
+                         (try
+                           (put! res-ch
+                                 (get-in
+                                  (second (-deserialize serializer read-handlers bais)) 
+                                  rkey))
+                           (catch Exception e
+                             (ex-info "Could not read key."
+                                      {:type :read-error
+                                       :key fkey
+                                       :exception e}))
+                           (finally
+                             (.close ac)))))
+                     (failed [t att]
+                       (put! res-ch (ex-info "Could not read key."
+                                             {:type :read-error
+                                              :key fkey
+                                              :exception t}))
+                       (.close ac)))))
+          (catch Exception e
+            (put! res-ch (ex-info "Could not read key."
+                               {:type :read-error
+                                :key fkey
+                                :exception e})))))
+      res-ch)
+
+    #_(async/thread
       (let [[fkey & rkey] key-vec
             fn (uuid fkey)
             f (io/file (str folder "/" fn))]
@@ -129,7 +179,7 @@
               (.flush dos)
               (when (:fsync config)
                 (.sync fd))
-              (.close fos)
+              (.close dos)
               (Files/move (.toPath new-file) (.toPath f)
                           (into-array [StandardCopyOption/ATOMIC_MOVE]))
               (when (:fsync config)
@@ -144,7 +194,7 @@
                           :key fkey
                           :exception e}))
               (finally
-                (.close fos))))))))
+                (.close dos))))))))
 
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
 
@@ -156,14 +206,57 @@
             fd (.getFD fos)]
         (.delete f)
         (when (:fsync config)
-          (.sync fd))
+          (.sync fd)
+          (sync-folder folder))
         nil)))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
-    (let [fn (uuid key)
-          f (io/file (str folder "/B_" fn))]
+    (let [fn (str "B_" (uuid key))
+          f (io/file (str folder "/" fn))
+          res-ch (chan)]
       (if-not (.exists f)
+        (close! res-ch)
+        (try
+          (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                                           (str folder "/" fn)
+                                                           (into-array String []))
+                                                 (into-array StandardOpenOption
+                                                             [StandardOpenOption/READ]))
+                bb (ByteBuffer/allocate (.size ac))]
+            (.read ac
+                   bb
+                   0
+                   nil
+                   (proxy [CompletionHandler] []
+                     (completed [res att]
+                       (let [bais (ByteArrayInputStream. (.array bb))]
+                         (try
+                           (locked-cb {:input-stream bais
+                                       :size (.length f)
+                                       :file f})
+                           (catch Exception e
+                             (ex-info "Could not read key."
+                                      {:type :read-error
+                                       :key key
+                                       :exception e}))
+                           (finally
+                             (close! res-ch)
+                             (.close ac)))))
+                     (failed [t att]
+                       (put! res-ch (ex-info "Could not read key."
+                                             {:type :read-error
+                                              :key key
+                                              :exception t}))
+                       (close! res-ch)
+                       (.close ac)))))
+          (catch Exception e
+            (put! res-ch (ex-info "Could not read key."
+                               {:type :read-error
+                                :key key
+                                :exception e})))))
+      res-ch
+      #_(if-not (.exists f)
         (go nil)
         (async/thread
           (let [fis (DataInputStream. (FileInputStream. f))]
@@ -235,7 +328,61 @@
 
 
 (comment
+
+
+(def ac
+  (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                          "/tmp/atest"
+                                          (into-array String []))
+                                (into-array StandardOpenOption
+                                            [StandardOpenOption/WRITE
+                                             StandardOpenOption/CREATE])))
+
+(proxy [CompletionHandler] []
+  (completed [res att]
+    (prn "completed" res att))
+  (failed [t att]
+    (prn "failed" t att)))
+
+(.write ac (ByteBuffer/wrap (.getBytes "Hello World")) 0
+        nil
+        (proxy [CompletionHandler] []
+          (completed [res att]
+            (prn "completed" res att))
+          (failed [t att]
+            (prn "failed" t att))))
+
+(def ac2
+  (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                          "/tmp/atest"
+                                          (into-array String []))
+                                (into-array StandardOpenOption
+                                            [StandardOpenOption/READ])))
+
+(.size ac2)
+
+(let [bb (ByteBuffer/allocate (.size ac2))]
+  (.read ac2
+         bb
+         0
+         nil
+         (proxy [CompletionHandler] []
+           (completed [res att]
+             (prn "completed" res att (String. (.array bb))))
+           (failed [t att]
+             (prn "failed" t att)))))
+
+(def foo *1)
+
+(deref foo)
+
+
+
+
   (def store (<!! (new-fs-store "/tmp/store")))
+
+  (<!! (-assoc-in store [:foo] 42))
+  (<!! (-get-in store [:foo]))
 
   ;; investigate https://github.com/stuartsierra/parallel-async
   (let [res (chan (async/sliding-buffer 1))
