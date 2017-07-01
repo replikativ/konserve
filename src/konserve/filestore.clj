@@ -16,10 +16,16 @@
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream]
-           [java.nio.file Files StandardCopyOption]))
+           [java.nio.channels FileChannel]
+           [java.nio.file Files StandardCopyOption FileSystems Path OpenOption]))
 
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
+
+
+(defn- sync-folder [folder]
+  (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))]
+    (.force (FileChannel/open p (into-array OpenOption [])) true)))
 
 
 (defn delete-store
@@ -28,7 +34,11 @@
   (let [f (io/file folder)]
     (doseq [c (.list f)]
       (.delete (io/file (str folder "/" c))))
-    (.delete f)))
+    (.delete f)
+    (try
+      (sync-folder folder)
+      (catch Exception e
+        nil))))
 
 
 (defn list-keys
@@ -119,11 +129,11 @@
               (.flush dos)
               (when (:fsync config)
                 (.sync fd))
+              (.close fos)
               (Files/move (.toPath new-file) (.toPath f)
                           (into-array [StandardCopyOption/ATOMIC_MOVE]))
               (when (:fsync config)
-                (.sync fd)
-                #_(.sync (.getFD (FileInputStream. (io/file folder)))))
+                (sync-folder folder))
               [(get-in old rkey)
                (get-in new rkey)]
               (catch Exception e
@@ -182,22 +192,19 @@
             (.flush dos)
             (when (:fsync config)
               (.sync fd))
-            #_(.renameTo new-file f)
+            (.close fos) ;; required for windows
             (Files/move (.toPath new-file) (.toPath f)
                         (into-array [StandardCopyOption/ATOMIC_MOVE]))
             (when (:fsync config)
-              (.sync fd)
-              #_(.sync (.getFD (FileInputStream. (io/file folder)))))
+              (sync-folder folder))
             (catch Exception e
               (.delete new-file)
-              (.sync fd)
               (ex-info "Could not write key."
                        {:type :write-error
                         :key key
                         :exception e}))
             (finally
               (.close fos))))))))
-
 
 
 (defn new-fs-store
