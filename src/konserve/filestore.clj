@@ -25,12 +25,16 @@
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
 
+(defn- on-windows? []
+  (>= (.indexOf (.toLowerCase (System/getProperty "os.name")) "win") 0))
+
 
 (defn- sync-folder [folder]
-  (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))
-        fc (FileChannel/open p (into-array OpenOption []))]
-    (.force fc true)
-    (.close fc)))
+  (when-not (on-windows?) ;; not necessary (and possible) on windows
+    (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))
+          fc (FileChannel/open p (into-array OpenOption []))]
+      (.force fc true)
+      (.close fc))))
 
 
 (defn delete-store
@@ -84,7 +88,7 @@
       (close! res)
       res))
 
-
+  ;; non-blocking async version
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
           fn (uuid fkey)
@@ -131,6 +135,7 @@
                                 :exception e})))))
       res-ch)
 
+    ;; previous blocking code on separate thread
     #_(async/thread
       (let [[fkey & rkey] key-vec
             fn (uuid fkey)
@@ -188,7 +193,7 @@
                (get-in new rkey)]
               (catch Exception e
                 (.delete new-file)
-                (.sync fd)
+                ;; TODO maybe need fsync new-file here?
                 (ex-info "Could not write key."
                          {:type :write-error
                           :key fkey
@@ -201,12 +206,9 @@
   (-dissoc [this key]
     (async/thread
       (let [fn (uuid key)
-            f (io/file (str folder "/" fn))
-            fos (FileOutputStream. f)
-            fd (.getFD fos)]
+            f (io/file (str folder "/" fn))]
         (.delete f)
         (when (:fsync config)
-          (.sync fd)
           (sync-folder folder))
         nil)))
 
@@ -379,7 +381,17 @@
 
 
 
-  (def store (<!! (new-fs-store "/tmp/store")))
+  (def store (<!! (new-fs-store "/tmp/store2")))
+
+
+  (<!! (-assoc-in store [:bar] 42))
+
+  (<!! (-update-in store [:bar] inc))
+
+  (<!! (-get-in store [:bar]))
+
+  (<!! (-dissoc store :bar))
+
 
   (<!! (-assoc-in store [:foo] 42))
   (<!! (-get-in store [:foo]))

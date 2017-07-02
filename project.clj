@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve "0.4.10-SNAPSHOT"
+(defproject io.replikativ/konserve "0.4.10"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
@@ -10,6 +10,7 @@
 
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
                  [io.replikativ/incognito "0.2.1"]
+                 [clj-ipfs-api "1.2.3"]
 
                  [io.replikativ/hasch "0.3.4"]]
 
