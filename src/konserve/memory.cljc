@@ -6,7 +6,7 @@
                                         -update-in]])
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
-(defrecord MemAsyncKeyValueStore [state read-handlers write-handlers locks]
+(defrecord MemoryStore [state read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
   (-exists? [this key] (go (if (@state key) true false)))
   (-get-in [this key-vec] (go (get-in @state key-vec)))
@@ -23,15 +23,21 @@
                                 :size :unknown})
         nil)))
 
+#?(:clj
+   (defmethod print-method MemoryStore
+     [store writer]
+     (.write writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
+
+
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and
   the read and write-handlers are dummy ones for compatibility."
   ([] (new-mem-store (atom {})))
   ([init-atom]
-   (go (map->MemAsyncKeyValueStore {:state init-atom
-                                    :read-handlers (atom {})
-                                    :write-handlers (atom {})
-                                    :locks (atom {})}))))
+   (go (map->MemoryStore {:state init-atom
+                          :read-handlers (atom {})
+                          :write-handlers (atom {})
+                          :locks (atom {})}))))
 
 
 (comment

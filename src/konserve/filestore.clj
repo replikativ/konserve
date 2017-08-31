@@ -301,6 +301,9 @@
             (finally
               (.close fos))))))))
 
+(defmethod print-method FileSystemStore
+  [store writer]
+  (.write writer (str "FileStore[\"" (:folder store ) ", " (.hasheq store) "\"]")))
 
 (defn new-fs-store
   [path & {:keys [serializer read-handlers write-handlers config]
