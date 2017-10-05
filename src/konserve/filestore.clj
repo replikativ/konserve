@@ -82,9 +82,11 @@
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [fn (uuid key)
+          bfn (str "B_" (uuid key))
           f (io/file (str folder "/" fn))
+          bf (io/file (str folder "/" bfn))
           res (chan)]
-      (put! res (.exists f))
+      (put! res (or (.exists f) (.exists bf)))
       (close! res)
       res))
 
@@ -133,26 +135,7 @@
                                {:type :read-error
                                 :key fkey
                                 :exception e})))))
-      res-ch)
-
-    ;; previous blocking code on separate thread
-    #_(async/thread
-      (let [[fkey & rkey] key-vec
-            fn (uuid fkey)
-            f (io/file (str folder "/" fn))]
-        (when (.exists f)
-          (let [fis (DataInputStream. (FileInputStream. f))]
-            (try
-              (get-in
-               (second (-deserialize serializer read-handlers fis)) 
-               rkey)
-              (catch Exception e
-                (ex-info "Could not read key."
-                         {:type :read-error
-                          :key fkey
-                          :exception e}))
-              (finally
-                (.close fis))))))))
+      res-ch))
 
   (-update-in [this key-vec up-fn]
     (async/thread
@@ -257,22 +240,7 @@
                                {:type :read-error
                                 :key key
                                 :exception e})))))
-      res-ch
-      #_(if-not (.exists f)
-        (go nil)
-        (async/thread
-          (let [fis (DataInputStream. (FileInputStream. f))]
-            (try
-              (locked-cb {:input-stream fis
-                          :size (.length f)
-                          :file f})
-              (catch Exception e
-                (locked-cb (ex-info "Could not read key."
-                                    {:type :read-error
-                                     :key key
-                                     :exception e})))
-              (finally
-                (.close fis))))))))
+      res-ch))
 
   (-bassoc [this key input]
     (let [fn (uuid key)

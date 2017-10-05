@@ -200,6 +200,12 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.4.12
+- fix exists for binary
+
+### 0.4.11
+- friendly printing of stores on JVM
+
 ### 0.4.9
 - fix a racecondition in the lock creation
 - do not drain the threadpool for the filestore
