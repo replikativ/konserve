@@ -13,6 +13,8 @@ A simple document store protocol defined with [core.async](https://github.com/cl
 - *very low overhead* protocol, including direct binary access for high throughput
 - *no additional dependencies and setup* required for IndexedDB in the browser and
   the file backend on the JVM
+- *avoids blocking io*, the filestore for instance will not block any thread on
+  reading. Support for writing and other stores is in the pipeline.
 
 The protocol is used in production and originates as an elementary storage protocol for [replikativ](https://github.com/replikativ/replikativ).
 
@@ -21,7 +23,7 @@ The protocol is used in production and originates as an elementary storage proto
 A file-system store in Clojure and [IndexedDB](https://developer.mozilla.org/en-US/docs/IndexedDB) for ClojureScript are provided as elementary reference implementations for the two most important platforms. No setup and no additional dependencies are needed.
 
 ### fs-store
-The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. It also allows to access values as a normal file-system file, e.g. to open it with a native database like HDF5 in Java. You can decide not to fsync on every write by a configuration of `{:fsync false}`.
+The file-system store currently uses [fressian](https://github.com/clojure/data.fressian) and is quite efficient. It also allows to access values as a normal file-system file, e.g. to open it with a native database like HDF5 in Java. You can decide not to fsync on every write by a configuration of `{:fsync false}`, if a potential but unlikely data loss is not critical for you (e.g. for a session store).
 
 
 ### IndexedDB
