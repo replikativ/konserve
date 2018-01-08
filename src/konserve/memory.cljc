@@ -25,7 +25,7 @@
 
 #?(:clj
    (defmethod print-method MemoryStore
-     [store writer]
+     [^MemoryStore store writer]
      (.write writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
 
 

@@ -280,6 +280,12 @@ konserve.js.update_in(store,
 - experimental native ACID file-store for Clojure
 - native binary blob support for file-store, IndexedDB and mem-store
 
+## Contributors
+
+- Daniel Szmulewicz
+- Konrad Kühne
+- Christian Weilbach
+
 ## License
 
 Copyright © 2014-2016 Christian Weilbach & Konrad Kühne
