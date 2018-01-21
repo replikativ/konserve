@@ -16,7 +16,6 @@ A simple document store protocol defined with [core.async](https://github.com/cl
 - *avoids blocking io*, the filestore for instance will not block any thread on
   reading. Support for writing and other stores is in the pipeline.
 
-The protocol is used in production and originates as an elementary storage protocol for [replikativ](https://github.com/replikativ/replikativ).
 
 ## Supported Backends
 
@@ -39,6 +38,10 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 New storage backends, e.g. MongoDB, JDBC, WebSQL, Local-Storage are welcome.
 
 There is also a [system component](https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj) for the internal backends.
+
+## Projects building on konserve
+- The protocol is used in production and originates as an elementary storage protocol for [replikativ](https://github.com/replikativ/replikativ).
+- [kampbell](https://github.com/danielsz/kampbell) maps collections of entities to konserve and enforces specs.
 
 ## Benchmarks
 
