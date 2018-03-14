@@ -48,7 +48,7 @@
 (defn list-keys
   "Lists all keys in this binary store. This operation *does not block concurrent operations* and might return an outdated key set. Keys of binary blobs are not tracked atm."
   [{:keys [folder serializer read-handlers ] :as store}]
-  (let [fns (->> (io/file (str folder "/Key"))
+  (let [fns (->> (io/file (str folder "/meta"))
                  .list
                  seq
                  (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -56,8 +56,8 @@
                  (map (fn [fn]
                         (go-locked
                          store fn
-                         (let [f  (io/file (str folder "/Key/" fn))
-                               fd (io/file (str folder "/Data/" fn))]
+                         (let [f  (io/file (str folder "/meta/" fn))
+                               fd (io/file (str folder "/data/" fn))]
                            (if (and (.exists f) (.exists fd))
                              (let [fis (DataInputStream. (FileInputStream. f))]
                                (try
@@ -167,7 +167,7 @@
     (close! res-ch)
     (try
       (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
-                                                       (str folder "/Data/" fn)
+                                                       (str folder "/data/" fn)
                                                        (into-array String []))
                                              (into-array StandardOpenOption
                                                          [StandardOpenOption/READ]))
@@ -215,7 +215,7 @@
     (close! res-ch)
     (try
       (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
-                                                       (str folder "/Data/" fn)
+                                                       (str folder "/data/" fn)
                                                        (into-array String []))
                                              (into-array StandardOpenOption
                                                          [StandardOpenOption/READ]))
@@ -255,8 +255,8 @@
 (defn- write-binary
   "Helper Function for Binary Write"
   [folder fn key input config]
-  (let [f        (io/file (str folder "/Data/" fn))
-        new-file (io/file (str folder "/Data/" fn ".new"))
+  (let [f        (io/file (str folder "/data/" fn))
+        new-file (io/file (str folder "/data/" fn ".new"))
         fos      (FileOutputStream. new-file)
         dos      (DataOutputStream. fos)
         fd       (.getFD fos)]
@@ -283,7 +283,7 @@
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [fn  (uuid key)
-          f   (io/file (str folder "/Data/" fn))
+          f   (io/file (str folder "/data/" fn))
           res (chan)]
       (put! res (.exists f))
       (close! res)
@@ -292,7 +292,7 @@
   (-get-in [this key-vec]
     (let [[fkey & rkey] key-vec
           fn            (uuid fkey)
-          f             (io/file (str folder "/Data/" fn))
+          f             (io/file (str folder "/data/" fn))
           res-ch        (chan)]
       (read-memory-entry f res-ch folder fn fkey rkey serializer read-handlers)
       res-ch))
@@ -300,8 +300,8 @@
     (async/thread
       (try
         (let [file-name   (uuid (first key-vec))
-              data-folder (str folder "/Data/")
-              key-folder  (str folder "/Key/")]
+              data-folder (str folder "/data/")
+              key-folder  (str folder "/meta/")]
           (write-edn-key serializer write-handlers read-handlers key-folder file-name {:key (first key-vec) :format :edn} config)
           (write-edn serializer write-handlers read-handlers data-folder key-vec file-name up-fn config))
         (catch Exception e
@@ -312,22 +312,22 @@
   (-dissoc [this key]
     (async/thread
       (let [fn          (uuid key)
-            key-folder  (str folder "/Key")
-            data-folder (str folder "/Data")]
+            key-folder  (str folder "/meta")
+            data-folder (str folder "/data")]
           (delete-entry fn key-folder config)
           (delete-entry fn data-folder config))))
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
     (let [fn     (str (uuid key))
-          f      (io/file (str folder "/Data/" fn))
+          f      (io/file (str folder "/data/" fn))
           res-ch (chan)]
       (binary-read f res-ch folder fn key locked-cb)
       res-ch))
 
   (-bassoc [this key input]
     (let [file-name    (uuid key)
-          key-folder   (str folder "/Key/")]
+          key-folder   (str folder "/meta/")]
       (async/thread
         (do (write-edn-key serializer write-handlers read-handlers key-folder file-name {:key key :format :binary} config)
             (write-binary folder (str file-name) key input config))))))
@@ -389,8 +389,8 @@
   (let [_          (check-and-create-folder path)
         old-format? (not (empty? (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" %)
                                                       (seq (.list (io/file path))))))
-        key-path   (str path "/Key")
-        data-path  (str path "/Data")
+        key-path   (str path "/meta")
+        data-path  (str path "/data")
         _          (check-and-create-folder key-path)
         _          (check-and-create-folder data-path)
         store (map->FileSystemStore {:folder         path
@@ -414,7 +414,7 @@
 
   (<!! (-update-in store [":123"] inc))
 
-  (<!! (-get-in store [["51"]]))
+  (<!! (-get-in store [":123"]))
 
   (<!! (-dissoc store ":123"))
 
