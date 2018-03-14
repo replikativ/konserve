@@ -50,7 +50,7 @@
       (is (= (<!! (get-in store [:foo]))
              :bar))
       (is (= (<!! (list-keys store))
-             #{[:foo]}))
+             #{{:key :foo, :format :edn} {:key :binbar, :format :binary}}))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
@@ -61,7 +61,7 @@
         (is (= @binbar (range 10))))
 
       (is (= (<!! (list-keys store))
-             #{})))))
+             #{{:key :binbar, :format :binary}})))))
 
 
 
