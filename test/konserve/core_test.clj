@@ -42,8 +42,8 @@
 (deftest filestore-test
   (testing "Test the file store functionality."
     (let [folder "/tmp/konserve-fs-test"
-          _ (delete-store folder)
-          store (<!! (new-fs-store folder))]
+          _      (delete-store folder)
+          store  (<!! (new-fs-store folder))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] :bar))
