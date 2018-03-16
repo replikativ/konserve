@@ -74,8 +74,6 @@
                  (async/into #{}))]
     fns))
 
-
-
 ;; Helper Function for FileSystemStore
 (defn- read-key
   "help function for -update-in"
@@ -130,7 +128,6 @@
         (finally
           (.close dos))))))
 
-
 (defn- write-edn-key
   "help function for -update-in"
   [serializer write-handlers read-handlers folder fn {:keys [key] :as key-meta} config]
@@ -160,7 +157,7 @@
       (finally
         (.close dos)))))
 
-(defn- read-memory-entry
+(defn- read-edn
   "Helper Function for -get-in"
   [f res-ch folder fn fkey rkey serializer read-handlers]
   (if-not (.exists f)
@@ -210,7 +207,9 @@
       (sync-folder folder))
     nil))
 
-(defn- binary-read [f res-ch folder fn key locked-cb]
+(defn- read-binary
+  "Helper function for -bget"
+  [f res-ch folder fn key locked-cb]
   (if-not (.exists f)
     (close! res-ch)
     (try
@@ -252,6 +251,47 @@
                                :key       key
                                :exception e}))))))
 
+
+(defn- read-binary-old [f res-ch folder fn key locked-cb]
+    (try
+          (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                                           (str folder "/B_" fn)
+                                                           (into-array String []))
+                                                 (into-array StandardOpenOption
+                                                             [StandardOpenOption/READ]))
+                bb (ByteBuffer/allocate (.size ac))]
+            (.read ac
+                   bb
+                   0
+                   nil
+                   (proxy [CompletionHandler] []
+                     (completed [res att]
+                       (let [bais (ByteArrayInputStream. (.array bb))]
+                         (try
+                           (locked-cb {:input-stream bais
+                                       :size (.length f)
+                                       :file f})
+                           (catch Exception e
+                             (ex-info "Could not read key."
+                                      {:type :read-error
+                                       :key key
+                                       :exception e}))
+                           (finally
+                             (close! res-ch)
+                             (.close ac)))))
+                     (failed [t att]
+                       (put! res-ch (ex-info "Could not read key."
+                                             {:type :read-error
+                                              :key key
+                                              :exception t}))
+                       (close! res-ch)
+                       (.close ac)))))
+          (catch Exception e
+            (put! res-ch (ex-info "Could not read key."
+                               {:type :read-error
+                                :key key
+                                :exception e})))))
+
 (defn- write-binary
   "Helper Function for Binary Write"
   [folder fn key input config]
@@ -279,7 +319,8 @@
       (finally
         (.close fos)))))
 
-(defrecord FileSystemStore [folder serializer read-handlers write-handlers locks config]
+(defrecord FileSystemStore [folder serializer read-handlers write-handlers locks config
+                            stale-binaries?]
   PEDNAsyncKeyValueStore
   (-exists? [this key]
     (let [fn  (uuid key)
@@ -294,7 +335,7 @@
           fn            (uuid fkey)
           f             (io/file (str folder "/data/" fn))
           res-ch        (chan)]
-      (read-memory-entry f res-ch folder fn fkey rkey serializer read-handlers)
+      (read-edn f res-ch folder fn fkey rkey serializer read-handlers)
       res-ch))
   (-update-in [this key-vec up-fn]
     (async/thread
@@ -322,8 +363,13 @@
     (let [fn     (str (uuid key))
           f      (io/file (str folder "/data/" fn))
           res-ch (chan)]
-      (binary-read f res-ch folder fn key locked-cb)
-      res-ch))
+      ;; migrate old schema
+      (when (and stale-binaries? (.exists (io/file (str folder "/B_" fn))))
+        (read-binary-old f res-ch folder fn key #(-bassoc this key (:input-stream %)))
+        (.delete (io/file (str folder "/B_" fn)))
+        (when (:fsync config)
+          (sync-folder folder)))
+      (go (read-binary f res-ch folder fn key locked-cb))))
 
   (-bassoc [this key input]
     (let [file-name    (uuid key)
@@ -353,7 +399,6 @@
   (let [fns (->> (io/file folder)
                  .list
                  seq
-                 ((fn [e] (prn "foo: " e) e))
                  (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
                                       %))
                  (map (fn [fn]
@@ -379,36 +424,73 @@
 
 (defn new-fs-store
   "Filestore contains a Key and a Data Folder"
-  [path  & {:keys [serializer read-handlers write-handlers config automatic-schema-update]
+  [path  & {:keys [serializer read-handlers write-handlers config]
             :or   {serializer     (ser/fressian-serializer)
                    read-handlers  (atom {})
                    write-handlers (atom {})
-                   config         {:fsync true}
-                   automatic-schema-update false}}]
-  (println "auto: " automatic-schema-update)
-  (let [_          (check-and-create-folder path)
-        old-format? (not (empty? (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" %)
-                                                      (seq (.list (io/file path))))))
-        key-path   (str path "/meta")
-        data-path  (str path "/data")
-        _          (check-and-create-folder key-path)
-        _          (check-and-create-folder data-path)
-        store (map->FileSystemStore {:folder         path
-                                     :serializer     serializer
-                                     :read-handlers  read-handlers
-                                     :write-handlers write-handlers
-                                     :locks          (atom {})})]
-    (if (and old-format? (true? automatic-schema-update))
+                   config         {:fsync true}}}]
+  (let [_               (check-and-create-folder path)
+        key-path        (str path "/meta")
+        data-path       (str path "/data")
+        _               (check-and-create-folder key-path)
+        _               (check-and-create-folder data-path)
+        stale-binaries? (->> (io/file path)
+                             .list
+                             seq
+                             (filter #(re-matches
+                                       #"B\\_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                                       %))
+                             empty?)
+        stale-edn?      (->> (io/file path)
+                             .list
+                             seq
+                             (filter #(re-matches
+                                       #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                                       %))
+                             empty?)
+        store           (map->FileSystemStore {:folder          path
+                                               :serializer      serializer
+                                               :read-handlers   read-handlers
+                                               :write-handlers  write-handlers
+                                               :stale-binaries? stale-binaries?
+                                               :locks           (atom {})
+                                               :config          config})]
+    (if-not stale-edn?
       (do
         (go
-          (println "Updating to new store schema.")
           (<! (filestore-schema-update store))
           store))
       (go store))))
 
-(comment
 
-  (time (def store (<!! (new-fs-store "/tmp/old-CCCP" :automatic-schema-update true))))
+
+
+(comment
+ 
+  (read-string "{:update-store {:version-12-to-14 true}}")
+
+  (time (def store (<!! (new-fs-store "/tmp/konserve-fs-migration-test"))))
+
+  store
+
+
+
+
+  store
+  (->> (io/file "/tmp/konserve-fs-migration-test")
+       .list
+       seq
+       (filter #(re-matches
+                 #"B\\_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                 %))
+       empty?)
+
+
+  (spit "/tmp/old-CCCP/config" "update-store :version [8.11 8.12]")
+
+  (keyword (slurp "/tmp/old-CCCP/config"))
+
+  (slurp "/tmp/old-CCCP/config")
 
   (<!! (-assoc-in store [":123"] 43))
 
