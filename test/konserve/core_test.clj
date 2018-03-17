@@ -42,15 +42,15 @@
 (deftest filestore-test
   (testing "Test the file store functionality."
     (let [folder "/tmp/konserve-fs-test"
-          _ (delete-store folder)
-          store (<!! (new-fs-store folder))]
+          _      (delete-store folder)
+          store  (<!! (new-fs-store folder))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] :bar))
       (is (= (<!! (get-in store [:foo]))
              :bar))
       (is (= (<!! (list-keys store))
-             #{[:foo]}))
+             #{{:key :foo, :format :edn} {:key :binbar, :format :binary}}))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
@@ -61,7 +61,7 @@
         (is (= @binbar (range 10))))
 
       (is (= (<!! (list-keys store))
-             #{})))))
+             #{{:key :binbar, :format :binary}})))))
 
 
 
