@@ -319,34 +319,6 @@
       (finally
         (.close fos)))))
 
-(defn- write-binary-old
-  "Helper Function for Binary Write"
-  [folder fn key input config]
-  (let [f        (io/file (str folder "/data/" fn))
-        new-file (io/file (str folder "/data/" fn ".new"))
-        fos      (FileOutputStream. new-file)
-        dos      (DataOutputStream. fos)
-        fd       (.getFD fos)]
-    (try
-      (io/copy input dos)
-      (.flush dos)
-      (when (:fsync config)
-        (.sync fd))
-      (.close fos) ;; required for windows
-      (Files/move (.toPath new-file) (.toPath f)
-                  (into-array [StandardCopyOption/ATOMIC_MOVE]))
-      (when (:fsync config)
-        (sync-folder folder))
-      (catch Exception e
-        (.delete new-file)
-        (ex-info "Could not write key."
-                 {:type      :write-error
-                  :key       key
-                  :exception e}))
-      (finally
-        (.close fos)))))
-
-
 (defrecord FileSystemStore [folder serializer read-handlers write-handlers locks config
                             stale-binaries?]
   PEDNAsyncKeyValueStore
