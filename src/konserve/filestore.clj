@@ -251,46 +251,46 @@
                                :key       key
                                :exception e}))))))
 
-
-(defn- read-binary-old [f res-ch folder fn key locked-cb]
+(defn- read-binary-old [f folder fn key copy-fn]
+  (let [res-ch-old (chan)]
     (try
-          (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
-                                                           (str folder "/B_" fn)
-                                                           (into-array String []))
-                                                 (into-array StandardOpenOption
-                                                             [StandardOpenOption/READ]))
-                bb (ByteBuffer/allocate (.size ac))]
-            (.read ac
-                   bb
-                   0
-                   nil
-                   (proxy [CompletionHandler] []
-                     (completed [res att]
-                       (let [bais (ByteArrayInputStream. (.array bb))]
-                         (try
-                           (locked-cb {:input-stream bais
-                                       :size (.length f)
-                                       :file f})
-                           (catch Exception e
-                             (ex-info "Could not read key."
-                                      {:type :read-error
-                                       :key key
-                                       :exception e}))
-                           (finally
-                             (close! res-ch)
-                             (.close ac)))))
-                     (failed [t att]
-                       (put! res-ch (ex-info "Could not read key."
-                                             {:type :read-error
-                                              :key key
-                                              :exception t}))
-                       (close! res-ch)
-                       (.close ac)))))
-          (catch Exception e
-            (put! res-ch (ex-info "Could not read key."
-                               {:type :read-error
-                                :key key
-                                :exception e})))))
+      (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
+                                                       (str folder "/B_" fn)
+                                                       (into-array String []))
+                                             (into-array StandardOpenOption
+                                                         [StandardOpenOption/READ]))
+            bb (ByteBuffer/allocate (.size ac))]
+        (.read ac
+               bb
+               0
+               nil
+               (proxy [CompletionHandler] []
+                 (completed [res att]
+                   (let [bais (ByteArrayInputStream. (.array bb))]
+                     (try
+                       (copy-fn {:input-stream bais
+                                 :size (.length f)
+                                 :file f})
+                       (catch Exception e
+                         (ex-info "Could not read key."
+                                  {:type :read-error
+                                   :key key
+                                   :exception e}))
+                       (finally
+                         (close! res-ch-old)
+                         (.close ac)))))
+                 (failed [t att]
+                   (put! res-ch-old (ex-info "Could not read key."
+                                         {:type :read-error
+                                          :key key
+                                          :exception t}))
+                   (close! res-ch-old)
+                   (.close ac)))))
+      (catch Exception e
+        (put! res-ch-old (ex-info "Could not read key."
+                              {:type :read-error
+                               :key key
+                               :exception e}))))))
 
 (defn- write-binary
   "Helper Function for Binary Write"
@@ -318,6 +318,34 @@
                   :exception e}))
       (finally
         (.close fos)))))
+
+(defn- write-binary-old
+  "Helper Function for Binary Write"
+  [folder fn key input config]
+  (let [f        (io/file (str folder "/data/" fn))
+        new-file (io/file (str folder "/data/" fn ".new"))
+        fos      (FileOutputStream. new-file)
+        dos      (DataOutputStream. fos)
+        fd       (.getFD fos)]
+    (try
+      (io/copy input dos)
+      (.flush dos)
+      (when (:fsync config)
+        (.sync fd))
+      (.close fos) ;; required for windows
+      (Files/move (.toPath new-file) (.toPath f)
+                  (into-array [StandardCopyOption/ATOMIC_MOVE]))
+      (when (:fsync config)
+        (sync-folder folder))
+      (catch Exception e
+        (.delete new-file)
+        (ex-info "Could not write key."
+                 {:type      :write-error
+                  :key       key
+                  :exception e}))
+      (finally
+        (.close fos)))))
+
 
 (defrecord FileSystemStore [folder serializer read-handlers write-handlers locks config
                             stale-binaries?]
@@ -360,20 +388,22 @@
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
-    (let [fn     (str (uuid key))
-          f      (io/file (str folder "/data/" fn))
-          res-ch (chan)]
+    (let [fn (str (uuid key))
+          f         (io/file (str folder "/data/" fn))
+          res-ch    (chan)]
       ;; migrate old schema
-      (when (and stale-binaries? (.exists (io/file (str folder "/B_" fn))))
-        (read-binary-old f res-ch folder fn key #(-bassoc this key (:input-stream %)))
-        (.delete (io/file (str folder "/B_" fn)))
-        (when (:fsync config)
-          (sync-folder folder)))
-      (go (read-binary f res-ch folder fn key locked-cb))))
+      (if (and stale-binaries? (.exists (io/file (str folder "/B_" fn))))
+        (async/thread
+          (do
+            (read-binary-old (io/file (str folder "/B_" fn)) folder fn key #(write-binary folder fn key (:input-stream %) config))
+            (write-edn-key serializer write-handlers read-handlers (str folder "/meta/") fn {:key key :format :binary} config)
+            (delete-entry (str "/B_" fn) folder config)
+            (read-binary f res-ch folder fn key locked-cb)))
+        (go (read-binary f res-ch folder fn key locked-cb)))))
 
   (-bassoc [this key input]
-    (let [file-name    (uuid key)
-          key-folder   (str folder "/meta/")]
+    (let [file-name  (uuid key)
+          key-folder (str folder "/meta/")]
       (async/thread
         (do (write-edn-key serializer write-handlers read-handlers key-folder file-name {:key key :format :binary} config)
             (write-binary folder (str file-name) key input config))))))
