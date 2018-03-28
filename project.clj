@@ -13,7 +13,8 @@
                  [clj-ipfs-api "1.2.3"]
 
                  [io.replikativ/hasch "0.3.4"]
-                 [org.clojure/core.cache "0.7.1"]]
+                 [org.clojure/core.cache "0.7.1"]
+                 [org.clojars.mmb90/cljs-cache "0.1.4"]]
 
   :plugins [[lein-cljsbuild "1.1.4"]]
 

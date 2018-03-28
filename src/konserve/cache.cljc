@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
   (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc]]
-            [clojure.core.cache :as cache]
+            #?(:clj [clojure.core.cache :as cache]
+              :cljs [cljs.cache :as cache])
             [konserve.core :refer [get-lock]]
             #?(:clj [konserve.core :refer [go-locked]])
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
