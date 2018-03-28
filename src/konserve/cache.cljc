@@ -26,7 +26,7 @@
   [store key]
   (go-locked
    store key
-   (or (cache/has? (:cache store) key)
+   (or (cache/has? @(:cache store) key)
        (<! (-exists? store key)))))
 
 (defn get-in
