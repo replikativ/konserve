@@ -10,10 +10,6 @@
             [clojure.core.async :as async])
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream]))
 
-(defn delete-test-store []
-  (doseq [path ["/meta" "/data" ""]]
-    (delete-store (str "/tmp/konserve-fs-migration-test" path))))
-
 (deftest old-filestore
   (testing "edn migration"
     (let [store                          (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test"))
@@ -44,7 +40,7 @@
                                                                            (range 10)))))))
           list-old-store-after-migration (<!! (old-store/list-keys store))
           list-new-store-after-migration (<!! (list-keys new-store))
-          _                              (delete-test-store)]
+          _                              (delete-store "/tmp/konserve-fs-migration-test")]
       (are [x y] (= x y)
         list-old-store                 #{}
         list-new-store                 #{{:key 1, :format :edn} {:key 3, :format :edn}

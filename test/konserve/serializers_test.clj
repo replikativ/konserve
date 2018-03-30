@@ -24,9 +24,6 @@
                                         (.writeTag    writer custom-tag 1)
                                         (.writeObject writer (f/unparse (f/formatters :date-time) instant))))}})
 
-(defn delete-test-store []
-  (doseq [path ["/meta" "/data" ""]]
-    (delete-store (str "/tmp/konserve-fs-migration-test" path))))
 
 
 (deftest serializers-test
@@ -45,4 +42,5 @@
       (is (= (<!! (get-in store [:foo]))
              nil))
       (is (= (<!! (list-keys store))
-             #{})))))
+             #{}))
+      (delete-store folder))))

@@ -7,10 +7,6 @@
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
             [clojure.java.io :as io]))
 
-(defn delete-test-store [folder]
-  (doseq [path ["/meta" "/data" ""]]
-    (delete-store (str folder path))))
-
 (deftest memory-store-test
   (testing "Test the core API."
     (let [store (<!! (new-mem-store))]
@@ -44,7 +40,7 @@
 (deftest filestore-test
   (testing "Test the file store functionality."
     (let [folder "/tmp/konserve-fs-test"
-          _      (delete-test-store folder)
+          _      (delete-store folder)
           store  (<!! (new-fs-store folder))
           _      (<!! (bassoc store :binbar (byte-array (range 10))))
           binbar (atom nil)
@@ -62,4 +58,5 @@
              nil))
       (is (= (<!! (list-keys store))
              #{{:key :binbar, :format :binary}}))
-      (is (= @binbar (range 10))))))
+      (is (= @binbar (range 10)))
+      (delete-store folder))))
