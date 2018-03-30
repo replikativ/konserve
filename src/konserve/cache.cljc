@@ -1,4 +1,6 @@
 (ns konserve.cache
+  "Provides core functions, but with additional caching. Still subject to internal
+  changes."
   (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
   (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc]]
@@ -44,9 +46,6 @@
        (let [v (<! (-get-in store [fkey]))]
          (swap! cache cache/miss fkey v)
          (clojure.core/get-in v rkey))))))
-
-
-
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing

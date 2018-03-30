@@ -373,7 +373,8 @@
             (write-edn-key serializer write-handlers read-handlers (str folder "/meta/") fn {:key key :format :binary} config)
             (delete-entry (str "/B_" fn) folder config)
             (read-binary f res-ch folder fn key locked-cb)))
-        (read-binary f res-ch folder fn key locked-cb))))
+        (read-binary f res-ch folder fn key locked-cb))
+      res-ch))
 
   (-bassoc [this key input]
     (let [file-name  (uuid key)

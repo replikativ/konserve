@@ -1,4 +1,5 @@
 (ns konserve.cache-test
+  (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists?])
   (:require [konserve.cache :refer :all]
             [konserve.filestore :as fstore]
             [clojure.core.async :refer [<!!]]
