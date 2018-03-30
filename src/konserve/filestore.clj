@@ -36,14 +36,16 @@
 (defn delete-store
   "Permanently deletes the folder of the store with all files."
   [folder]
-  (let [f (io/file folder)]
-    (doseq [c (.list f)]
-      (.delete (io/file (str folder "/" c))))
-    (.delete f)
-    (try
-      (sync-folder folder)
-      (catch Exception e
-        nil))))
+  (let [f (io/file folder)
+        parent-folder (.getParent f)]
+      (doseq [path [(str folder "/meta") (str folder "/data") folder]]
+        (doseq [c (.list (io/file path))]
+          (.delete (io/file (str path "/" c)))))
+      (.delete f)
+      (try
+        (sync-folder parent-folder)
+        (catch Exception e
+          nil))))
 
 (defn list-keys
   "Lists all keys in this binary store. This operation *does not block concurrent operations* and might return an outdated key set. Keys of binary blobs are not tracked atm."
@@ -251,7 +253,7 @@
                                :key       key
                                :exception e}))))))
 
-(defn- read-binary-old [f folder fn key copy-fn]
+(defn- read-binary-old [f folder fn key locked-cb]
   (let [res-ch-old (chan)]
     (try
       (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
@@ -268,7 +270,7 @@
                  (completed [res att]
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
-                       (copy-fn {:input-stream bais
+                       (locked-cb {:input-stream bais
                                  :size (.length f)
                                  :file f})
                        (catch Exception e
@@ -371,7 +373,7 @@
             (write-edn-key serializer write-handlers read-handlers (str folder "/meta/") fn {:key key :format :binary} config)
             (delete-entry (str "/B_" fn) folder config)
             (read-binary f res-ch folder fn key locked-cb)))
-        (go (read-binary f res-ch folder fn key locked-cb)))))
+        (async/thread (read-binary f res-ch folder fn key locked-cb)))))
 
   (-bassoc [this key input]
     (let [file-name  (uuid key)
@@ -475,8 +477,23 @@
 
   store
 
+(delete-store "/tmp/konserve-fs-migration-test")
 
 
+(.getParent (io/file "/tmp/konserve-fs-migration-test"))
+
+(clojure.string/replace-first "/tmp/abc"  "/" (System/getProperty "user.home"))
+
+
+(def xy "/tmp/abc")
+
+xy
+
+(re-matches #"/" "/tmp/abc")
+
+(clojure.string/replace-first "tmp/abc" "/" "")
+
+(clojure.string/index-of "/tmp/abc" "/")
 
   store
   (->> (io/file "/tmp/konserve-fs-migration-test")
