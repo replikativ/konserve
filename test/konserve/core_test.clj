@@ -23,7 +23,6 @@
                                  (is (= (map byte (slurp input-stream))
                                         (range 10)))))))))
 
-
 (deftest append-store-test
   (testing "Test the append store functionality."
     (let [store (<!! (new-mem-store))]
@@ -38,12 +37,15 @@
                               []))
              [{:bar 42} {:bar 43}])))))
 
-
 (deftest filestore-test
   (testing "Test the file store functionality."
     (let [folder "/tmp/konserve-fs-test"
           _      (delete-store folder)
-          store  (<!! (new-fs-store folder))]
+          store  (<!! (new-fs-store folder))
+          _      (<!! (bassoc store :binbar (byte-array (range 10))))
+          binbar (atom nil)
+          _ (<!! (bget store :binbar (fn [{:keys [input-stream]}]
+                                       (reset! binbar (map byte (slurp input-stream))))))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] :bar))
@@ -54,14 +56,7 @@
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
-      (<!! (bassoc store :binbar (byte-array (range 10))))
-      (let [binbar (atom nil)]
-        (<!! (bget store :binbar (fn [{:keys [input-stream]}]
-                                   (reset! binbar (map byte (slurp input-stream))))))
-        (is (= @binbar (range 10))))
-
       (is (= (<!! (list-keys store))
-             #{{:key :binbar, :format :binary}})))))
-
-
-
+             #{{:key :binbar, :format :binary}}))
+      (is (= @binbar (range 10)))
+      (delete-store folder))))

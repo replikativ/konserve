@@ -24,20 +24,23 @@
                                         (.writeTag    writer custom-tag 1)
                                         (.writeObject writer (f/unparse (f/formatters :date-time) instant))))}})
 
+
+
 (deftest serializers-test
   (testing "Test the custom fressian serializers functionality."
-    (let [folder "/tmp/konserve-fs-test"
-          _ (delete-store folder)
-          store (<!! (new-fs-store folder :serializer (fressian-serializer custom-read-handler custom-write-handler)))]
+    (let [folder "/tmp/konserve-fs-serializers-test"
+          _      (delete-store folder)
+          store  (<!! (new-fs-store folder :serializer (fressian-serializer custom-read-handler custom-write-handler)))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] (t/now)))
       (is (= (type (<!! (get-in store [:foo])))
              org.joda.time.DateTime))
       (is (= (<!! (list-keys store))
-             #{[:foo]}))
+             #{{:key :foo, :format :edn}}))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
       (is (= (<!! (list-keys store))
-             #{})))))
+             #{}))
+      (delete-store folder))))

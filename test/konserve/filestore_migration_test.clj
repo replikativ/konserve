@@ -2,12 +2,12 @@
   (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists? bget bassoc])
   (:require [clojure.test :refer :all]
             [konserve.old-filestore :as old-store]
-            [superv.async :refer [<?? go-try S go-loop-try <? >? put?]]
             [clojure.core.async :refer [<!! >!! chan]]
             [konserve.core :refer :all]
             [konserve.memory :refer [new-mem-store]]
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [clojure.core.async :as async])
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream]))
 
 (deftest old-filestore
@@ -40,7 +40,7 @@
                                                                            (range 10)))))))
           list-old-store-after-migration (<!! (old-store/list-keys store))
           list-new-store-after-migration (<!! (list-keys new-store))
-          _                              (old-store/delete-store "/tmp/konserve-fs-migration-test")]
+          _                              (delete-store "/tmp/konserve-fs-migration-test")]
       (are [x y] (= x y)
         list-old-store                 #{}
         list-new-store                 #{{:key 1, :format :edn} {:key 3, :format :edn}
@@ -55,3 +55,26 @@
                                          {:key 5, :format :binary} {:key 8, :format :binary}
                                          {:key 4, :format :binary} {:key 6, :format :binary}}))))
 
+(comment
+  
+  (do
+    (delete-test-store)
+
+    (def old-store (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test")))
+
+    (<!! (bassoc old-store :test (byte-array (range 10))))
+
+    (<!! (bget old-store :test (fn [{:keys [input-stream]}]
+                                 (println (map byte (slurp input-stream))))))
+
+    (def store (<!! (new-fs-store "/tmp/konserve-fs-migration-test")))
+
+    (time (<!! (bget store :test (fn [{:keys [input-stream]}]
+                                   (println (slurp input-stream))))))
+
+    (<!! (bget store :test (fn [{:keys [input-stream]}]
+                                   (println (slurp input-stream)))))
+
+      )
+
+  )
