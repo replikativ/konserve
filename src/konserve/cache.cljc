@@ -41,9 +41,11 @@
          [fkey & rkey] key-vec]
      (if-let [v (cache/lookup @cache fkey)]
        (do
+         #_(prn "hitting cache")
          (swap! cache cache/hit fkey)
          (clojure.core/get-in v rkey))
        (let [v (<! (-get-in store [fkey]))]
+         #_(prn "getting fkey" fkey)
          (swap! cache cache/miss fkey v)
          (clojure.core/get-in v rkey))))))
 

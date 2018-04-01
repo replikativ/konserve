@@ -59,4 +59,8 @@
       (is (= (<!! (list-keys store))
              #{{:key :binbar, :format :binary}}))
       (is (= @binbar (range 10)))
-      (delete-store folder))))
+      (delete-store folder)
+      (let [store (<!! (new-fs-store folder))]
+        (is (= (<!! (list-keys store))
+               #{}))
+        ))))

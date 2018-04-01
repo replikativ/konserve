@@ -198,12 +198,14 @@ konserve.js.update_in(store,
   http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
-- implement generic cached store(s) to wrap durable ones
-- evaluate: store small files of filestore in subdirectories to avoid
-  file system rebalances (?)
 - more backends
 
 ## Changelog
+
+### 0.5-beta1
+
+- improved filestore with separate metadata storage
+- experimental clojure.core.cache support
 
 ### 0.4.12
 - fix exists for binary
