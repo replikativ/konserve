@@ -67,7 +67,9 @@
   [store key-vec]
   (go-locked
    store (first key-vec)
-   (<! (-get-in store key-vec))))
+   (clojure.core/get-in
+    (<! (-get-in store [(first key-vec)]))
+    (rest key-vec))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
