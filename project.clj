@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve "0.5-beta1"
+(defproject io.replikativ/konserve "0.5.0-beta3"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
@@ -9,14 +9,9 @@
                  [org.clojure/core.async "0.4.474"]
 
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
-                 [io.replikativ/incognito "0.2.1"]
-                 #_[clj-ipfs-api "1.2.3"]
 
-                 [io.replikativ/hasch "0.3.4"]
-                 #_[org.clojure/core.cache "0.7.1"]
-                 [org.clojars.mmb90/cljs-cache "0.1.4"]
-
-                 [org.clojure/core.typed "0.4.2"]]
+                 [io.replikativ/hasch "0.3.5"]
+                 [org.clojars.mmb90/cljs-cache "0.1.4"]]
 
   :plugins [[lein-cljsbuild "1.1.4"]]
 
