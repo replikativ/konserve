@@ -1,7 +1,7 @@
 (ns konserve.core-test
   (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
-            [clojure.core.async :refer [<!!]]
+            [clojure.core.async :refer [<!! go]]
             [konserve.core :refer :all]
             [konserve.memory :refer [new-mem-store]]
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
@@ -23,8 +23,9 @@
              nil))
       (<!! (bassoc store :binbar (byte-array (range 10))))
       (<!! (bget store :binbar (fn [{:keys [input-stream]}]
-                                 (is (= (map byte (slurp input-stream))
-                                        (range 10)))))))))
+                                 (go
+                                   (is (= (map byte (slurp input-stream))
+                                          (range 10))))))))))
 
 (deftest append-store-test
   (testing "Test the append store functionality."
@@ -47,8 +48,10 @@
           store  (<!! (new-fs-store folder))
           _      (<!! (bassoc store :binbar (byte-array (range 10))))
           binbar (atom nil)
-          _ (<!! (bget store :binbar (fn [{:keys [input-stream]}]
-                                       (reset! binbar (map byte (slurp input-stream))))))]
+          _ (<!! (bget store :binbar
+                       (fn [{:keys [input-stream]}]
+                         (go
+                           (reset! binbar (map byte (slurp input-stream)))))))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] :bar))

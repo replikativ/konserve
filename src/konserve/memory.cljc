@@ -17,7 +17,7 @@
 
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
-    (go (locked-cb (get @state key))))
+    (locked-cb (get @state key)))
   (-bassoc [this key input]
     (go (swap! state assoc key {:input-stream input
                                 :size :unknown})

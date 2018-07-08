@@ -155,7 +155,15 @@
   "Calls locked-cb with a platform specific binary representation inside
   the lock, e.g. wrapped InputStream on the JVM and Blob in
   JavaScript. You need to properly close/dispose the object when you
-  are done!"
+  are done!
+
+  You have to do all work in a async thread of locked-cb, e.g.
+
+  (fn [{is :input-stream}]
+    (async/thread
+      (let [tmp-file (io/file \"/tmp/my-private-copy\")]
+        (io/copy is tmp-file))))
+  "
   [store key locked-cb]
   (go-locked
    store key

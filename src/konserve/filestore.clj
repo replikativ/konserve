@@ -230,9 +230,10 @@
                  (completed [res att]
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
-                       (locked-cb {:input-stream bais
-                                   :size         (.length f)
-                                   :file         f})
+                       (go
+                         (>! res-ch (<! (locked-cb {:input-stream bais
+                                                    :size         (.length f)
+                                                    :file         f}))))
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type      :read-error
@@ -272,8 +273,8 @@
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
                        (locked-cb {:input-stream bais
-                                 :size (.length f)
-                                 :file f})
+                                   :size (.length f)
+                                   :file f})
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type :read-error
