@@ -94,8 +94,8 @@ From a Clojure REPL run:
               
               
 ;; Note: We use the thread blocking operations <!! here only to synchronize
-;; with the REPL. <!! does not compose well with async contexts, so prefer
-;; composing your application with go and <! instead.
+;; with the REPL. <!! is blocking IO and does not compose well with async 
+;; contexts, so prefer composing your application with go and <! instead. 
 
 (def store (<!! (new-fs-store "/tmp/store")))
 
@@ -113,7 +113,7 @@ From a Clojure REPL run:
 
 (let [ba (byte-array (* 10 1024 1024) (byte 42))]
   (time (<!! (k/bassoc store "banana" ba))))
-(<!! (k/bget store "banana" :input-stream))
+(<!! (k/bget store "banana" (fn [{is :input-stream}] (go (your-read-does-all-work-here is)))))
 ~~~
 
 

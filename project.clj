@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve "0.5.0-beta3"
+(defproject io.replikativ/konserve "0.5.0-beta4"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
