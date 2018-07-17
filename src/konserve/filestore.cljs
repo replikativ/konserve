@@ -1,4 +1,4 @@
-(ns konserve.nodejs
+(ns konserve.filestore
   (:require [cljs.nodejs :as node]
             [konserve.core :as k]
             [hasch.core :refer [uuid]]
@@ -8,11 +8,14 @@
                                         PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize]]
-            [cljs-node-io.core :as io :refer [slurp spit]]
-            [cljs.core.async :as async :refer (take! <! >! put! close! chan poll!)])
+            [cljs.core.async :as async :refer (take! <! >! put! take! close! chan poll!)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
+;; TODO serializer
+;; TODO spec konserve.core
 (defonce fs (node/require "fs"))
+
+(defonce fs (node/require "buffer"))
 
 (defonce stream (node/require "stream"))
 
@@ -55,7 +58,7 @@
         fd        (.openSync fs new-file "w+")
         _         (.closeSync fs fd)
         ws        (.createWriteStream fs temp-file)
-        res-ch (chan)]
+        res-ch    (chan)]
     (.on ws "close" #(try (.renameSync fs temp-file new-file)
                           (catch js/Object err
                             (put! res-ch (ex-info "Could not write edn key."
@@ -81,12 +84,19 @@
         new-file  (str folder "/data/" key)
         res-ch    (chan)]
     (if (.existsSync fs new-file)
-      (let [rs (.createReadStream fs new-file)]
+      (let [rs          (.createReadStream fs new-file)
+            data-buffer (atom {:buffer nil})]
         (.on rs "data" (fn [chunk]
-                         (let [old (fress/read (. chunk -buffer))
-                               ws  (.createWriteStream fs temp-file)
-                               value     (up-fn old)]
-                           (.on ws "finish" #(put! res-ch [old value]))
+                         (swap! data-buffer update :buffer (fn [old] (if (nil? old)
+                                                                       (. chunk -buffer)
+                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+        (.on rs "close" #(let [ws    (.createWriteStream fs temp-file)
+                               value (up-fn data-buffer)
+                               old   (fress/read (:buffer @data-buffer))]
+                           (.on ws "finish" (fn [_]
+                                              (.renameSync fs temp-file new-file)
+                                              (put! res-ch [old value])
+                                              (close! res-ch)))
                            (.on ws "error"
                                 (fn [err]
                                   (put! res-ch (ex-info "Could not write edn."
@@ -95,21 +105,21 @@
                                                          :exception err}))
                                   (close! res-ch)))
                            (.write ws (js/Uint8Array. (fress/write value)))
-                           (.close ws))))
-        (.on rs "close" (fn [] (.renameSync fs temp-file new-file) (close! res-ch)))
+                           (.close ws)))
         (.on rs "error" (fn [err]
                           (put! res-ch (ex-info "Could not write edn."
                                                 {:type      :write-edn-error
                                                  :key       key
                                                  :exception err}))
                           (close! res-ch))))
-      (let [fd        (.openSync fs new-file "w+")
-            _         (.closeSync fs fd)
-            ws        (.createWriteStream fs temp-file)
-            value     (up-fn nil)]
-        (.on ws "finish" #(put! res-ch [nil value]))
+      (let [fd    (.openSync fs new-file "w+")
+            _     (.closeSync fs fd)
+            ws    (.createWriteStream fs temp-file)
+            value (up-fn nil)]
         (.on ws "close" #(try
                            (.renameSync fs temp-file new-file)
+                           (put! res-ch [nil value])
+                           (close! res-ch)
                            (catch js/Object err
                              (put! res-ch (ex-info "Could not write edn."
                                                    {:type      :write-edn-error
@@ -123,9 +133,9 @@
 (defn write-binary [folder key input]
   (let [res-ch (chan)]
     (try
-      (let [fn        (uuid key)
-            temp-file (str folder "/data/" fn ".new")
-            new-file  (str folder "/data/" fn)
+      (let [file-name (uuid key)
+            temp-file (str folder "/data/" file-name ".new")
+            new-file  (str folder "/data/" file-name)
             ws        (.createWriteStream fs temp-file)
             input     (if (js/Buffer.isBuffer input)
                         (let [stream (stream.PassThrough)
@@ -134,7 +144,6 @@
                         (if (instance? stream input)
                           input
                           (throw (js/Error. "Invalid input type"))))]
-        (.on ws "finish" #(println "tempfile writing done"))
         (.on ws "close" #(try
                            (.renameSync fs temp-file new-file)
                            (catch js/Object err
@@ -146,6 +155,11 @@
                              (.unpipe input ws)
                              (put! res-ch true)
                              (close! res-ch))))
+        (.on ws "error" (fn [err] (put! res-ch (ex-info "Could not write binary."
+                                                        {:type      :write-binary-error
+                                                         :key       key
+                                                         :exception err}))
+                          (close! res-ch)))
         (.pipe input ws))
       (catch js/Object err
         (put! res-ch (ex-info "Could not write binary."
@@ -159,34 +173,44 @@
   (let [file-name (str path "/data/" (uuid key))
         res-ch    (chan)]
     (if (.existsSync fs file-name)
-      (let [rs      (.createReadStream fs file-name)]
-        (.on rs "data" (fn [chunk] (put! res-ch  (fress/read (. chunk -buffer)))))
-        (.on rs "close" #(close! res-ch))
+      (let [rs          (.createReadStream fs file-name)
+            data-buffer (atom {:buffer nil})]
+        (.on rs "data" (fn [chunk]
+                         (swap! data-buffer update :buffer (fn [old] (if (nil? old)
+                                                                       (. chunk -buffer)
+                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+        (.on rs "close" #(let [data (fress/read (:buffer @data-buffer))]
+                          (put! res-ch data)
+                          (close! res-ch)))
         (.on rs "error" (fn [err]
                           (put! res-ch (ex-info "Could not read edn."
                                                 {:type      :read-edn-error
                                                  :key       key
                                                  :exception err}))
                           (close! res-ch))))
-      (do (put! res-ch "File not exist")
-          (close! res-ch)))
+      (close! res-ch))
     res-ch))
 
 (defn read-edn-key [path key]
   (let [file-name (str path "/meta/" key)
         res-ch    (chan)]
     (if (.existsSync fs file-name)
-      (let [rs      (.createReadStream fs file-name)]
-        (.on rs "data" (fn [chunk] (put! res-ch  (fress/read (. chunk -buffer)))))
-        (.on rs "close" #(close! res-ch))
+      (let [rs          (.createReadStream fs file-name)
+            data-buffer (atom {:buffer nil})]
+        (.on rs "data" (fn [chunk]
+                         (swap! data-buffer update :buffer (fn [old] (if (nil? old)
+                                                                       (. chunk -buffer)
+                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+        (.on rs "close" #(let [data  (fress/read (:buffer @data-buffer))]
+                          (put! res-ch data)
+                          (close! res-ch)))
         (.on rs "error" (fn [err]
                           (put! res-ch (ex-info "Could not read edn key."
                                                 {:type      :read-edn-key-error
                                                  :key       key
                                                  :exception err}))
                           (close! res-ch))))
-      (do (put! res-ch "File not exist")
-          (close! res-ch)))
+      (close! res-ch))
     res-ch))
 
 (defn read-binary
@@ -196,23 +220,30 @@
         file-id   (uuid key)
         file-name (str folder "/data/" file-id)]
     (if (.existsSync fs file-name)
-      (let [rs (.createReadStream fs file-name)]
-        (.on rs "close" #(close! res))
+      (let [size (str (aget (.statSync fs file-name) "size") " Bytes")
+            rs   (.createReadStream fs file-name)]
+        (.on rs "close" #(do (put! res true) (close! res)))
         (.on rs "error" (fn [err]
                           (put! res (ex-info "Could not read binary."
-                                                {:type      :read-binary-error
-                                                 :key       key
-                                                 :exception err}))
+                                             {:type      :read-binary-error
+                                              :key       key
+                                              :exception err}))
                           (close! res)))
-        (go
-          (<! (locked-cb {:read-stream rs}))
-          (put! res "File not exist")
-          (close! res))))
+        (go (>! res (<! (locked-cb {:read-stream rs
+                                    :file        file-name
+                                    :size        size})))
+            (close! res)))
+      (close! res))
     res))
 
 (defn list-keys [{:keys [folder]}]
-  (doseq [id (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" %) (js->clj (.readdirSync fs "/tmp/mystore/meta")))]
-    (go (println (<! (read-edn-key folder id))))))
+  (let [filenames
+        (for [filename (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" %) (js->clj (.readdirSync fs (str folder "/meta"))))]
+          filename)]
+    (->> filenames
+         (map #(read-edn-key folder %))
+         async/merge
+         (async/into #{}))))
 
 (defn delete-entry [folder file-name res-ch]
   (let [key-file (str folder "/meta/" file-name)
@@ -228,7 +259,7 @@
                               (fn [err]
                                 (if err
                                   (throw err))))
-                     (put! res-ch "true")
+                     (put! res-ch true)
                      (close! res-ch)))))))
 
 (defrecord FileSystemNodejsStore
@@ -253,9 +284,8 @@
                         res-ch))
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb] (read-binary folder key locked-cb))
-  (-bassoc [this key input] (do (write-edn-key folder {:key key :format :binary})
-                                (println "start write binary")
-                                (write-binary folder (first key) input))))
+  (-bassoc [this key input] (do (write-edn-key folder {:key [key] :format :binary})
+                                (write-binary folder key input))))
 
 (defn new-fs-store
   "Filestore contains a Key and a Data Folder"
@@ -276,146 +306,59 @@
                                      :locks          (atom {})
                                      :config         config}))))
 
-
 (comment
-                                        ;create store
+
+  (go (println (<! (write-edn "/tmp/mystore" [:new]  (fn [_] 123)))))
+
   (go (def store (<! (new-fs-store "/tmp/mystore"))))
 
   (delete-store "/tmp/mystore")
 
   ;;EDN read/write functionality
-  (go (println (<! (-assoc-in store [:new] 43))))
+  (go (println (<! (-assoc-in store [:new] {:x 123 :y 345}))
+               (<! (-get-in store [:new]))
+               (<! (list-keys store))))
+
+  (go (println (<! (list-keys store))))
+
+  (go (println (<! (-assoc-in store [:new] {:x 123 :y 345}))))
+
+  (go (println (<! (-get-in store [:new1]))))
 
   (go (println (<! (-exists? store :new))))
-  (go (println (<! (-update-in store [:new] inc))))
+
+  (go (println (<! (-update-in store [:new] (fn [old] (-> old
+                                                          (assoc :new "123")))))))
+
+  (go (println (<! (list-keys store))))
+
   (go (def x (<! (-get-in store [:new]))))
   (go (println (<! (-dissoc store :new))))
   (doseq [i (range 1 10)]
     (go (<! (-assoc-in store [i] (+ i i)))))
   ;;Binary read/write functionality
-  (go (println (<! (-bassoc store [:bin1ary] (js/Buffer.from #js [1 2 3 4])))))
+  ;; write / read buffer
+  (go (println (<! (-bassoc store :binary (js/Buffer.from #js [1 2 3 4])))))
 
-  ;,invalid input for write binary
+  (go (println (<! (-bget store :bin1ary #(go (.pipe (:read-stream %) (.createWriteStream fs "hello")))))))
 
-  (go (println (<! (-bassoc store [:binary] (.createReadStream fs "/tmp/mystore/data/2d081fba-8060-59dd-aa19-7b61d4a2d504")))))
+  (def mybuffer (atom {}))
 
+  (go (println (<! (-bget store :binary #(let [mychan   (chan)
+                                                rs       (:read-stream %)]
+                                            (.on rs "data" (fn [chunk]
+                                                             (prn (. chunk -buffer))))
+                                            (.on rs "close" (fn [_]
+                                                              (prn "closing")
+                                                              (put! mychan true)
+                                                              (close! mychan)))
+                                            (.on rs "error" (fn [err] (prn err)))
+                                            mychan)))))
 
-  (go (println (<! (-bassoc store [:binary] "123"))))
+  (js/Uint8Array. @mybuffer)
 
+  (js/Buffer.from #js [(js/Buffer.from #js [1 2 3 4])])
 
-  (go (<! (-bget store [:binary] #(println %))))
-
-
-  (prn "123")
-
-  (ex-info "Write binary input is not a stream or buffer."
-           {:type      :write-binary-error
-            :key       key
-            :exception err})
-
-
-
-  (instance? #object[ReadStream] "123")
-
-  (type (.createReadStream fs "/tmp/mystore/data/2d081fba-8060-59dd-aa19-7b61d4a2d504"))
-
-  (type (.createReadStream fs "/tmp/mystore/data/2d081fba-8060-59dd-aa19-7b61d4a2d504"))
-
-  (def inMemory (atom nil))
-
-  (go (.pipe (<! (-bget store :binary #())) (.createWriteStream fs "temp1234")))
-
-
-  ;; TODO no vector for key
-  (go (<! (-bget store [:binary] #(.pipe (:read-stream %)
-                                         (.createWriteStream fs "temp1234")))))
-
-  (go (<! (-bget store [:binary] #(-bassoc store [:other-binary] (:read-stream %)))))
-
-  ;;Copy binary
-
-(def mybuf (js/Buffer.from #js [1 2 3 4]))
-
-(def ymstream (stream.PassThrough))
-
-(.end ymstream mybuf)
-
-(type ymstream)
-
-(time (spit "xwerqwer" "qwerqwerqwer"))
-
-(time )
-
-(time (write-binary "/tmp/mystore" "12341234" "1234123412341234"))
-
-
-(slurp "myfile")
-
-
-
-
-
-
-
-
-
-(go
-  (let [[err] (<! (io/aspit "data.edn" data))]
-            (if-not err
-              (println "you've successfully written to 'data.edn'")
-              (println "there was an error writing: " err))))
-
-(go
-  (let [[err datastring] (<! (io/aslurp "data.edn"))]
-    (if-not err
-      (handle-data (read-string datastring))
-      (handle-error err))))
-
-
-
-
-(type ymstream)
-
-(if (js/Buffer.isBuffer mybuf)
-  (println "i a m buffer")
-  false)
-
-(def new-array (apply vector (range 1 10)))
-
-new-array
-
-(def myarray )
-
-myarray
-
-
-(go (println (<! (-bassoc store :testy ))))
-
-(uuid :testy)
-
-(go (.pipe (<! (-bget store :testy)) (.createWriteStream fs "/tmp/1234")))
-
-
-(list-keys store)
-
-(go (<! (write-binary-new "/tmp/mystore" "123" mybuf)))
-
-
-(write-binary-new "/tmp/mystore" "123" mybuf)
-
-
-
-
-(def mychan (chan))
-
-(put! mychan (ex-info "Could not write binary."
-                      {:type      :write-binary-error
-                       :key       "123"
-                       :exception "123"}))
-
-(take! mychan #(prn %))
-
-
-)
+  )
 
 
