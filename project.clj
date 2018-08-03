@@ -7,16 +7,20 @@
   :dependencies [[org.clojure/clojure "1.9.0" :scope "provided"]
                  [org.clojure/clojurescript "1.9.946" :scope "provided"]
                  [org.clojure/core.async "0.4.474"]
-
+                 [fress "0.2.0-SNAPSHOT"]
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
                  [io.replikativ/incognito "0.2.1"]
                  [clj-ipfs-api "1.2.3"]
-
                  [io.replikativ/hasch "0.3.4"]
                  [org.clojure/core.cache "0.7.1"]
-                 [org.clojars.mmb90/cljs-cache "0.1.4"]]
+                 [org.clojars.mmb90/cljs-cache "0.1.4"]
+                 [com.cognitect/transit-cljs "0.8.256"]
+                 [cljs-node-io "1.0.0"]]
 
-  :plugins [[lein-cljsbuild "1.1.4"]]
+  :npm {:dependencies [blob-to-buffer "1.3.0"]}
+
+  :plugins [[lein-cljsbuild "1.1.4"]
+            [lein-npm "0.6.2"]]
 
   :profiles {:dev {:dependencies [[com.cemerick/piggieback "0.2.1"]]
                    :figwheel {:nrepl-port 7888
