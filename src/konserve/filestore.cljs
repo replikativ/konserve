@@ -82,10 +82,9 @@
                                   :exception err}))
            (close! res-ch)))
     (-serialize serializer buf write-handlers (update meta :key first))
-    (.write ws (js/Uint8Array. (js->clj (.from js/Array @buf))))
+    (.write ws (js/Uint8Array. (.from js/Array @buf)))
     (.end ws)
     res-ch))
-
 
 (defn write-edn [serializer write-handlers read-handlers folder key up-fn]
   (let [key       (uuid (first key))
@@ -115,7 +114,7 @@
                                                          :exception err}))
                                   (close! res-ch)))
                            (-serialize serializer buf write-handlers value)
-                           (.write ws (js/Uint8Array. (js->clj (.from js/Array @buf))))
+                           (.write ws (js/Uint8Array. (.from js/Array @buf)))
                            (.close ws)))
         (.on rs "error" (fn [err]
                           (put! res-ch (ex-info "Could not write edn."
@@ -139,7 +138,7 @@
                                                     :exception err}))
                              (close! res-ch))))
         (-serialize serializer buf write-handlers value)
-        (.write ws (js/Uint8Array. (js->clj (.from js/Array @buf))))
+        (.write ws (js/Uint8Array. (.from js/Array @buf)))
         (.end ws)))
     res-ch))
 
@@ -318,52 +317,4 @@
                                      :write-handlers write-handlers
                                      :locks          (atom {})
                                      :config         config}))))
-
-(comment
-
-  (go (def store (<! (new-fs-store "/tmp/mystore"))))
-
-  (delete-store "/tmp/mystore")
-
-  ;;EDN read/write functionality
-  (go (println (<! (-assoc-in store [:new] 1))
-               (<! (-get-in store [:new]))
-               (<! (list-keys store {}))))
-
-  (go (println (<! (list-keys store {}))))
-  
-  (go (println (<! (-assoc-in store [:new1] 2))))
-
-
-
-
-  (go (println (<! (-update-in store [:new1] inc))))
-
-  (doseq [i (range 1 10)]
-    (go (<! (-assoc-in store [i] (+ i i)))))
-
-
-
-  ;;Binary read/write functionality
-  ;; write / read buffer
-  (go (println (<! (-bassoc store :bin (js/Buffer.from #js [1 2 3 4])))))
-
-  (go (println (<! (-bget store :bin1ary #(go (.pipe (:read-stream %) (.createWriteStream fs "hello")))))))
-
-  (def mybuffer (atom {}))
-
-  (go (println (<! (-bget store :binary #(let [mychan   (chan)
-                                                rs       (:read-stream %)]
-                                            (.on rs "data" (fn [chunk]
-                                                             (prn (. chunk -buffer))))
-                                            (.on rs "close" (fn [_]
-                                                              (prn "closing")
-                                                              (put! mychan true)
-                                                              (close! mychan)))
-                                            (.on rs "error" (fn [err] (prn err)))
-                                            mychan)))))
-
-
-  )
-
 
