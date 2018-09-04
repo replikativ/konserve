@@ -4,23 +4,18 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src"]
+  :test-paths ["test"]
   :dependencies [[org.clojure/clojure "1.9.0" :scope "provided"]
                  [org.clojure/clojurescript "1.9.946" :scope "provided"]
                  [org.clojure/core.async "0.4.474"]
-                 [fress "0.2.0-SNAPSHOT"]
-                 [org.clojure/data.fressian "0.2.1"] ;; for filestore
+                 [org.clojure/data.fressian "0.2.1"]
                  [io.replikativ/incognito "0.2.1"]
-                 [clj-ipfs-api "1.2.3"]
                  [io.replikativ/hasch "0.3.4"]
-                 [org.clojure/core.cache "0.7.1"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
                  [com.cognitect/transit-cljs "0.8.256"]
-                 [cljs-node-io "1.0.0"]]
+                 [fress "0.2.0-SNAPSHOT"]]
 
-  :npm {:dependencies [blob-to-buffer "1.3.0"]}
-
-  :plugins [[lein-cljsbuild "1.1.4"]
-            [lein-npm "0.6.2"]]
+  :plugins [[lein-cljsbuild "1.1.7"]]
 
   :profiles {:dev {:dependencies [[com.cemerick/piggieback "0.2.1"]]
                    :figwheel {:nrepl-port 7888
@@ -31,15 +26,26 @@
 
   :clean-targets ^{:protect false} ["target" "out" "resources/public/js"]
 
+  :hooks [leiningen.cljsbuild]
+
+
+  :aliases
+  {"cljs-test" ["cljsbuild" "test" "unit-tests"]
+   "test-all" ["do" "clean," "test," "cljsbuild" "once"]
+   "cljs-auto-test" ["cljsbuild" "auto" "tests"]}
+
   :cljsbuild
-  {:builds
-   [{:id "cljs_repl"
-     :source-paths ["src"]
-     :figwheel true
-     :compiler
-     {:main konserve.indexeddb
-      :asset-path "js/out"
-      :output-to "resources/public/js/main.js"
-      :output-dir "resources/public/js/out"
-      :optimizations :none
-      :pretty-print true}}]})
+  {:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
+   :builds
+   {:tests
+    {:source-paths ["src" "test"]
+     :notify-command ["node" "target/unit-tests.js"]
+     :compiler {:output-to "target/unit-tests.js"
+                :optimizations :none
+                :target :nodejs
+                :main konserve.filestore-test}}
+    :production
+    {:source-paths ["src"]
+     :compiler {:output-to "target/production.js"
+                :optimizations :advanced}}}})
+ 
