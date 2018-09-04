@@ -12,20 +12,13 @@
 
 (enable-console-print!)
 
-(defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
-  (if (cljs.test/successful? m)
-    (println "Success!")
-    (println "FAIL")))
-
 (use-fixtures :once
   {:before
    (fn []
      (async done
             (go (delete-store "/tmp/konserve-fs-nodejs-test")
                 (def store (<! (new-fs-store "/tmp/konserve-fs-nodejs-test")))
-                (done))))
-   :after
-   #(do (prn "DONE"))})
+                (done))))})
 
 (deftest filestore-test
   (testing "Test the file store functionality."
@@ -44,7 +37,6 @@
                                                                          (close! ch)))
                                                        (.on rs "error" (fn [err] (prn err)))
                                                        ch)))]
-               ;; TODO on-pipe callback 
                (is (= (<! (k/get-in store [:foo]))
                       nil))
                (<! (k/assoc-in store [:foo] :bar))
@@ -64,8 +56,5 @@
                         #{})))
                (done))))))
 
-;;add error tests
 
 (run-tests)
-
-
