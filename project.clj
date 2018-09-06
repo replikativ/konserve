@@ -8,10 +8,12 @@
   :dependencies [[org.clojure/clojure "1.9.0" :scope "provided"]
                  [org.clojure/clojurescript "1.9.946" :scope "provided"]
                  [org.clojure/core.async "0.4.474"]
-                 [org.clojure/data.fressian "0.2.1"]
-                 [io.replikativ/incognito "0.2.5-SNAPSHOT"]
-                 [io.replikativ/hasch "0.3.4"]
+
+                 [org.clojure/data.fressian "0.2.1"] ;; for filestore
+
+                 [io.replikativ/hasch "0.3.5"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
+                 [io.replikativ/incognito "0.2.5-SNAPSHOT"]
                  [com.cognitect/transit-cljs "0.8.256"]
                  [fress "0.2.0"]]
 
@@ -27,7 +29,6 @@
   :clean-targets ^{:protect false} ["target" "out" "resources/public/js"]
 
   :hooks [leiningen.cljsbuild]
-
 
   :cljsbuild
   {:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
