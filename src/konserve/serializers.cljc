@@ -4,8 +4,7 @@
                       [incognito.fressian :refer [incognito-read-handlers
                                                   incognito-write-handlers]]])
             #?@(:cljs [[fress.api :as fress]
-                       [incognito.transit :refer [incognito-read-handler
-                                                  incognito-write-handler]]])
+                       [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]])
             [incognito.edn :refer [read-string-safe]])
   #?(:clj (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
                    [org.fressian.handlers WriteHandler ReadHandler])))
@@ -35,13 +34,13 @@
      (-deserialize [_ read-handlers bytes]
        (let [reader (fress/create-reader bytes
                                          :handlers (merge custom-read-handlers
-                                                          #_(incognito-read-handler read-handlers)))]
+                                                          (incognito-read-handlers read-handlers)))]
          (fress/read-object reader)))
      (-serialize [_ bytes write-handlers val]
        (let [writer (fress/create-writer bytes
                                          :handlers (merge
                                                     custom-write-handlers
-                                                    #_(incognito-write-handler write-handlers)))]
+                                                    (incognito-write-handlers write-handlers)))]
          (fress/write-object writer val)))))
 
 (defn fressian-serializer
