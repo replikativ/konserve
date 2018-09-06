@@ -9,11 +9,11 @@
                  [org.clojure/clojurescript "1.9.946" :scope "provided"]
                  [org.clojure/core.async "0.4.474"]
                  [org.clojure/data.fressian "0.2.1"]
-                 [io.replikativ/incognito "0.2.1"]
+                 [io.replikativ/incognito "0.2.5-SNAPSHOT"]
                  [io.replikativ/hasch "0.3.4"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
                  [com.cognitect/transit-cljs "0.8.256"]
-                 [fress "0.2.0-SNAPSHOT"]]
+                 [fress "0.2.0"]]
 
   :plugins [[lein-cljsbuild "1.1.7"]]
 
@@ -29,11 +29,6 @@
   :hooks [leiningen.cljsbuild]
 
 
-  :aliases
-  {"cljs-test" ["cljsbuild" "test" "unit-tests"]
-   "test-all" ["do" "clean," "test," "cljsbuild" "once"]
-   "cljs-auto-test" ["cljsbuild" "auto" "tests"]}
-
   :cljsbuild
   {:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
    :builds
@@ -43,9 +38,5 @@
      :compiler {:output-to "target/unit-tests.js"
                 :optimizations :none
                 :target :nodejs
-                :main konserve.filestore-test}}
-    :production
-    {:source-paths ["src"]
-     :compiler {:output-to "target/production.js"
-                :optimizations :advanced}}}})
- 
+                :main konserve.konserve-test}}}})
+
