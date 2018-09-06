@@ -10,9 +10,6 @@
                                PJSONAsyncKeyValueStore -jget-in -jassoc-in -jupdate-in
                                PBinaryAsyncKeyValueStore -bget -bassoc
                                -serialize -deserialize]]
-   [incognito.transit :refer [incognito-read-handler
-                              incognito-write-handler]]
-   [cognitect.transit :as transit]
    [cljs.core.async :as async :refer (take! <! >! put! take! close! chan poll!)]
    [cljs.tools.reader.impl.inspect :as i])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
@@ -48,7 +45,6 @@
   "Creates Folder with given path."
   [path]
   (let [test-file (str path "/" (random-uuid))]
-    (println "check and create folder")
     (try
       (when-not (fs.existsSync path)
         (.mkdirSync fs path))
@@ -306,15 +302,12 @@
                   write-handlers (atom {})
                   serializer     (ser/fressian-serializer)
                   config         {:fsync true}}}]
-  (println "creating store")
   (let [_ (check-and-create-folder path)
         _ (check-and-create-folder (str path "/meta"))
         _ (check-and-create-folder (str path "/data"))]
-    (println "creating system")
     (go (map->FileSystemNodejsStore {:folder         path
                                      :serializer     serializer
                                      :read-handlers  read-handlers
                                      :write-handlers write-handlers
                                      :locks          (atom {})
                                      :config         config}))))
-
