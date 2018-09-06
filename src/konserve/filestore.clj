@@ -21,6 +21,7 @@
            [java.nio.file Files StandardCopyOption FileSystems Path OpenOption
             StandardOpenOption]))
 
+
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
 (defn- on-windows? []
@@ -229,9 +230,10 @@
                  (completed [res att]
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
-                       (locked-cb {:input-stream bais
-                                   :size         (.length f)
-                                   :file         f})
+                       (go
+                         (>! res-ch (<! (locked-cb {:input-stream bais
+                                                    :size         (.length f)
+                                                    :file         f}))))
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type      :read-error
@@ -271,8 +273,8 @@
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
                        (locked-cb {:input-stream bais
-                                 :size (.length f)
-                                 :file f})
+                                   :size (.length f)
+                                   :file f})
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type :read-error

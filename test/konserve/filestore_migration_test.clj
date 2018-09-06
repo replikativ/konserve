@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists? bget bassoc])
   (:require [clojure.test :refer :all]
             [konserve.old-filestore :as old-store]
-            [clojure.core.async :refer [<!! >!! chan]]
+            [clojure.core.async :refer [<!! >!! chan go]]
             [konserve.core :refer :all]
             [konserve.memory :refer [new-mem-store]]
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
@@ -36,8 +36,9 @@
           list-new-store                 (<!! (list-keys new-store))
           _                              (dotimes [x 10]
                                            (<!! (bget new-store x (fn [{:keys [input-stream]}]
-                                                                    (is (= (map byte (slurp input-stream))
-                                                                           (range 10)))))))
+                                                                    (go
+                                                                      (is (= (map byte (slurp input-stream))
+                                                                             (range 10))))))))
           list-old-store-after-migration (<!! (old-store/list-keys store))
           list-new-store-after-migration (<!! (list-keys new-store))
           _                              (delete-store "/tmp/konserve-fs-migration-test")]
