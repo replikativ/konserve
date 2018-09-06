@@ -12,10 +12,9 @@
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
 
                  [io.replikativ/hasch "0.3.5"]
-                 [org.clojars.mmb90/cljs-cache "0.1.4"]
                  [io.replikativ/incognito "0.2.5-SNAPSHOT"]
-                 [com.cognitect/transit-cljs "0.8.256"]
-                 [fress "0.2.0"]]
+                 [fress "0.2.0"]
+                 [org.clojars.mmb90/cljs-cache "0.1.4"]]
 
   :plugins [[lein-cljsbuild "1.1.7"]]
 
