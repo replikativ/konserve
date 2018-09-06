@@ -6,7 +6,6 @@
             [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
-            [clojure.java.io :as io]
             [clj-time.core :as t]
             [clj-time.format :as f])
   (:import [org.fressian.handlers WriteHandler ReadHandler]))

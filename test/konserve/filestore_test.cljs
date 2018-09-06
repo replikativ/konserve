@@ -1,6 +1,6 @@
 (ns konserve.filestore-test
   (:require [konserve.core :as k]
-            [cljs.test :refer-macros [deftest is testing run-tests async use-fixtures]]
+            [cljs.test :refer-macros [deftest is testing async use-fixtures]]
             [cljs.core.async :as async :refer (take! <! >! put! take! close! chan poll!)]
             [konserve.filestore :refer [new-fs-store delete-store list-keys]]
             [cljs.nodejs :as node])
@@ -55,6 +55,3 @@
                  (is (= (<! (list-keys store {}))
                         #{})))
                (done))))))
-
-
-(run-tests)
