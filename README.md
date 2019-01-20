@@ -202,6 +202,13 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.5
+- cljs fressian support
+- filestore for node.js
+
+### 0.5-beta3
+- experimental caching support
+
 ### 0.5-beta1
 
 - improved filestore with separate metadata storage
