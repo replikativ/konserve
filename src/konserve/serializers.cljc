@@ -32,10 +32,13 @@
    (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
      PStoreSerializer
      (-deserialize [_ read-handlers bytes]
-       (let [reader (fress/create-reader bytes
-                                         :handlers (merge custom-read-handlers
-                                                          (incognito-read-handlers read-handlers)))]
-         (fress/read-object reader)))
+       (let [buf->arr (.from js/Array (.from js/Int8Array bytes))
+             buf      (fress.impl.buffer/BytesOutputStream. buf->arr (count buf->arr))
+             reader   (fress/create-reader buf
+                                           :handlers (merge custom-read-handlers
+                                                            (incognito-read-handlers read-handlers)))
+             read     (fress/read-object reader)]
+         read))
      (-serialize [_ bytes write-handlers val]
        (let [writer (fress/create-writer bytes
                                          :handlers (merge
@@ -60,4 +63,8 @@
 
 (defn string-serializer []
   (map->StringSerializer {}))
+
+
+
+
 
