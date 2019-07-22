@@ -35,6 +35,7 @@ For IndexedDB there is no internal JSON-representation of the underlying store l
 - CouchDB: [konserve-clutch](https://github.com/replikativ/konserve-clutch).
 - Redis: [konserve-carmine](https://github.com/replikativ/konserve-carmine).
 - Riak: [konserve-welle](https://github.com/replikativ/konserve-welle).
+- PostgreSQL: [konserve-pg](https://github.com/retro/konserve-pg).
 
 New storage backends, e.g. MongoDB, JDBC, WebSQL, Local-Storage are welcome.
 

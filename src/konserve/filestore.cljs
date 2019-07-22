@@ -92,8 +92,8 @@
             data-buffer (atom {:buffer nil})]
         (.on rs "data" (fn [chunk]
                          (swap! data-buffer update :buffer (fn [old] (if (nil? old)
-                                                                       (. chunk -buffer)
-                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+                                                                       chunk
+                                                                       (js/Buffer.concat #js [old chunk]))))))
         (.on rs "close" #(let [ws    (.createWriteStream fs temp-file)
                                old   (-deserialize serializer read-handlers (:buffer @data-buffer))
                                value (up-fn old)
@@ -185,8 +185,8 @@
             data-buffer (atom {:buffer nil})]
         (.on rs "data" (fn [chunk]
                          (swap! data-buffer update :buffer (fn [old] (if (nil? old)
-                                                                       (. chunk -buffer)
-                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+                                                                       chunk
+                                                                       (js/Buffer.concat #js [old chunk]))))))
         (.on rs "close" #(let [data (-deserialize serializer read-handlers (:buffer @data-buffer))]
                           (put! res-ch data)
                           (close! res-ch)))
@@ -207,8 +207,8 @@
             data-buffer (atom {:buffer nil})]
         (.on rs "data" (fn [chunk]
                          (swap! data-buffer update :buffer (fn [old] (if (nil? old)
-                                                                       (. chunk -buffer)
-                                                                       (js/Buffer.concat #js [old (. chunk -buffer)]))))))
+                                                                       chunk
+                                                                       (js/Buffer.concat #js [old chunk]))))))
         (.on rs "close" #(let [data    (-deserialize serializer read-handlers (:buffer @data-buffer))]
                           (put! res-ch data)
                           (close! res-ch)))
