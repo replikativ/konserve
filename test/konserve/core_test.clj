@@ -1,5 +1,5 @@
 (ns konserve.core-test
-  (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists?])
+  (:refer-clojure :exclude [get get-in update-in assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!! go]]
             [konserve.core :refer :all]
@@ -13,8 +13,10 @@
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] :bar))
-      (is (= (<!! (get-in store [:foo]))
+      (is (= (<!! (get store :foo))
              :bar))
+      (is (= :default
+             (<!! (get-in store [:fuu] :default))))
       (<!! (assoc-in store [:baz] {:bar 42}))
       (is (= (<!! (get-in store [:baz :bar]))
              42))

@@ -1,5 +1,5 @@
 (ns konserve.core
-  (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
+  (:refer-clojure :exclude [get get-in update-in assoc-in exists? dissoc])
   (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc]]
             [hasch.core :refer [uuid]]
@@ -26,12 +26,12 @@
 ;; as async ops seem to interfere with the atom state changes
 ;; and cause deadlock
 (defn get-lock [{:keys [locks] :as store} key]
-  (or (get @locks key)
+  (or (clojure.core/get @locks key)
       (let [c (chan)]
         (put! c :unlocked)
-        (get (swap! locks (fn [old]
-                            (if (old key) old
-                                (assoc old key c))))
+        (clojure.core/get (swap! locks (fn [old]
+                                         (if (old key) old
+                                             (assoc old key c))))
              key))))
 
 #?(:clj
@@ -62,14 +62,25 @@
    (<! (-exists? store key))))
 
 (defn get-in
-  "Returns the value stored described by key-vec or nil if the path is
-  not resolvable."
-  [store key-vec]
-  (go-locked
-   store (first key-vec)
-   (clojure.core/get-in
-    (<! (-get-in store [(first key-vec)]))
-    (rest key-vec))))
+  "Returns the value stored described by key-vec. Returns nil if the key-vec is
+   not present, or the not-found value if supplied."
+  ([store key-vec]
+   (get-in store key-vec nil))
+  ([store key-vec not-found]
+   (go-locked
+    store (first key-vec)
+    (let [a (<! (-get-in store [(first key-vec)]))]
+     (if (some? a)
+      (clojure.core/get-in a (rest key-vec))
+      not-found)))))
+
+(defn get
+  "Returns the value stored described by key. Returns nil if the key
+   is not present, or the not-found value if supplied."
+  ([store key]
+   (get-in store [key]))
+  ([store key not-found]
+   (get-in store [key] not-found)))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
