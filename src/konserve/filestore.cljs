@@ -82,7 +82,7 @@
     (.end ws)
     res-ch))
 
-(defn write-edn [serializer write-handlers read-handlers folder key up-fn]
+(defn write-edn [serializer write-handlers read-handlers folder key up-fn up-fn-args]
   (let [key       (uuid (first key))
         temp-file (str folder "/data/" key ".new")
         new-file  (str folder "/data/" key)
@@ -96,7 +96,7 @@
                                                                        (js/Buffer.concat #js [old chunk]))))))
         (.on rs "close" #(let [ws    (.createWriteStream fs temp-file)
                                old   (-deserialize serializer read-handlers (:buffer @data-buffer))
-                               value (up-fn old)
+                               value (apply up-fn old up-fn-args)
                                buf   (fress/byte-stream)]
                            (.on ws "finish" (fn [_]
                                               (.renameSync fs temp-file new-file)
@@ -122,7 +122,7 @@
             _     (.closeSync fs fd)
             ws    (.createWriteStream fs temp-file)
             buf   (fress/byte-stream)
-            value (up-fn nil)]
+            value (apply up-fn nil up-fn-args)]
         (.on ws "close" #(try
                            (.renameSync fs temp-file new-file)
                            (put! res-ch [nil value])
@@ -282,9 +282,10 @@
       res))
   (-get-in [this key-vec]
     (read-edn serializer read-handlers folder (first key-vec)))
-  (-update-in [this key-vec up-fn]
+  (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
+  (-update-in [this key-vec up-fn up-fn-args]
     (go (<! (write-edn-key serializer write-handlers folder {:key key-vec :format :edn}))
-        (<! (write-edn serializer write-handlers read-handlers folder key-vec up-fn))))
+        (<! (write-edn serializer write-handlers read-handlers folder key-vec up-fn up-fn-args))))
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
   (-dissoc [this key] (let [fn (uuid key)
                             res-ch (chan)]

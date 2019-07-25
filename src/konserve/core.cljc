@@ -271,8 +271,8 @@
     (time (->>  (range 5000)
                 (map #(assoc-in store [%] v))
                 async/merge
-                #_(async/pipeline-blocking 4 res identity)
-                ))) ;; 38 secs
+                #_(async/pipeline-blocking 4 res identity))))
+                 ;; 38 secs
   (go (println "2000" (<! (get-in store [2000]))))
 
   (let [res (chan (async/sliding-buffer 1))
@@ -395,5 +395,5 @@
     (println "another lock on foo"))
 
   (time (doseq [i (range 10000)]
-          (spit (str "/tmp/store/" i) (pr-str (range i)))))
-  )
+          (spit (str "/tmp/store/" i) (pr-str (range i))))))
+
