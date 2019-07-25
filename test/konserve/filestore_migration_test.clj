@@ -1,5 +1,5 @@
 (ns konserve.filestore-migration-test
-  (:refer-clojure :exclude [get get-in update-in assoc-in dissoc exists? bget bassoc])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? bget bassoc])
   (:require [clojure.test :refer :all]
             [konserve.old-filestore :as old-store]
             [clojure.core.async :refer [<!! >!! chan go]]

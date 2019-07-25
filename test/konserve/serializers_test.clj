@@ -1,5 +1,5 @@
 (ns konserve.serializers-test
-  (:refer-clojure :exclude [get get-in update-in assoc-in dissoc exists?])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!!]]
             [konserve.core :refer :all]

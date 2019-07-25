@@ -1,5 +1,5 @@
 (ns konserve.core
-  (:refer-clojure :exclude [get get-in update-in assoc-in exists? dissoc])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc])
   (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc]]
             [hasch.core :refer [uuid]]
@@ -31,7 +31,7 @@
         (put! c :unlocked)
         (clojure.core/get (swap! locks (fn [old]
                                          (if (old key) old
-                                             (assoc old key c))))
+                                             (clojure.core/assoc old key c))))
              key))))
 
 #?(:clj
@@ -91,6 +91,13 @@
    store (first key-vec)
    (<! (-update-in store key-vec fn args))))
 
+(defn update
+  "Updates a position described by key by applying up-fn and storing
+  the result atomically. Returns a vector [old new] of the previous
+  value and the result of applying up-fn (the newly stored value)."
+  [store key fn & args]
+  (apply update-in store [key] fn args))
+
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
@@ -98,6 +105,12 @@
   (go-locked
    store (first key-vec)
    (<! (-assoc-in store key-vec val))))
+
+(defn assoc
+ "Associates the key-vec to the value, any missing collections for
+ the key-vec (nested maps and vectors) are newly created."
+ [store key val]
+ (assoc-in store [key] val))
 
 (defn dissoc
   "Removes an entry from the store. "
