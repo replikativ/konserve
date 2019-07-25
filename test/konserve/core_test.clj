@@ -20,6 +20,12 @@
       (<!! (assoc-in store [:baz] {:bar 42}))
       (is (= (<!! (get-in store [:baz :bar]))
              42))
+      (<!! (update-in store [:baz :bar] inc))
+      (is (= (<!! (get-in store [:baz :bar]))
+             43))
+      (<!! (update-in store [:baz :bar] + 2 3))
+      (is (= (<!! (get-in store [:baz :bar]))
+             48))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
@@ -70,5 +76,5 @@
       (delete-store folder)
       (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (list-keys store))
-               #{}))
-        ))))
+               #{}))))))
+

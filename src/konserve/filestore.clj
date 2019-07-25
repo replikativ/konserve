@@ -95,7 +95,7 @@
 
 (defn- write-edn
   "help function for -update-in"
-  [serializer write-handlers read-handlers folder key-vec fn up-fn config]
+  [serializer write-handlers read-handlers folder key-vec fn up-fn up-fn-args config]
   (let [[fkey & rkey] key-vec
         f             (io/file (str folder fn))
         old           (read-key folder f fkey serializer read-handlers)
@@ -104,8 +104,8 @@
         dos           (DataOutputStream. fos)
         fd            (.getFD fos)
         value           (if-not (empty? rkey)
-                        (update-in old rkey up-fn)
-                        (up-fn old))]
+                          (apply update-in old rkey up-fn up-fn-args)
+                          (apply up-fn old up-fn-args))]
     (if (instance? Throwable old)
       old ;; return read error
       (try
@@ -341,14 +341,15 @@
           res-ch        (chan)]
       (read-edn f res-ch folder fn fkey rkey serializer read-handlers)
       res-ch))
-  (-update-in [this key-vec up-fn]
+  (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
+  (-update-in [this key-vec up-fn args]
     (async/thread
       (try
         (let [file-name   (uuid (first key-vec))
               data-folder (str folder "/data/")
               key-folder  (str folder "/meta/")]
           (write-edn-key serializer write-handlers read-handlers key-folder file-name {:key (first key-vec) :format :edn} config)
-          (write-edn serializer write-handlers read-handlers data-folder key-vec file-name up-fn config))
+          (write-edn serializer write-handlers read-handlers data-folder key-vec file-name up-fn args config))
         (catch Exception e
           e))))
 

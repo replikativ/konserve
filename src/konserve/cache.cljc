@@ -53,11 +53,11 @@
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key-vec fn]
+  [store key-vec fn & args]
   (go-locked
    store (first key-vec)
    (let [cache (:cache store)
-         [old new] (<! (-update-in store key-vec fn))]
+         [old new] (<! (-update-in store key-vec fn args))]
      (swap! cache cache/evict (first key-vec))
      [old new])))
 

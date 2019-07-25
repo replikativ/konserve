@@ -86,10 +86,10 @@
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key-vec fn]
+  [store key-vec fn & args]
   (go-locked
    store (first key-vec)
-   (<! (-update-in store key-vec fn))))
+   (<! (-update-in store key-vec fn args))))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
