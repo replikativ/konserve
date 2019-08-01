@@ -204,6 +204,9 @@ konserve.js.update_in(store,
 
 ## Changelog
 
+### 0.6
+- extend API to be more like Clojure's (thanks to @MrEbbinghaus)
+
 ### 0.5
 - cljs fressian support
 - filestore for node.js
@@ -296,13 +299,14 @@ konserve.js.update_in(store,
 
 ## Contributors
 
+- Björn Ebbinghaus
 - Daniel Szmulewicz
 - Konrad Kühne
 - Christian Weilbach
 
 ## License
 
-Copyright © 2014-2016 Christian Weilbach & Konrad Kühne
+Copyright © 2014-2019 Christian Weilbach and contributors
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
