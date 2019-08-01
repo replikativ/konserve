@@ -160,7 +160,8 @@
                                 :exception e})))))
       res-ch))
 
-  (-update-in [this key-vec up-fn]
+  (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
+  (-update-in [this key-vec up-fn up-fn-args]
     (async/thread
       (let [[fkey & rkey] key-vec
             fn (uuid fkey)
@@ -181,8 +182,8 @@
               dos (DataOutputStream. fos)
               fd (.getFD fos)
               new (if-not (empty? rkey)
-                    (update-in old rkey up-fn)
-                    (up-fn old))]
+                    (apply update-in old rkey up-fn up-fn-args)
+                    (apply up-fn old up-fn-args))]
           (if (instance? Throwable old)
             old ;; return read error
             (try

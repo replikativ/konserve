@@ -10,8 +10,9 @@
   PEDNAsyncKeyValueStore
   (-exists? [this key] (go (if (@state key) true false)))
   (-get-in [this key-vec] (go (get-in @state key-vec)))
-  (-update-in [this key-vec up-fn] (go [(get-in @state key-vec)
-                                        (get-in (swap! state update-in key-vec up-fn) key-vec)]))
+  (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
+  (-update-in [this key-vec up-fn args] (go [(get-in @state key-vec)
+                                             (get-in (apply swap! state update-in key-vec up-fn args) key-vec)]))
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
   (-dissoc [this key] (go (swap! state dissoc key) nil))
 
@@ -50,6 +51,6 @@
 
 
   (<!! (-bassoc store "foo" (io/input-stream (byte-array 10 (byte 42)))))
-  (<!! (-bget store "foo" identity))
+  (<!! (-bget store "foo" identity)))
 
-  )
+

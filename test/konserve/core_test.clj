@@ -1,5 +1,5 @@
 (ns konserve.core-test
-  (:refer-clojure :exclude [get-in update-in assoc-in dissoc exists?])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!! go]]
             [konserve.core :refer :all]
@@ -12,12 +12,25 @@
     (let [store (<!! (new-mem-store))]
       (is (= (<!! (get-in store [:foo]))
              nil))
-      (<!! (assoc-in store [:foo] :bar))
-      (is (= (<!! (get-in store [:foo]))
+      (<!! (assoc store :foo :bar))
+      (is (= (<!! (get store :foo))
              :bar))
+      (<!! (assoc-in store [:foo] :bar2))
+      (is (= :bar2 (<!! (get store :foo))))
+      (is (= :default
+             (<!! (get-in store [:fuu] :default))))
+      (<!! (update store :foo name))
+      (is (= "bar2"
+             (<!! (get store :foo))))
       (<!! (assoc-in store [:baz] {:bar 42}))
       (is (= (<!! (get-in store [:baz :bar]))
              42))
+      (<!! (update-in store [:baz :bar] inc))
+      (is (= (<!! (get-in store [:baz :bar]))
+             43))
+      (<!! (update-in store [:baz :bar] + 2 3))
+      (is (= (<!! (get-in store [:baz :bar]))
+             48))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
@@ -68,5 +81,5 @@
       (delete-store folder)
       (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (list-keys store))
-               #{}))
-        ))))
+               #{}))))))
+

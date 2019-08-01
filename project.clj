@@ -7,8 +7,8 @@
   :test-paths ["test"]
   :dependencies [
                  [org.clojure/clojure "1.10.0" :scope "provided"]
-                 [org.clojure/clojurescript "1.10.516" :scope "provided" ]
-                 [io.replikativ/incognito "0.2.5-SNAPSHOT"]
+                 [org.clojure/clojurescript "1.10.516" :scope "provided"]
+                 [io.replikativ/incognito "0.2.5"]
                  [fress "0.3.1"]
                  [org.clojure/core.async "0.4.490"]
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore

@@ -52,7 +52,8 @@
               (close! res)))
       res))
 
-  (-update-in [this key-vec up-fn]
+  (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
+  (-update-in [this key-vec up-fn up-fn-args]
     (let [[fkey & rkey] key-vec
           res (chan)
           tx (.transaction db #js [store-name] "readwrite")
@@ -71,8 +72,8 @@
                 (let [old (when-let [r (.-result req)]
                             (-deserialize serializer read-handlers (aget r "edn_value")))
                       up (if-not (empty? rkey)
-                           (update-in old rkey up-fn)
-                           (up-fn old))]
+                           (apply update-in old rkey up-fn up-fn-args)
+                           (apply up-fn old up-fn-args))]
                   (let [up-req (.put obj-store
                                      (clj->js {:key (pr-str fkey)
                                                :edn_value
