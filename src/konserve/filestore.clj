@@ -81,17 +81,17 @@
 (defn- read-key
   "help function for -update-in"
   [folder f fkey serializer read-handlers]
-    (when (.exists f)
-      (let [fis (DataInputStream. (FileInputStream. f))]
-        (try
-          (-deserialize serializer read-handlers fis)
-          (catch Exception e
-            (ex-info "Could not read key."
-                     {:type      :read-error
-                      :key       fkey
-                      :exception e}))
-          (finally
-            (.close fis))))))
+  (when (.exists f)
+    (let [fis (DataInputStream. (FileInputStream. f))]
+      (try
+        (-deserialize serializer read-handlers fis)
+        (catch Exception e
+          (ex-info "Could not read key."
+                   {:type      :read-error
+                    :key       fkey
+                    :exception e}))
+        (finally
+          (.close fis))))))
 
 (defn- write-edn
   "help function for -update-in"
@@ -180,8 +180,11 @@
                  (completed [res att]
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
-                       (put! res-ch
-                             (-deserialize serializer read-handlers bais))
+                       (let [value (-deserialize serializer read-handlers bais)]
+                         (put! res-ch
+                               (if (not-empty rkey)
+                                 (get-in value rkey)
+                                 value)))
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type      :read-error
@@ -393,13 +396,13 @@
 (defn- check-and-create-folder [path]
   (let [f         (io/file path)
         test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
-        (when-not (.exists f)
-          (.mkdir f))
-        ;; simple test to ensure we can write to the folders
-        (when-not (.createNewFile test-file)
-          (throw (ex-info "Cannot write to folder." {:type   :not-writable
-                                                     :folder path})))
-        (.delete test-file)))
+    (when-not (.exists f)
+      (.mkdir f))
+    ;; simple test to ensure we can write to the folders
+    (when-not (.createNewFile test-file)
+      (throw (ex-info "Cannot write to folder." {:type   :not-writable
+                                                 :folder path})))
+    (.delete test-file)))
 
 (defn filestore-schema-update
   "Lists all keys in this binary store. This operation *does not block concurrent operations* and might return an outdated key set. Keys of binary blobs are not tracked atm."
@@ -428,7 +431,7 @@
                                    (.close fis)))))))))
                  async/merge
                  (async/into #{}))]
-        fns))
+    fns))
 
 (defn new-fs-store
   "Filestore contains a Key and a Data Folder"
@@ -474,30 +477,30 @@
 
 
 (comment
- 
+
   (read-string "{:update-store {:version-12-to-14 true}}")
 
   (time (def store (<!! (new-fs-store "/tmp/konserve-fs-migration-test"))))
 
   store
 
-(delete-store "/tmp/konserve-fs-migration-test")
+  (delete-store "/tmp/konserve-fs-migration-test")
 
 
-(.getParent (io/file "/tmp/konserve-fs-migration-test"))
+  (.getParent (io/file "/tmp/konserve-fs-migration-test"))
 
-(clojure.string/replace-first "/tmp/abc"  "/" (System/getProperty "user.home"))
+  (clojure.string/replace-first "/tmp/abc"  "/" (System/getProperty "user.home"))
 
 
-(def xy "/tmp/abc")
+  (def xy "/tmp/abc")
 
-xy
+  xy
 
-(re-matches #"/" "/tmp/abc")
+  (re-matches #"/" "/tmp/abc")
 
-(clojure.string/replace-first "tmp/abc" "/" "")
+  (clojure.string/replace-first "tmp/abc" "/" "")
 
-(clojure.string/index-of "/tmp/abc" "/")
+  (clojure.string/index-of "/tmp/abc" "/")
 
   store
   (->> (io/file "/tmp/konserve-fs-migration-test")
@@ -524,12 +527,12 @@ xy
   (<!! (-dissoc store ":123"))
 
   (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" %)
-                       (seq (.list (io/file "/tmp/old-CCCP"))))
+          (seq (.list (io/file "/tmp/old-CCCP"))))
 
 
   (seq (.list (io/file "/tmp/old-CCCP")))
 
-(<!! (filestore-schema-update store))
+  (<!! (filestore-schema-update store))
 
 
 
@@ -540,49 +543,49 @@ xy
 
 
 
- (time (doseq [i (apply vector (range 1 1000))]
-                          (<!! (-assoc-in store [(str i)] i))))
+  (time (doseq [i (apply vector (range 1 1000))]
+          (<!! (-assoc-in store [(str i)] i))))
 
- (<!! (list-keys store))
+  (<!! (list-keys store))
 
- (defn myfunc []
-   2)
+  (defn myfunc []
+    2)
 
- (= (myfunc) 2)
+  (= (myfunc) 2)
 
- (= (inc) 2)
+  (= (inc) 2)
 
- (myfunc)
+  (myfunc)
 
- (seq (.list (io/file "/tmp/CCCP/Key")))
- 
+  (seq (.list (io/file "/tmp/CCCP/Key")))
+
 
   (defn file->bytes [file]
-    (with-open [xin  (io/input-stream file)
-                xout (java.io.ByteArrayOutputStream.)]
-      (io/copy xin xout)
-      (.toByteArray xout)))
+     (with-open [xin  (io/input-stream file)
+                 xout (java.io.ByteArrayOutputStream.)]
+       (io/copy xin xout)
+       (.toByteArray xout)))
 
   (<!! (-bassoc store :exe (file->bytes (io/file "/tmp/CCCP/Data/test.txt"))))
 
   (defn copy-fn [blob]
-    (let [is   (:input-stream blob)
-          baos (ByteArrayOutputStream.)
-          _    (io/copy is baos)
-          bais (ByteArrayInputStream. (.toByteArray baos))]
-      bais))
+     (let [is   (:input-stream blob)
+           baos (ByteArrayOutputStream.)
+           _    (io/copy is baos)
+           bais (ByteArrayInputStream. (.toByteArray baos))]
+       bais))
 
   (with-open [in  (<!! (-bget store :exe copy-fn))
-              out (io/output-stream (io/file "/tmp/CCCP/Data/testo.txt"))]
-    (io/copy in out))
+               out (io/output-stream (io/file "/tmp/CCCP/Data/testo.txt"))]
+     (io/copy in out))
 
   (def foo (<!! (-bget store :test identity)))
 
   (<!! (-bget store :exe copy-fn))
 
 
-  (<!! (list-keys store))
+  (<!! (list-keys store)))
 
 
-  )
- 
+
+
