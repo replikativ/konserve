@@ -181,10 +181,9 @@
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
                        (let [value (-deserialize serializer read-handlers bais)]
-                         (put! res-ch
-                               (if (not-empty rkey)
-                                 (get-in value rkey)
-                                 value)))
+                         (if-let [value (if (not-empty rkey) (get-in value rkey))]
+                           (put! res-ch value)
+                           (close! res-ch)))
                        (catch Exception e
                          (ex-info "Could not read key."
                                   {:type      :read-error
