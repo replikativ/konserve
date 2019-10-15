@@ -67,9 +67,9 @@
                            (reset! binbar (map byte (slurp input-stream)))))))]
       (is (= (<!! (get-in store [:foo]))
              nil))
-      (<!! (assoc-in store [:foo] :bar))
-      (is (= (<!! (get-in store [:foo]))
-             :bar))
+      (<!! (assoc-in store [:foo] {:bar :baz}))
+      (is (= (<!! (get-in store [:foo :bar]))
+             :baz))
       (is (= (<!! (list-keys store))
              #{{:key :foo, :format :edn} {:key :binbar, :format :binary}}))
       (<!! (dissoc store :foo))
