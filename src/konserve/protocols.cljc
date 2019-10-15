@@ -12,9 +12,9 @@
 
 (defprotocol PStoreSerializer
   "Decouples serialization format from storage."
-  (-serialize [this output-stream read-handlers val]
+  (-serialize [this output-stream write-handlers val]
     "For the JVM we use streams, while for JavaScript we return the value for now.")
-  (-deserialize [this write-handlers input-stream]))
+  (-deserialize [this read-handlers input-stream]))
 
 
 (defprotocol PJSONAsyncKeyValueStore
