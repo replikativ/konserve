@@ -1,7 +1,8 @@
 (ns konserve.core
-  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
-                                        -update-in -dissoc -bget -bassoc]]
+                                        -update-in -dissoc -bget -bassoc
+                                        -keys]]
             [hasch.core :refer [uuid]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]]))
@@ -202,6 +203,13 @@
    store key
    (<! (-bassoc store key val))))
 
+
+(defn keys
+  "Return a channel that will yield all top-level keys currently in the store,
+  in sorted order. If start-key is given, only returns keys larger than
+  that value."
+  ([store] (-keys store))
+  ([store start-key] (-keys store start-key)))
 
 
 (comment

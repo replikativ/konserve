@@ -3,7 +3,10 @@
   (:require #?(:clj [clojure.core.async :refer [go]])
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         PBinaryAsyncKeyValueStore
-                                        -update-in]])
+                                        -update-in
+                                        PKeyIterable
+                                        -keys]]
+            [clojure.core.async :as async])
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
@@ -22,7 +25,14 @@
   (-bassoc [this key input]
     (go (swap! state assoc key {:input-stream input
                                 :size :unknown})
-        nil)))
+        nil))
+
+  PKeyIterable
+  (-keys [this] (-keys this nil))
+
+  (-keys [_ start-key]
+    (let [ks (drop-while #(and (some? start-key) (neg? (compare % start-key))) (keys @state))]
+      (async/to-chan ks))))
 
 #?(:clj
    (defmethod print-method MemoryStore
@@ -33,9 +43,9 @@
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and
   the read and write-handlers are dummy ones for compatibility."
-  ([] (new-mem-store (atom {})))
+  ([] (new-mem-store (atom (sorted-map))))
   ([init-atom]
-   (go (map->MemoryStore {:state init-atom
+   (go (map->MemoryStore {:state (swap! init-atom #(into (sorted-map) %))
                           :read-handlers (atom {})
                           :write-handlers (atom {})
                           :locks (atom {})}))))

@@ -11,7 +11,8 @@
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         -exists? -get-in -update-in -dissoc -assoc-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
-                                        -serialize -deserialize]])
+                                        -serialize -deserialize
+                                        PKeyIterable -keys]])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
@@ -62,16 +63,18 @@
                          (let [f  (io/file (str folder "/meta/" fn))
                                fd (io/file (str folder "/data/" fn))]
                            (if (and (.exists f) (.exists fd))
-                             (let [fis (DataInputStream. (FileInputStream. f))]
-                               (try
-                                 (-deserialize serializer read-handlers fis)
-                                 (catch Exception e
-                                   (ex-info "Could not read key."
-                                            {:type      :read-error
-                                             :key       fn
-                                             :exception e}))
-                                 (finally
-                                   (.close fis))))
+                             (async/<!
+                               (async/thread
+                                 (let [fis (DataInputStream. (FileInputStream. f))]
+                                   (try
+                                     (-deserialize serializer read-handlers fis)
+                                     (catch Exception e
+                                       (ex-info "Could not read key."
+                                                {:type      :read-error
+                                                 :key       fn
+                                                 :exception e}))
+                                     (finally
+                                       (.close fis))))))
                              (println "Stale key file detected: " fn))))))
                  async/merge
                  (async/into #{}))]
@@ -386,7 +389,22 @@
           key-folder (str folder "/meta/")]
       (async/thread
         (do (write-edn-key serializer write-handlers read-handlers key-folder file-name {:key key :format :binary} config)
-            (write-binary folder (str file-name) key input config))))))
+            (write-binary folder (str file-name) key input config)))))
+
+  PKeyIterable
+  (-keys [this] (-keys this nil))
+
+  ; todo maybe don't keep all keys in memory?
+  ; could do O(n^2) just calling list-keys for each iteration, taking the min key each time
+  (-keys [this start-key]
+    (let [ch (async/chan)]
+      (async/go
+        (let [ks (->> (async/<! (list-keys this))
+                      (map :key)
+                      (filter #(or (nil? start-key) (neg? (compare start-key %))))
+                      (into (sorted-set)))]
+          (async/onto-chan ch ks)))
+      ch)))
 
 (defmethod print-method FileSystemStore
   [store writer]
