@@ -207,6 +207,9 @@ konserve.js.update_in(store,
 ### 0.6
 - extend API to be more like Clojure's (thanks to @MrEbbinghaus)
 
+### 0.5.1
+- fix nested value extraction in filestore, thanks to @csm
+
 ### 0.5
 - cljs fressian support
 - filestore for node.js

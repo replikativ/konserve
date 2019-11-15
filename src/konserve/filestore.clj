@@ -184,7 +184,7 @@
                    (let [bais (ByteArrayInputStream. (.array bb))]
                      (try
                        (let [value (-deserialize serializer read-handlers bais)]
-                         (if-let [value (if (not-empty rkey) (get-in value rkey))]
+                         (if-let [value (if (not-empty rkey) (get-in value rkey) value)]
                            (put! res-ch value)
                            (close! res-ch)))
                        (catch Exception e
