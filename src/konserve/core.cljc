@@ -207,7 +207,10 @@
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store,
   in sorted order. If start-key is given, only returns keys larger than
-  that value."
+  that value.
+
+  The order of different types for top-level keys is implementation-dependent;
+  however, all keys of the same type will be returned in natural order."
   ([store] (keys store nil))
   ([store start-key] (-keys store start-key)))
 

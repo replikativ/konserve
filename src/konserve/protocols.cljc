@@ -34,4 +34,8 @@
   "Allows in-order lazy iteration of keys in this store."
   (-keys [this start-key]
     "Return a channel that will continuously yield keys in this store.
-    If start-key is given, begin iterating at that key, exclusive."))
+    If start-key is given, begin iterating at that key, exclusive.
+
+    Implementations should, to some degree, sort by key type first,
+    then sort by the natural order of that type. The ordering of
+    different key types is up to the implementation."))
