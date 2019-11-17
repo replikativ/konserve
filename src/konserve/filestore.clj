@@ -393,8 +393,6 @@
             (write-binary folder (str file-name) key input config)))))
 
   PKeyIterable
-  (-keys [this] (-keys this nil))
-
   ; todo maybe don't keep all keys in memory?
   ; could do O(n^2) just calling list-keys for each iteration, taking the min key each time
   (-keys [this start-key]

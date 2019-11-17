@@ -29,10 +29,8 @@
         nil))
 
   PKeyIterable
-  (-keys [this] (-keys this nil))
-
   (-keys [_ start-key]
-    (let [ks (drop-while #(and (some? start-key) (neg? (compare % start-key))) (keys @state))]
+    (let [ks (drop-while #(and (some? start-key) (not (pos? (kc/key-compare % start-key)))) (keys @state))]
       (async/to-chan ks))))
 
 #?(:clj

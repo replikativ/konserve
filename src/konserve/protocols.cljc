@@ -32,7 +32,6 @@
 
 (defprotocol PKeyIterable
   "Allows in-order lazy iteration of keys in this store."
-  (-keys [this] [this start-key]
+  (-keys [this start-key]
     "Return a channel that will continuously yield keys in this store.
-    If start-key is given, begin iterating at that key (inclusive, if
-    the store contains exactly that key)."))
+    If start-key is given, begin iterating at that key, exclusive."))
