@@ -45,10 +45,12 @@
   the read and write-handlers are dummy ones for compatibility."
   ([] (new-mem-store (atom (sorted-map))))
   ([init-atom]
-   (go (map->MemoryStore {:state (swap! init-atom #(into (sorted-map) %))
-                          :read-handlers (atom {})
-                          :write-handlers (atom {})
-                          :locks (atom {})}))))
+   (go
+     (swap! init-atom #(into (sorted-map) %))
+     (map->MemoryStore {:state init-atom
+                        :read-handlers (atom {})
+                        :write-handlers (atom {})
+                        :locks (atom {})}))))
 
 
 (comment
