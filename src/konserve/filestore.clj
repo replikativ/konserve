@@ -12,7 +12,8 @@
                                         -exists? -get-in -update-in -dissoc -assoc-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize
-                                        PKeyIterable -keys]])
+                                        PKeyIterable -keys]]
+            [konserve.key-compare :as kc])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
@@ -402,7 +403,7 @@
         (let [ks (->> (async/<! (list-keys this))
                       (map :key)
                       (filter #(or (nil? start-key) (neg? (compare start-key %))))
-                      (into (sorted-set)))]
+                      (into (sorted-set-by kc/key-compare)))]
           (async/onto-chan ch ks)))
       ch)))
 

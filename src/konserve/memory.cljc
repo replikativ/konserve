@@ -1,6 +1,7 @@
 (ns konserve.memory
   "Address globally aggregated immutable key-value store(s)."
   (:require #?(:clj [clojure.core.async :refer [go]])
+            [konserve.key-compare :as kc]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         PBinaryAsyncKeyValueStore
                                         -update-in
@@ -43,10 +44,10 @@
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and
   the read and write-handlers are dummy ones for compatibility."
-  ([] (new-mem-store (atom (sorted-map))))
+  ([] (new-mem-store (atom {})))
   ([init-atom]
    (go
-     (swap! init-atom #(into (sorted-map) %))
+     (swap! init-atom #(into (apply sorted-map-by kc/key-compare (mapcat identity %))))
      (map->MemoryStore {:state init-atom
                         :read-handlers (atom {})
                         :write-handlers (atom {})
