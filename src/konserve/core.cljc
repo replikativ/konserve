@@ -208,7 +208,7 @@
   "Return a channel that will yield all top-level keys currently in the store,
   in sorted order. If start-key is given, only returns keys larger than
   that value."
-  ([store] (-keys store))
+  ([store] (keys store nil))
   ([store start-key] (-keys store start-key)))
 
 
