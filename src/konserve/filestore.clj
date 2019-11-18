@@ -395,7 +395,12 @@
   ; todo maybe don't keep all keys in memory?
   ; could do O(n^2) just calling list-keys for each iteration, taking the min key each time
   (-keys [this]
-    (async/to-chan (map :key (async/<! (list-keys this))))))
+    (let [ch (async/chan)]
+      (async/take!
+        (list-keys this)
+        (fn [ks]
+          (async/onto-chan ch (map :key ks))))
+      ch)))
 
 (defmethod print-method FileSystemStore
   [store writer]
