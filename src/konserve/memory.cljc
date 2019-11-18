@@ -42,11 +42,10 @@
   the read and write-handlers are dummy ones for compatibility."
   ([] (new-mem-store (atom {})))
   ([init-atom]
-   (go
-     (map->MemoryStore {:state init-atom
-                        :read-handlers (atom {})
-                        :write-handlers (atom {})
-                        :locks (atom {})}))))
+   (go (map->MemoryStore {:state init-atom
+                          :read-handlers (atom {})
+                          :write-handlers (atom {})
+                          :locks (atom {})}))))
 
 
 (comment
