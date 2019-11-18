@@ -12,8 +12,7 @@
                                         -exists? -get-in -update-in -dissoc -assoc-in
                                         PBinaryAsyncKeyValueStore -bget -bassoc
                                         -serialize -deserialize
-                                        PKeyIterable -keys]]
-            [konserve.key-compare :as kc])
+                                        PKeyIterable -keys]])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
@@ -395,15 +394,8 @@
   PKeyIterable
   ; todo maybe don't keep all keys in memory?
   ; could do O(n^2) just calling list-keys for each iteration, taking the min key each time
-  (-keys [this start-key]
-    (let [ch (async/chan)]
-      (async/go
-        (let [ks (->> (async/<! (list-keys this))
-                      (map :key)
-                      (filter #(or (nil? start-key) (neg? (compare start-key %))))
-                      (into (sorted-set-by kc/key-compare)))]
-          (async/onto-chan ch ks)))
-      ch)))
+  (-keys [this]
+    (async/to-chan (map :key (async/<! (list-keys this))))))
 
 (defmethod print-method FileSystemStore
   [store writer]

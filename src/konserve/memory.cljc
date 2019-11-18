@@ -1,7 +1,6 @@
 (ns konserve.memory
   "Address globally aggregated immutable key-value store(s)."
   (:require #?(:clj [clojure.core.async :refer [go]])
-            [konserve.key-compare :as kc]
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         PBinaryAsyncKeyValueStore
                                         -update-in
@@ -29,9 +28,8 @@
         nil))
 
   PKeyIterable
-  (-keys [_ start-key]
-    (let [ks (drop-while #(and (some? start-key) (not (pos? (kc/key-compare % start-key)))) (keys @state))]
-      (async/to-chan ks))))
+  (-keys [_]
+    (async/to-chan (keys @state))))
 
 #?(:clj
    (defmethod print-method MemoryStore
@@ -45,7 +43,6 @@
   ([] (new-mem-store (atom {})))
   ([init-atom]
    (go
-     (swap! init-atom #(into (apply sorted-map-by kc/key-compare (mapcat identity %))))
      (map->MemoryStore {:state init-atom
                         :read-handlers (atom {})
                         :write-handlers (atom {})
