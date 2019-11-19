@@ -3,7 +3,10 @@
   (:require #?(:clj [clojure.core.async :refer [go]])
             [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                         PBinaryAsyncKeyValueStore
-                                        -update-in]])
+                                        -update-in
+                                        PKeyIterable
+                                        -keys]]
+            [clojure.core.async :as async])
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
@@ -22,7 +25,11 @@
   (-bassoc [this key input]
     (go (swap! state assoc key {:input-stream input
                                 :size :unknown})
-        nil)))
+        nil))
+
+  PKeyIterable
+  (-keys [_]
+    (async/to-chan (keys @state))))
 
 #?(:clj
    (defmethod print-method MemoryStore

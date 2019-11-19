@@ -28,3 +28,9 @@
   "Allows binary data byte array storage."
   (-bget [this key locked-cb] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
   (-bassoc [this key val] "Copies given value (InputStream, Reader, File, byte[] or String on JVM, Blob in JavaScript) under key in the store."))
+
+
+(defprotocol PKeyIterable
+  "Allows lazy iteration of keys in this store."
+  (-keys [this]
+    "Return a channel that will continuously yield keys in this store."))
