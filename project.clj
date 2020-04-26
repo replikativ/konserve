@@ -25,7 +25,7 @@
 
   :clean-targets ^{:protect false} ["target" "out" "resources/public/js"]
 
-  :hooks [leiningen.cljsbuild]
+;  :hooks [leiningen.cljsbuild]
 
   ;:cljsbuild
   #_{:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
