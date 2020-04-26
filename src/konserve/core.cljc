@@ -1,6 +1,6 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
+  (:require [konserve.protocols :refer [-exists? -get-meta -get -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
@@ -9,12 +9,10 @@
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
                             [konserve.core :refer [go-locked]])))
 
-
 (defn- cljs-env?
   "Take the &env from a macro, and tell whether we are expanding into cljs."
   [env]
   (boolean (:ns env)))
-
 
 #?(:clj
    (defmacro if-cljs
@@ -50,10 +48,9 @@
                     (try
                       (<! l#)
                       ~@code
-                      (finally
+                       (finally
                         (put! l# :unlocked))))))]
        res)))
-
 
 (defn exists?
   "Checks whether value is in the store."
@@ -62,50 +59,80 @@
    store key
    (<! (-exists? store key))))
 
-(defn get-in
-  "Returns the value stored described by key-vec. Returns nil if the key-vec is
-   not present, or the not-found value if supplied."
-  ([store key-vec]
-   (get-in store key-vec nil))
-  ([store key-vec not-found]
-   (go-locked
-    store (first key-vec)
-    (let [a (<! (-get-in store [(first key-vec)]))]
-     (if (some? a)
-      (clojure.core/get-in a (rest key-vec))
-      not-found)))))
-
 (defn get
   "Returns the value stored described by key. Returns nil if the key
    is not present, or the not-found value if supplied."
   ([store key]
-   (get-in store [key]))
+   (get store key nil))
   ([store key not-found]
-   (get-in store [key] not-found)))
+   (go-locked
+    store key
+    (let [a (<! (-get store key))]
+      (if (some? a)
+        a 
+        not-found)))))
+
+(defn get-in
+  "Returns the value stored described by key. Returns nil if the key
+   is not present, or the not-found value if supplied."
+  ([store key-vec]
+   (get-in store key-vec nil))
+  ([store key-vec not-found]
+   (go-locked
+    store key-vec
+    (let [a (<! (-get store (first key-vec)))]
+      (if (some? a)
+        (clojure.core/get-in a (rest key-vec))
+        not-found)))))
+
+(defn get-meta
+  "Returns the value stored described by key. Returns nil if the key
+   is not present, or the not-found value if supplied."
+  ([store key]
+   (get-meta store key nil))
+  ([store key not-found]
+   (go-locked
+    store key
+    (let [a (<! (-get-meta store key))]
+      (if (some? a)
+        a
+        not-found)))))
+
+(defn meta-update
+  "Meta Data has following 'edn' format
+  {:key 'The stored key'
+   :type 'The type of the stored value binary or edn'
+   ::timestamp 'Java.util.Date.'}
+  Returns the meta value of the stored key-value tupel. Returns metadata if the key
+  value not exist, if it does it will update the timestamp to date now. "
+  [key type old]
+  (if (empty? old)
+    {:key key :type type ::timestamp (java.util.Date.)}
+    (clojure.core/assoc old ::timestamp (java.util.Date.))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key-vec fn & args]
+  [store key-vec up-fn & args]
   (go-locked
    store (first key-vec)
-   (<! (-update-in store key-vec fn args))))
+   (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn args))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key fn & args]
-  (apply update-in store [key] fn args))
+  [store key meta-up-fn fn & args]
+  (apply update-in store [key] meta-up-fn fn args))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
-  [store key-vec val]
+  [store key-vec val & args]
   (go-locked
    store (first key-vec)
-   (<! (-assoc-in store key-vec val))))
+   (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val))))
 
 (defn assoc
  "Associates the key-vec to the value, any missing collections for
@@ -120,40 +147,38 @@
    store key
    (<! (-dissoc store key))))
 
-
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
   This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
   [store key elem]
   (go-locked
    store key
-   (let [head (<! (-get-in store [key]))
+   (let [head (<! (-get store key))
          [append-log? last-id first-id] head
          new-elem {:next nil
                    :elem elem}
          id (uuid)]
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
-     (<! (-update-in store [id] (fn [_] new-elem)))
+     (<! (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) []))
      (when first-id
-       (<! (-update-in store [last-id :next] (fn [_] id))))
-     (<! (-update-in store [key] (fn [_] [:append-log id (or first-id id)])))
+       (<! (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) [])))
+     (<! (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) []))
      [first-id id])))
 
 (defn log
   "Loads the whole append log stored at "
   [store key]
   (go
-   (let [head (<! (get-in store [key]));; atomic read
+   (let [head (<! (get store key))
          [append-log? last-id first-id] head] 
-     ;; all other values are immutable:
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (when first-id
-       (loop [{:keys [next elem]} (<! (get-in store [first-id]))
+       (loop [{:keys [next elem]} (<! (get store first-id))
               hist []]
          (if next
-           (recur (<! (get-in store [next]))
+           (recur (<! (get store next))
                   (conj hist elem))
            (conj hist elem)))))))
 
@@ -161,20 +186,18 @@
   "Loads the whole append log stored at "
   [store key reduce-fn acc]
   (go
-   (let [head (<! (get-in store [key]));; atomic read
+   (let [head (<! (get store key))
          [append-log? last-id first-id] head] 
-     ;; all other values are immutable:
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
      (if first-id
        (loop [id first-id
               acc acc]
-         (let [{:keys [next elem]} (<! (get-in store [id]))]
+         (let [{:keys [next elem]} (<! (get store id))]
            (if (and next (not= id last-id))
              (recur next (reduce-fn acc elem))
              (reduce-fn acc elem))))
        acc))))
-
 
 (defn bget 
   "Calls locked-cb with a platform specific binary representation inside
@@ -194,211 +217,14 @@
    store key
    (<! (-bget store key locked-cb))))
 
-
 (defn bassoc 
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
   [store key val]
   (go-locked
    store key
-   (<! (-bassoc store key val))))
-
+   (<! (-bassoc store key (partial meta-update key :binary) val))))
 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
   ([store] (-keys store)))
-
-
-(comment
-  (require '[clojure.core.async :refer [<!! chan go] :as async])
-  ;; cljs
-  (go (def store (<! (new-indexeddb-store "konserve" #_(atom {'konserve.indexeddb.Test
-                                                               map->Test})))))
-
-
-
-
-  ;; clj
-  (require '[konserve.filestore :refer [new-fs-store list-keys delete-store]]
-           '[konserve.memory :refer [new-mem-store]]
-           '[clojure.core.async :refer [<!! >!! chan] :as async])
-
-  (def store (<!! (new-fs-store "/tmp/store")))
-
-  (doseq [i (range 1000)]
-    (<!! (update-in store [:foo] (fn [j] (if-not j i (+ j i))))))
-
-  (<!! (get-in store [:foo]))
-
-  (delete-store "/tmp/store")
-
-  (def store (<!! (new-mem-store)))
-
-  (<!! (list-keys store))
-
-  (<!! (get-lock store :foo))
-  (put! (get-lock store :foo) :unlocked)
-
-  (<!! (append store :foo :barss))
-  (<!! (log store :foo))
-  (<!! (get-in store [:foo]))
-  (<!! (get-in store []))
-
-  (let [numbers (doall (range 1024))]
-    (time
-     (doseq [i (range 1000)]
-       (<!! (assoc-in store [i] numbers)))))
-  ;; fs-store: ~7.2 secs on my old laptop
-  ;; mem-store: ~0.186 secs
-
-  (let [numbers (doall (range (* 1024 1024)))]
-    (time
-     (doseq [i (range 10)]
-       (<!! (assoc-in store [i] numbers)))))
-  ;; fs-store: ~46 secs, large files: 1 million ints each
-  ;; mem-store: ~0.003 secs
-
-
-  ;; check lock retaining:
-  (let [numbers (range (* 10 1024 1024))]
-    (assoc-in store [42] numbers))
-
-  (get-lock store 42)
-
-
-  (<!! (log store :bar))
-
-  (<!! (assoc-in store [{:nanofoo :bar}] :foo))
-
-  ;; investigate https://github.com/stuartsierra/parallel-async
-  (let [res (chan (async/sliding-buffer 1))
-        v (vec (range 5000))]
-    (time (->>  (range 5000)
-                (map #(assoc-in store [%] v))
-                async/merge
-                #_(async/pipeline-blocking 4 res identity))))
-                 ;; 38 secs
-  (go (println "2000" (<! (get-in store [2000]))))
-
-  (let [res (chan (async/sliding-buffer 1))
-        ba (byte-array (* 10 1024) (byte 42))]
-    (time (->>  (range 10000)
-                (map #(-bassoc store % ba))
-                async/merge
-                (async/pipeline-blocking 4 res identity)
-                #_(async/into [])
-                <!!))) ;; 19 secs
-
-
-  (let [v (vec (range 5000))]
-    (time (doseq [i (range 10000)]
-            (<!! (-assoc-in store [i] i))))) ;; 19 secs
-
-  (time (doseq [i (range 10000)]
-          (<!! (-get-in store [i])))) ;; 2706 msecs
-
-  (<!! (-get-in store [11]))
-
-  (<!! (-assoc-in store ["foo"] nil))
-  (<!! (-assoc-in store ["foo"] {:bar {:foo "baz"}}))
-  (<!! (-assoc-in store ["foo"] (into {} (map vec (partition 2 (range 1000))))))
-  (<!! (update-in store ["foo" :bar :foo] #(str % "foo")))
-  (type (<!! (get-in store ["foo"])))
-
-  (<!! (-assoc-in store ["baz"] #{1 2 3}))
-  (<!! (-assoc-in store ["baz"] (java.util.HashSet. #{1 2 3})))
-  (type (<!! (-get-in store ["baz"])))
-
-  (<!! (-assoc-in store ["bar"] (range 10)))
-  (.read (<!! (-bget store "bar" :input-stream)))
-  (<!! (-update-in store ["bar"] #(conj % 42)))
-  (type (<!! (-get-in store ["bar"])))
-
-  (<!! (-assoc-in store ["boz"] [(vec (range 10))]))
-  (<!! (-get-in store ["boz"]))
-
-
-
-  (<!! (-assoc-in store [:bar] 42))
-  (<!! (-update-in store [:bar] inc))
-  (<!! (-get-in store [:bar]))
-
-  (import [java.io ByteArrayInputStream ByteArrayOutputStream])
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))
-        is (io/input-stream ba)]
-    (time (<!! (-bassoc store "banana" is))))
-  (def foo (<!! (-bget store "banana" identity)))
-  (let [ba (ByteArrayOutputStream.)]
-    (io/copy (io/input-stream (:input-stream foo)) ba)
-    (alength (.toByteArray ba)))
-
-  (<!! (-assoc-in store ["monkey" :bar] (int-array (* 10 1024 1024) (int 42))))
-  (<!! (-get-in store ["monkey"]))
-
-  (<!! (-assoc-in store [:bar/foo] 42))
-
-  (defrecord Test [a])
-  (<!! (-assoc-in store [42] (Test. 5)))
-  (<!! (-get-in store [42]))
-
-
-
-  (assoc-in nil [] {:bar "baz"})
-
-
-
-
-
-  (defrecord Test [t])
-
-  (require '[clojure.java.io :as io])
-
-  (def fsstore (io/file "resources/fsstore-test"))
-
-  (.mkdir fsstore)
-
-  (require '[clojure.reflect :refer [reflect]])
-  (require '[clojure.pprint :refer [pprint]])
-  (require '[clojure.edn :as edn])
-
-  (import '[java.nio.channels FileLock]
-          '[java.nio ByteBuffer]
-          '[java.io RandomAccessFile PushbackReader])
-
-  (pprint (reflect fsstore))
-
-
-  (defn locked-access [f trans-fn]
-    (let [raf (RandomAccessFile. f "rw")
-          fc (.getChannel raf)
-          l (.lock fc)
-          res (trans-fn fc)]
-      (.release l)
-      res))
-
-
-  ;; doesn't really lock on quick linux check with outside access
-  (locked-access (io/file "/tmp/lock2")
-                 (fn [fc]
-                   (let [ba (byte-array 1024)
-                         bf (ByteBuffer/wrap ba)]
-                     (Thread/sleep (* 60 1000))
-                     (.read fc bf)
-                     (String. (java.util.Arrays/copyOf ba (.position bf))))))
-
-
-  (.createNewFile (io/file "/tmp/lock2"))
-  (.renameTo (io/file "/tmp/lock2") (io/file "/tmp/lock-test"))
-
-
-  (.start (Thread. (fn []
-                     (locking "foo"
-                       (println "locking foo and sleeping...")
-                       (Thread/sleep (* 60 1000))))))
-
-  (locking "foo"
-    (println "another lock on foo"))
-
-  (time (doseq [i (range 10000)]
-          (spit (str "/tmp/store/" i) (pr-str (range i))))))
-

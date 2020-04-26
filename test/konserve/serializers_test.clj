@@ -1,5 +1,5 @@
 (ns konserve.serializers-test
-  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!!]]
             [konserve.core :refer :all]
@@ -31,11 +31,7 @@
       (<!! (assoc-in store [:foo] (java.util.Date.)))
       (is (= (type (<!! (get-in store [:foo])))
              java.util.Date))
-      (is (= (<!! (list-keys store))
-             #{{:key :foo, :format :edn}}))
       (<!! (dissoc store :foo))
       (is (= (<!! (get-in store [:foo]))
              nil))
-      (is (= (<!! (list-keys store))
-             #{}))
       (delete-store folder))))

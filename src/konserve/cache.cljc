@@ -1,9 +1,10 @@
 (ns konserve.cache
   "Provides core functions, but with additional caching. Still subject to internal
   changes."
-  (:refer-clojure :exclude [get-in update-in assoc-in exists? dissoc])
-  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
+  (:refer-clojure :exclude [get update-in assoc-in exists? dissoc])
+  (:require [konserve.protocols :refer [-exists? -get -assoc-in
                                         -update-in -dissoc -bget -bassoc]]
+            [konserve.filestore :as fstore]
             #?(:clj [clojure.core.cache :as cache]
               :cljs [cljs.cache :as cache])
             [konserve.core :refer [get-lock]]
@@ -13,7 +14,6 @@
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
                            [konserve.core :refer [go-locked]])))
 
-
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32
   elements per default."
@@ -21,7 +21,6 @@
    (ensure-cache store (atom (cache/lru-cache-factory {} :threshold 32))))
   ([store cache]
    (assoc store :cache cache)))
-
 
 (defn exists?
   "Checks whether value is in the store."
@@ -44,20 +43,21 @@
          #_(prn "hitting cache")
          (swap! cache cache/hit fkey)
          (clojure.core/get-in v rkey))
-       (let [v (<! (-get-in store [fkey]))]
+       (let [v (<! (-get store fkey))]
          #_(prn "getting fkey" fkey)
          (swap! cache cache/miss fkey v)
          (clojure.core/get-in v rkey))))))
+
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key-vec fn & args]
+  [store key-vec fn-up & args]
   (go-locked
    store (first key-vec)
    (let [cache (:cache store)
-         [old new] (<! (-update-in store key-vec fn args))]
+         [old new] (<! (-update-in store key-vec (fn [old] old) fn-up args))]
      (swap! cache cache/evict (first key-vec))
      [old new])))
 
@@ -69,7 +69,7 @@
    store (first key-vec)
    (let [cache (:cache store)]
      (swap! cache cache/evict (first key-vec))
-     (<! (-assoc-in store key-vec val)))))
+     (<! (-assoc-in store key-vec (fn [old] old) val)))))
 
 (defn dissoc
   "Removes an entry from the store. "
@@ -79,6 +79,7 @@
    (let [cache (:cache store)]
      (swap! cache cache/evict key)
      (<! (-dissoc store key)))))
+
 
 
 
