@@ -10,7 +10,7 @@
                  [org.clojure/clojurescript "1.10.516" :scope "provided"]
                  [io.replikativ/incognito "0.2.5"]
                  [fress "0.3.1"]
-                 [org.clojure/core.async "0.4.490"]
+                 [org.clojure/core.async "1.1.587"]
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
                  [io.replikativ/hasch "0.3.5"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]]
@@ -27,8 +27,8 @@
 
   :hooks [leiningen.cljsbuild]
 
-  :cljsbuild
-  {:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
+  ;:cljsbuild
+  #_{:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
    :builds
    {:tests
     {:source-paths ["src" "test"]
