@@ -283,7 +283,7 @@ respective namespaces.
 There are experimental javascript bindings in the =konserve.js=
 namespace:
 
-#+BEGIN_EXAMPLE javascript
+#+BEGIN_SRC javascript
     goog.require("konserve.js");
 
     konserve.js.new_mem_store(function(s) { store = s; });
@@ -299,7 +299,7 @@ namespace:
                           ["foo"],
                           function(v) { return v+1; },
                           function(res) { console.log("Result:", res); });
-#+END_EXAMPLE
+#+END_SRC
 
 ** TODO
    :PROPERTIES:

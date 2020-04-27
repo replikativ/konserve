@@ -147,6 +147,17 @@ easiest solution is to spawn threads with =clojure.core.async/thread=, but
 ideally you should use asynchronous IO operations to provide maximum
 scalability.
 
+
+* Serializers
+  :PROPERTIES:
+  :CUSTOM_ID: h:8ac8b35c-9afd-4309-863a-5993b17841f7
+  :END:
+  
+Konserve provides the protocol =PStoreSerializer= with a =-serialize= and
+=-deserialize= method. You need to use these methods to serialize the edn
+values, as they are supposed to be configurable by the user. 
+
+
 * Migration 
   :PROPERTIES:
   :CUSTOM_ID: h:6cd7020b-f14d-4feb-96b3-1db67c5cb7cb
