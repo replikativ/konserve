@@ -1,0 +1,520 @@
+* konserve
+  :PROPERTIES:
+  :CUSTOM_ID: h:6f85a7f4-3694-4703-8c0b-ffcc34f2e5c9
+  :END:
+
+[[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
+
+A simple document store protocol defined with [[https://github.com/clojure/core.async][core.async]] semantics to allow
+Clojuresque collection operations on associative key-value stores, both from
+Clojure and ClojureScript for different backends. Data is generally serialized
+with [[https://github.com/edn-format/edn][edn]] semantics or, if supported, as native binary blobs and can be accessed
+similar to =clojure.core= functions =get-in=,=assoc-in= and =update-in=.
+=update-in= especially allows to run functions atomically and returns old and
+new value. Each operation is run atomically and must be consistent (in fact
+ACID), but further consistency is not supported (Riak, CouchDB and many scalable
+solutions don't have transactions over keys for that reason). This is meant to
+be a building block for more sophisticated storage solutions (Datomic also
+builds on kv-stores). An append-log for fast writes is also implemented.
+
+** Features
+   :PROPERTIES:
+   :CUSTOM_ID: h:115591f9-90d2-4c25-8499-6f53a8ae4bc6
+   :END:
+
+- /cross-platform/ between Clojure and ClojureScript (including node.js)
+- /lowest-common denominator interface/ for an associative datastructure
+  with =edn= semantics
+- /thread-safety with atomicity over key operations/
+- /consistent error handling/ for core.async
+- /fast serialization/ options (fressian, transit, ...), independent of
+  the underlying kv-store
+- /very low overhead/ protocol, including direct binary access for high
+  throughput
+- /no additional dependencies and setup/ required for IndexedDB in the
+  browser and the file backend on the JVM
+- /avoids blocking io/, the filestore for instance will not block any
+  thread on reading. Fully asynchronous support for writing and other
+  stores is in the pipeline.
+
+** Supported Backends
+   :PROPERTIES:
+   :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
+   :END:
+
+A file-system store in Clojure and [[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] for ClojureScript are provided as
+elementary reference implementations for the two most important platforms. No
+setup and no additional dependencies are needed.
+
+*** fs-store
+    :PROPERTIES:
+    :CUSTOM_ID: h:c88f8eb7-27b1-46ff-bc64-918dd1eb30bc
+    :END:
+
+The file-system store currently uses [[https://github.com/clojure/data.fressian][fressian]] in Clojure and [[https://github.com/pkpkpk/fress][fress]] in
+ClojureScript and is quite efficient. Both implementations use the same on-disk
+format and can load the same store (but not concurrently). It also allows to
+access values as a normal file-system file, e.g. to open it with a native
+database like HDF5 in Java. You can decide not to fsync on every write by a
+configuration of ={:fsync false}=, if a potential but unlikely data loss is not
+critical for you (e.g. for a session store).
+
+*** IndexedDB
+    :PROPERTIES:
+    :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
+    :END:
+
+For IndexedDB there is no internal JSON-representation of the underlying
+store like [[https://github.com/cognitect/transit-clj][transit]] yet,
+hence it is fairly slow for edn still. There is a JSON store protocol
+implemented for IndexedDB in case interoperability with a JavaScript
+application is wanted. Be careful not to confuse values with edn values,
+they are stored in separate locations and cannot clash.
+
+*** External Backends
+    :PROPERTIES:
+    :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
+    :END:
+
+- LevelDB:
+  [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
+- CouchDB:
+  [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
+- Redis:
+  [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
+- Riak:
+  [[https://github.com/replikativ/konserve-welle][konserve-welle]].
+- PostgreSQL: [[https://github.com/retro/konserve-pg][konserve-pg]].
+
+New storage backends, e.g. MongoDB, JDBC, WebSQL, Local-Storage are
+welcome.
+
+There is also a [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]] for the internal backends.
+
+** Projects building on konserve
+   :PROPERTIES:
+   :CUSTOM_ID: h:79876ac1-414b-4180-8d65-63737cb3bc53
+   :END:
+
+- The protocol is used in production and originates as an elementary
+  storage protocol for
+  [[https://github.com/replikativ/replikativ][replikativ]].
+- [[https://github.com/danielsz/kampbell][kampbell]] maps collections of
+  entities to konserve and enforces specs.
+
+** Benchmarks
+   :PROPERTIES:
+   :CUSTOM_ID: h:8079f55f-9f2a-47d3-8254-2a4fe0d894f8
+   :END:
+
+Due to its simplicity it is also fairly fast as it directly serializes
+Clojure, e.g. with fressian, to durable storage. The file-store is CPU
+bound atm. More detailed benchmarks are welcome :).
+
+#+BEGIN_SRC clojure
+      (let [numbers (doall (range 1024))]
+        (time
+         (doseq [i (range 1000)]
+           (<!! (assoc-in store [i] numbers)))))
+      ;; fs-store: ~7.2 secs on my old laptop
+      ;; mem-store: ~0.186 secs
+
+      (let [numbers (doall (range (* 1024 1024)))]
+        (time
+         (doseq [i (range 10)]
+           (<!! (assoc-in store [i] numbers)))))
+      ;; fs-store: ~46 secs, large files: 1 million ints each
+      ;; mem-store: ~0.003 secs
+#+END_SRC
+
+It is not necessarily fast depending on the usage pattern. The general
+idea is to write most values once (e.g. in form of index fragments) and
+only update one place once all data is written, similar to Clojure's
+persistent datastructures and balanced trees. To store values under
+non-conflicting keys, have a look at
+[[https://github.com/replikativ/hasch][hasch]].
+
+** Combined usage with other writers
+   :PROPERTIES:
+   :CUSTOM_ID: h:8a1b4a06-4b9f-496b-9eb2-52ac953a8e35
+   :END:
+
+konserve assumes currently that it accesses its keyspace in the store
+exclusively. It uses [[https://github.com/replikativ/hasch][hasch]] to
+support arbitrary edn keys and hence does not normally clash with
+outside usage even when the same keys are used. To support multiple
+konserve clients in the store the backend has to support locking and
+proper transactions on keys internally, which is the case for backends
+like CouchDB, Redis and Riak.
+
+** Serialization formats
+   :PROPERTIES:
+   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
+   :END:
+
+Different formats for =edn= serialization like
+[[https://github.com/clojure/data.fressian][fressian]],
+[[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a
+simple =pr-str= version are supported and can be combined with different
+stores. Stores have a reasonable default setting. You can also extend
+the serialization protocol to other formats if you need it. You can
+provide [[https://github.com/replikativ/incognito][incognito]] support
+for records, if you need them.
+
+*** Tagged Literals
+    :PROPERTIES:
+    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
+    :END:
+
+You can read and write custom records according to
+[[https://github.com/replikativ/incognito][incognito]].
+
+** Usage
+   :PROPERTIES:
+   :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
+   :END:
+
+Add to your leiningen dependencies:
+[[http://clojars.org/io.replikativ/konserve][[[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
+
+From a Clojure REPL run: ~~~clojure (ns test-db (:require
+[konserve.filestore :refer [new-fs-store]] [konserve.core :as k]
+[clojure.core.async :as async :refer [<!!]]))
+
+;; Note: We use the thread blocking operations <!! here only to
+synchronize ;; with the REPL. <!! is blocking IO and does not compose
+well with async ;; contexts, so prefer composing your application with
+go and <! instead.
+
+(def store (<!! (new-fs-store "/tmp/store")))
+
+(<!! (k/assoc-in store ["foo" :bar] {:foo "baz"})) (<!! (k/get-in store
+["foo"])) (<!! (k/exists? store "foo"))
+
+(<!! (k/assoc-in store [:bar] 42)) (<!! (k/update-in store [:bar] inc))
+(<!! (k/get-in store [:bar])) (<!! (k/dissoc store :bar))
+
+(<!! (k/append store :error-log {:type :horrible})) (<!! (k/log store
+:error-log))
+
+(let [ba (byte-array (* 10 1024 1024) (byte 42))] (time (<!! (k/bassoc
+store "banana" ba)))) (<!! (k/bget store "banana" (fn [{is
+:input-stream}] (go (your-read-does-all-work-here is))))) ~~~
+
+In a ClojureScript REPL you can evaluate the expressions from the REPL
+each wrapped in a go-block.
+
+For simple purposes a memory store wrapping an Atom is implemented as
+well: ~~~clojure (ns test-db (:require [konserve.memory :refer
+[new-mem-store]] [konserve.core :as k]))
+
+(go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
+(new-mem-store (atom {:foo 42}))))) ~~~
+
+In ClojureScript from a browser (you need IndexedDB available in your js
+env): ~~~clojure (ns test-db (:require [konserve.indexeddb :refer
+[new-indexeddb-store]]) (:require-macros [cljs.core.async.macros :refer
+[go go-loop]]))
+
+(go (def my-db (<! (new-indexeddb-store "konserve"))))
+
+(go (println "get:" (<! (k/get-in my-db ["test" :a]))))
+
+(go (doseq [i (range 10)] (<! (k/assoc-in my-db [i] i))))
+
+;; prints 0 to 9 each on a line (go (doseq [i (range 10)] (println (<!
+(k/get-in my-db [i])))))
+
+(go (println (<! (k/assoc-in my-db ["test"] {:a 1 :b 4.2}))))
+
+(go (println (<! (k/update-in my-db ["test" :a] inc)))) ;; => "test"
+contains {:a 2 :b 4.2} ~~~
+
+For non-REPL code execution you have to put all channel operations in
+one top-level go-block for them to be sychronized: ~~~clojure (ns
+test-db (:require [konserve.indexeddb :refer [new-indexeddb-store]])
+(:require-macros [cljs.core.async.macros :refer [go go-loop]]))
+
+(go (def my-db (<! (new-indexeddb-store "konserve")))
+
+#+BEGIN_EXAMPLE
+    (println "get:" (<! (k/get-in my-db ["test" :a])))
+
+    (doseq [i (range 10)]
+       (<! (k/assoc-in my-db [i] i))))
+#+END_EXAMPLE
+
+~~~
+
+For more examples have a look at the comment blocks at the end of the
+respective namespaces.
+
+** Backend implementation guide
+   :PROPERTIES:
+   :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
+   :END:
+   
+   We provide a [[file:doc/backend.org][backend implementation guide]] .
+   
+** JavaScript bindings
+   :PROPERTIES:
+   :CUSTOM_ID: h:05f3f415-afc2-4e11-a9f6-6e25519adb12
+   :END:
+
+There are experimental javascript bindings in the =konserve.js=
+namespace:
+
+#+BEGIN_EXAMPLE
+    goog.require("konserve.js");
+
+    konserve.js.new_mem_store(function(s) { store = s; });
+    # or
+    konserve.js.new_indexeddb_store("test_store", function(s) { store = s; })
+
+    konserve.js.exists(store, ["foo"], function(v) { console.log(v); });
+    konserve.js.assoc_in(store, ["foo"], 42, function(v) {});
+    konserve.js.get_in(store,
+                       ["foo"],
+                       function(v) { console.log(v); });
+    konserve.js.update_in(store,
+                          ["foo"],
+                          function(v) { return v+1; },
+                          function(res) { console.log("Result:", res); });
+#+END_EXAMPLE
+
+** TODO
+   :PROPERTIES:
+   :CUSTOM_ID: h:e35d9570-46e0-4750-8b98-cc3f27b19ac1
+   :END:
+
+- add stress tests with https://github.com/madthanu/alice (for
+  filestore)
+- implement https://github.com/maxogden/abstract-blob-store for cljs
+- verify proper directory fsync for filestore
+  http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
+- evaluate bytearrays for binary values
+- add transit cljs support (once it is declared stable)
+- more backends
+
+** Changelog
+   :PROPERTIES:
+   :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
+   :END:
+
+*** 0.6
+    :PROPERTIES:
+    :CUSTOM_ID: h:c5fec032-a11d-4e4c-a367-9b8990168a75
+    :END:
+
+- extend API to be more like Clojure's (thanks to @MrEbbinghaus)
+
+*** 0.5.1
+    :PROPERTIES:
+    :CUSTOM_ID: h:067c43cf-f940-4afa-87ea-730afc9bd5b4
+    :END:
+
+- fix nested value extraction in filestore, thanks to @csm
+
+*** 0.5
+    :PROPERTIES:
+    :CUSTOM_ID: h:044ec59d-7487-437c-8068-d7e0d927ad46
+    :END:
+
+- cljs fressian support
+- filestore for node.js
+
+*** 0.5-beta3
+    :PROPERTIES:
+    :CUSTOM_ID: h:5f3907ee-c8de-4d9e-b5ff-beef6d5bf21b
+    :END:
+
+- experimental caching support
+
+*** 0.5-beta1
+    :PROPERTIES:
+    :CUSTOM_ID: h:53cb7995-3421-4223-8af2-e26a704db27f
+    :END:
+
+- improved filestore with separate metadata storage
+- experimental clojure.core.cache support
+
+*** 0.4.12
+    :PROPERTIES:
+    :CUSTOM_ID: h:e826b646-e350-4fa5-832e-3f7d84491c25
+    :END:
+
+- fix exists for binary
+
+*** 0.4.11
+    :PROPERTIES:
+    :CUSTOM_ID: h:d6bc4403-163c-4f31-8622-5fc02d1d65f4
+    :END:
+
+- friendly printing of stores on JVM
+
+*** 0.4.9
+    :PROPERTIES:
+    :CUSTOM_ID: h:21be969e-b459-477e-bac3-a258bc04303c
+    :END:
+
+- fix a racecondition in the lock creation
+- do not drain the threadpool for the filestore
+
+*** 0.4.7
+    :PROPERTIES:
+    :CUSTOM_ID: h:eb0526f5-00cc-43eb-bb91-1d95132b6716
+    :END:
+
+- support distinct dissoc (not implicit key-removal on assoc-in store
+  key nil)
+
+*** 0.4.5
+    :PROPERTIES:
+    :CUSTOM_ID: h:5e770a0e-41b5-4003-a9c3-911fd7af94b7
+    :END:
+
+- bump deps
+
+*** 0.4.4
+    :PROPERTIES:
+    :CUSTOM_ID: h:901e16eb-9e4f-445c-9f0c-749353b041b0
+    :END:
+
+- make fsync configurable
+
+*** 0.4.3
+    :PROPERTIES:
+    :CUSTOM_ID: h:ab372258-4800-4c07-b752-974bc5ea14ae
+    :END:
+
+- remove full.async until binding issues are resolved
+
+*** 0.4.2
+    :PROPERTIES:
+    :CUSTOM_ID: h:d72f44e0-9b54-4278-b8ff-7451b0e1bb45
+    :END:
+
+- simplify and fix indexeddb
+- do clean locking with syntactic macro sugar
+
+*** 0.4.1
+    :PROPERTIES:
+    :CUSTOM_ID: h:762a1693-f9ac-4086-890d-f68cb2e7dd33
+    :END:
+
+- fix cljs support
+
+*** 0.4.0
+    :PROPERTIES:
+    :CUSTOM_ID: h:3a664ab1-1451-45dd-8d75-5eb1303f0214
+    :END:
+
+- store the key in the filestore and allow to iterate stored keys (not
+  binary atm.)
+- implement append functions to have high throughput append-only logs
+- use core.async based locking on top-level API for all stores
+- allow to delete a file-store
+
+*** 0.3.6
+    :PROPERTIES:
+    :CUSTOM_ID: h:fbb5cae9-d70a-4423-80c1-847f638adca4
+    :END:
+
+- experimental JavaScript bindings
+
+*** 0.3.4
+    :PROPERTIES:
+    :CUSTOM_ID: h:0cda9a27-5b55-4916-a149-2361c068832a
+    :END:
+
+- use fixed incognito version
+
+*** 0.3.0 - 0.3.2
+    :PROPERTIES:
+    :CUSTOM_ID: h:40ff4f34-a46d-48fb-9989-da44b42ba050
+    :END:
+
+- fix return value of assoc-in
+
+*** 0.3.0-beta3
+    :PROPERTIES:
+    :CUSTOM_ID: h:8be02dba-fad0-4184-8c33-0bffc6c3b667
+    :END:
+
+- Wrap protocols in proper Clojure functions in the core namespace.
+- Implement assoc-in in terms of update-in
+- Introduce serialiasation protocol with the help of incognito and
+  decouple stores
+
+*** 0.3.0-beta1
+    :PROPERTIES:
+    :CUSTOM_ID: h:96af0a03-1f58-4636-9e18-49b260552e8b
+    :END:
+
+- filestore: disable cache
+- factor out all tagged literal functions to incognito
+- use reader conditionals
+- bump deps
+
+*** 0.2.3
+    :PROPERTIES:
+    :CUSTOM_ID: h:7ef9fc3f-2372-4e7e-a2cb-3924ee3d65a4
+    :END:
+
+- filestore: flush output streams, fsync on fs operations
+- filestore can be considered beta quality
+- couchdb: add -exists?
+- couchdb: move to new project
+- remove logging and return ex-info exceptions in go channel
+
+*** 0.2.2
+    :PROPERTIES:
+    :CUSTOM_ID: h:57386ea1-e952-45fa-9bbe-8c6cdb1d5bdc
+    :END:
+
+- filestore: locking around java strings is a bad idea, use proper lock
+  objects
+- filestore: do io inside async/thread (like async's pipeline) to not
+  block the async threadpool
+- filestore: implement a naive cache (flushes once > 1000 values)
+- filestore, indexeddb: allow to safely custom deserialize
+  file-inputstream in transaction/lock
+- filestore, indexeddb, memstore: implement -exists?
+
+*** 0.2.1
+    :PROPERTIES:
+    :CUSTOM_ID: h:9a3e49e9-9dd0-474d-949e-eb8eb0a15b80
+    :END:
+
+- filestore: fix fressian collection types for clojure, expose
+  read-handlers/write-handlers
+- filestore: fix -update-in behaviour for nested values
+- filestore: fix rollback renaming order
+
+*** 0.2.0
+    :PROPERTIES:
+    :CUSTOM_ID: h:757b5af0-3262-4bb4-82ea-85aee87d77e1
+    :END:
+
+- experimental native ACID file-store for Clojure
+- native binary blob support for file-store, IndexedDB and mem-store
+
+** Contributors
+   :PROPERTIES:
+   :CUSTOM_ID: h:dd1ebb1a-2748-4f04-86f1-c2a5347ec9f8
+   :END:
+
+- Björn Ebbinghaus
+- Daniel Szmulewicz
+- Konrad Kühne
+- Christian Weilbach
+
+** License
+   :PROPERTIES:
+   :CUSTOM_ID: h:8153b6f6-d253-4863-86b4-038dd383b6fe
+   :END:
+
+Copyright © 2014-2019 Christian Weilbach and contributors
+
+Distributed under the Eclipse Public License either version 1.0 or (at
+your option) any later version.
