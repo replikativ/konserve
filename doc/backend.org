@@ -171,7 +171,7 @@ triggered on reads.
   :CUSTOM_ID: h:396555c3-d339-4061-9e52-ce6eda636b34
   :END:
    
-file:figures/state_machine.png
+[[file:./figures/state_machine.png]]
 
 The figure illustrates the different paths that are taken by read or update
 operations. =io-operation=, =read-file= and =update-file= are functions in the
