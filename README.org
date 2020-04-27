@@ -177,74 +177,93 @@ You can read and write custom records according to
 Add to your leiningen dependencies:
 [[http://clojars.org/io.replikativ/konserve][[[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
-From a Clojure REPL run: ~~~clojure (ns test-db (:require
-[konserve.filestore :refer [new-fs-store]] [konserve.core :as k]
-[clojure.core.async :as async :refer [<!!]]))
+From a Clojure REPL run: 
+#+BEGIN_SRC clojure 
+  (ns test-db
+    (:require [konserve.filestore :refer [new-fs-store]]
+              [konserve.core :as k]
+              [clojure.core.async :as async :refer [<!!]]))
 
-;; Note: We use the thread blocking operations <!! here only to
-synchronize ;; with the REPL. <!! is blocking IO and does not compose
-well with async ;; contexts, so prefer composing your application with
-go and <! instead.
+  ;; Note: We use the thread blocking operations <!! here only to synchronize
+  ;; with the REPL. <!! is blocking IO and does not compose well with async
+  ;; contexts, so prefer composing your application with go and <! instead.
 
-(def store (<!! (new-fs-store "/tmp/store")))
+  (def store (<!! (new-fs-store "/tmp/store")))
 
-(<!! (k/assoc-in store ["foo" :bar] {:foo "baz"})) (<!! (k/get-in store
-["foo"])) (<!! (k/exists? store "foo"))
+  (<!! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+  (<!! (k/get-in store ["foo"]))
+  (<!! (k/exists? store "foo"))
 
-(<!! (k/assoc-in store [:bar] 42)) (<!! (k/update-in store [:bar] inc))
-(<!! (k/get-in store [:bar])) (<!! (k/dissoc store :bar))
+  (<!! (k/assoc-in store [:bar] 42))
+  (<!! (k/update-in store [:bar] inc))
+  (<!! (k/get-in store [:bar]))
+  (<!! (k/dissoc store :bar))
 
-(<!! (k/append store :error-log {:type :horrible})) (<!! (k/log store
-:error-log))
+  (<!! (k/append store :error-log {:type :horrible}))
+  (<!! (k/log store :error-log))
 
-(let [ba (byte-array (* 10 1024 1024) (byte 42))] (time (<!! (k/bassoc
-store "banana" ba)))) (<!! (k/bget store "banana" (fn [{is
-:input-stream}] (go (your-read-does-all-work-here is))))) ~~~
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+    (time (<!! (k/bassoc store "banana" ba))))
+
+  (<!! (k/bget store "banana"
+              (fn [{is :input-stream}]
+                (go (your-read-does-all-work-here is)))))
+#+END_SRC
 
 In a ClojureScript REPL you can evaluate the expressions from the REPL
 each wrapped in a go-block.
 
 For simple purposes a memory store wrapping an Atom is implemented as
-well: ~~~clojure (ns test-db (:require [konserve.memory :refer
-[new-mem-store]] [konserve.core :as k]))
+well: 
 
-(go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
-(new-mem-store (atom {:foo 42}))))) ~~~
+#+BEGIN_SRC clojure 
+  (ns test-db
+    (:require [konserve.memory :refer [new-mem-store]]
+              [konserve.core :as k]))
+
+  (go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
+  (new-mem-store (atom {:foo 42}))))) 
+#+END_SRC
 
 In ClojureScript from a browser (you need IndexedDB available in your js
-env): ~~~clojure (ns test-db (:require [konserve.indexeddb :refer
-[new-indexeddb-store]]) (:require-macros [cljs.core.async.macros :refer
-[go go-loop]]))
+env): 
 
-(go (def my-db (<! (new-indexeddb-store "konserve"))))
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.indexeddb :refer [new-indexeddb-store]])
+    (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
-(go (println "get:" (<! (k/get-in my-db ["test" :a]))))
+  (go (def my-db (<! (new-indexeddb-store "konserve"))))
 
-(go (doseq [i (range 10)] (<! (k/assoc-in my-db [i] i))))
+  (go (println "get:" (<! (k/get-in my-db ["test" :a]))))
 
-;; prints 0 to 9 each on a line (go (doseq [i (range 10)] (println (<!
-(k/get-in my-db [i])))))
+  (go (doseq [i (range 10)] (<! (k/assoc-in my-db [i] i))))
 
-(go (println (<! (k/assoc-in my-db ["test"] {:a 1 :b 4.2}))))
+  ;; prints 0 to 9 each on a line
+  (go (doseq [i (range 10)] (println (<! (k/get-in my-db [i])))))
 
-(go (println (<! (k/update-in my-db ["test" :a] inc)))) ;; => "test"
-contains {:a 2 :b 4.2} ~~~
+  (go (println (<! (k/assoc-in my-db ["test"] {:a 1 :b 4.2}))))
 
-For non-REPL code execution you have to put all channel operations in
-one top-level go-block for them to be sychronized: ~~~clojure (ns
-test-db (:require [konserve.indexeddb :refer [new-indexeddb-store]])
-(:require-macros [cljs.core.async.macros :refer [go go-loop]]))
+  (go (println (<! (k/update-in my-db ["test" :a] inc))))
+  ;; => "test" contains {:a 2 :b 4.2}
+#+END_SRC
 
-(go (def my-db (<! (new-indexeddb-store "konserve")))
+For non-REPL code execution you have to put all channel operations in one
+top-level go-block for them to be synchronized:
 
-#+BEGIN_EXAMPLE
-    (println "get:" (<! (k/get-in my-db ["test" :a])))
+#+BEGIN_SRC clojure 
+  (ns test-db
+    (:require [konserve.indexeddb :refer [new-indexeddb-store]])
+    (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
-    (doseq [i (range 10)]
-       (<! (k/assoc-in my-db [i] i))))
-#+END_EXAMPLE
+  (go (def my-db (<! (new-indexeddb-store "konserve")))
 
-~~~
+      (println "get:" (<! (k/get-in my-db ["test" :a])))
+
+      (doseq [i (range 10)]
+         (<! (k/assoc-in my-db [i] i))))
+
+#+END_SRC
 
 For more examples have a look at the comment blocks at the end of the
 respective namespaces.
@@ -264,7 +283,7 @@ respective namespaces.
 There are experimental javascript bindings in the =konserve.js=
 namespace:
 
-#+BEGIN_EXAMPLE
+#+BEGIN_EXAMPLE javascript
     goog.require("konserve.js");
 
     konserve.js.new_mem_store(function(s) { store = s; });

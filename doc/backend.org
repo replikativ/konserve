@@ -136,6 +136,17 @@ All internal errors must be caught and returned as a throwable object on the
 return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
 in [[file:../src/konserve/utils.cljc][utils.cljc]].
 
+
+* Blocking IO 
+  :PROPERTIES:
+  :CUSTOM_ID: h:ca2e0658-daaa-4166-bd50-013fcb253d57
+  :END:
+  
+Be aware that you must not use blocking IO operations in go-routines. The
+easiest solution is to spawn threads with =clojure.core.async/thread=, but
+ideally you should use asynchronous IO operations to provide maximum
+scalability.
+
 * Migration 
   :PROPERTIES:
   :CUSTOM_ID: h:6cd7020b-f14d-4feb-96b3-1db67c5cb7cb
