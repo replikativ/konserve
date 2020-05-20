@@ -252,8 +252,7 @@
       (<? res-ch)
       (finally
         (.clear bb)))))
-                                        ;TODO here trigger for version or after?
-                                        ;TODO migrate namespace => automate migration
+
 (defn completion-read-meta-size-handler
   "Callback Function for io/operation. Return the Meta-size that are stored in the ByteBuffer."
   [res-ch ^ByteBuffer bb msg]
@@ -399,8 +398,7 @@
                         :input      (FileInputStream. data-file-name) #_(if input input )
                         :up-fn-meta (fn [_] {:key key :type format ::timestamp (java.util.Date.)})
                         :msg        {:type :write-binary-error 
-                                     :key  key}})
-               _ (prn  folder nil new-path serializer write-handlers buffer-size [key] env [nil nil] )]
+                                     :key  key}})]
             (<? (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))))
         (finally
           (Files/delete meta-path)
