@@ -1,13 +1,17 @@
-(ns konserve.gc)
+(ns konserve.gc
+  (:require [konserve.core :refer [dissoc keys]]
+            [konserve.utils :refer [go-try <? reduce<]]))
 
-(defn sweep!
-  "Walk all storage addresses from seq all-addresses, calling delete-fn on
-  each key that for which accept-fn returns true, AND is not contained
-  in the set addresses."
-  [addresses accept-fn all-addresses delete-fn]
-  (loop [addrs all-addresses]
-    (when-let [address (first addrs)]
-      (when (accept-fn address) 
-        (delete-fn address))
-      (recur (rest addrs)))))
 
+(defn sweep! [store whitelist ts]
+  (go-try
+      (<? (reduce<
+           (fn [deleted-files {:keys [key konserve.core/timestamp] :as meta}]
+             (go-try
+                 (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime timestamp)))
+                   deleted-files
+                   (do
+                     (<? (dissoc store key))
+                     (conj deleted-files key)))))
+           #{}
+           (<? (keys store))))))
