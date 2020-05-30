@@ -47,3 +47,15 @@
            (finally
              ~@finally))))))
 
+(defn reduce<
+  "Reduces over a sequence s with a go function go-f given the initial value
+  init."
+  [go-f init s]
+  (go-try
+      (loop [res init
+             [f & r] s]
+        (if f
+          (recur (<? (go-f res f)) r)
+          res))))
+
+
