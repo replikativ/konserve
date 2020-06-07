@@ -57,6 +57,10 @@
 
 (def version 1)
 
+(def compresson 1)
+
+(def encrypt 1)
+
 (defprotocol BlobToChannel
   (blob->channel [input buffer-size]))
 
@@ -156,23 +160,20 @@
           (.clear buffer)
           (.close bos)))))
 
-                                        ;TODO 1 Version 1 Compresson 1 Encrypt 1 Serializer 1 Metasize 4
-                                        ;TC GC als erstes und unit test
-;Make unit test
-
-(defn to-byte-array [version serializer meta]
+(defn to-byte-array
+  "Return 8 Byte Array with following content
+     1th Byte = Version of Konserve
+     2th Byte = Compression Type
+     3th Byte = Encrypt Type
+     4th Byte = Serializer Type
+   5-8th Byte = Meta-Size"
+  [version serializer meta]
   (let [int-bb           (ByteBuffer/allocate 4)
-        short-bb-v       (ByteBuffer/allocate 2)
-        short-bb-s       (ByteBuffer/allocate 2)
         _                (.putInt int-bb meta)
         meta-array       (.array int-bb)
-        _                (.putShort short-bb-v (short version))
-        version-array    (.array short-bb-v)
-        _                (.putShort short-bb-s (short serializer))
-        serializer-array (.array short-bb-s)
+        env-array        (byte-array [version compresson encrypt serializer])
         return-buffer    (ByteBuffer/allocate 8)
-        _                (.put return-buffer version-array)
-        _                (.put return-buffer serializer-array)
+        _                (.put return-buffer env-array)
         _                (.put return-buffer meta-array)
         return-array     (.array return-buffer)]
     (.clear return-buffer)
@@ -180,7 +181,7 @@
 
 (defn- update-file
   "Write File into Filesystem. It Write first the meta-size, that is stored in (1Byte), the meta-data and the actual data."
-  [folder config path serializer write-handlers buffer-size [key & rkey] {:keys [version file-name up-fn up-fn-args up-fn-meta type config operation input msg]} [old-meta old-value]]
+  [folder config path serializer write-handlers buffer-size [key & rkey] {:keys [compressor encryptor version file-name up-fn up-fn-args up-fn-meta config operation input msg]} [old-meta old-value]]
   (try
     (let [path-new             (Paths/get (str file-name ".new") (into-array String []))
           standard-open-option (into-array StandardOpenOption
@@ -197,7 +198,7 @@
           meta-size            (.size bos)
           _                    (.close bos)
           start-byte           (+ Long/BYTES meta-size)
-          serializer-id        22  #_(->> (type serializer) (get ser/class->serializer) (get ser/serializer->int))
+          serializer-id        (->> (type serializer) (get ser/class->serializer) (get ser/serializer->int))
           byte-array           (to-byte-array version serializer-id meta-size)]
       (go-try
         (<? (write-edn ac-new key serializer write-handlers 0 meta byte-array))
@@ -303,37 +304,6 @@
       (put! res-ch (ex-info "Could not read key."
                             (assoc msg :exception t))))))
 
-(defn- list-keys
-  "Return all Keys of the Filestore."
-  [folder serializer read-handlers]
-  (let [path       (Paths/get folder (into-array String []))
-        file-paths (Files/newDirectoryStream path)]
-    (->> (reduce
-          (fn [list-keys path]
-            (if (and (Files/exists path (into-array LinkOption [])) (clojure.string/includes? (.toString path) ".ksv"))
-              (let [ac        (AsynchronousFileChannel/open path (into-array StandardOpenOption [StandardOpenOption/READ]))
-                    bb        (ByteBuffer/allocate Integer/BYTES)
-                    path-name (.toString path)
-                    env       {:operation :read-meta
-                               :msg       {:type :read-meta-error
-                                           :path path-name}}
-                    res-ch    (chan)]
-                (into list-keys [(go-try
-                                     (.read ac bb Integer/BYTES Long/BYTES
-                                            (completion-read-meta-size-handler res-ch bb
-                                                                               {:type :read-list-keys
-                                                                                :path path-name}))
-                                   (<? (read-file ac serializer read-handlers env (<? res-ch)))
-                                   (finally
-                                     (.clear bb)
-                                     (.close ac)
-                                     (close! res-ch)))]))
-              list-keys))
-          (list)
-          file-paths)
-         async/merge
-         (async/into #{}))))
-
 (defn completion-read-old-handler [res-ch bb serializer read-handlers msg]
   (proxy [CompletionHandler] []
     (completed [res att]
@@ -346,7 +316,7 @@
             (ex-info "Could not read key."
                      (assoc msg :exception e))))))))
 
-(defn migrate-file-v1
+(defn- migrate-file-v1
   "Migration Function For Konserve Version, who has old file-schema."
   [folder key {:keys [version input up-fn detect-old-files operation msg]} buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
@@ -364,26 +334,32 @@
                  (completion-read-old-handler res-ch-data bb-data serializer read-handlers
                                               {:type :read-data-old-error
                                                :path data-path})))
-      (let [[_ data]   (when-not binary? (<? res-ch-data))
+      (let [[[nkey] data]   (if binary?
+                              [[key] true]
+                              (<? res-ch-data))
             [meta old] (if binary?
                          [{:key key :type :binary ::timestamp (java.util.Date.)}
                           {:operation :write-binary
                            :input     (if input input (FileInputStream. old-file-name))
                            :msg       {:type :write-binary-error
                                        :key  key}}]
-                         [{:key key :type :edn ::timestamp (java.util.Date.)}
+                         [{:key nkey :type :edn ::timestamp (java.util.Date.)}
                           {:operation :write-edn
-                           :up-fn     (if up-fn (up-fn data) (fn [] data))
+                           :up-fn     (if up-fn (up-fn data) (fn [_] data))
                            :msg       {:type :write-edn-error
                                        :key  key}}])
             env        (merge {:version    version
                                :file-name  new-file-name
                                :up-fn-meta (fn [_] meta)}
                               old)
-            return-value (fn [r] (do (Files/delete data-path) (swap! detect-old-files disj old-file-name) r))]
+            return-value (fn [r]
+                           (do
+                             (Files/delete data-path)
+                             (swap! detect-old-files disj old-file-name)
+                             r))]
         (if (contains? #{:write-binary :write-edn} operation)
-          (<? (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))
-          (let [[_ value] (<? (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))]
+          (<? (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))
+          (let [[_ value] (<? (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))]
             (if (= operation :read-meta)
               (return-value meta)
               (if (= operation :read-binary)
@@ -521,7 +497,8 @@
                                                             {:type :read-meta-size-error
                                                              :key  key}))
                 (let [[ser meta-size] (<? res-ch)
-                      old       (<? (read-file ac serializer read-handlers env meta-size))]
+                      old       (<? (read-file ac serializer read-handlers env meta-size))
+                      ]
                   (if (or (= :write-edn operation) (= :write-binary operation))
                     (<? (update-file folder config path serializer write-handlers buffer-size key-vec env old))
                     old))
@@ -560,25 +537,28 @@
                                     (.close ac)
                                     (close! res-ch)))))
               (let [file-name (-> path .toString)
-                    fn        (-> path .getFileName .toString)
-                    env       (update-in env [:msg :keys] file-name)]
+                    fn-l      (-> path .getFileName .toString)
+                    env       (update-in env [:msg :keys] (fn [_] file-name))
+                           ]
                 (if (clojure.string/includes? file-name "meta")
                   (into list-keys (map
-                                   #(let [old-file-name (-> path .toString)
-                                          fn            (-> path .getFileName .toString)
-                                          env           (update-in env [:msg :keys] old-file-name)]
-                                      (migrate-file-v2 folder fn env buffer-size old-file-name fn serializer read-handlers write-handlers))
+                                   #(let [old-file-name (-> % .toString)
+                                          fn            (-> % .getFileName .toString)
+                                          env           (assoc-in env [:msg :keys] old-file-name)]
+                                      (migrate-file-v2 folder fn-l env buffer-size old-file-name file-name serializer read-handlers write-handlers))
                                    (Files/newDirectoryStream (Paths/get file-name (into-array String [])))))
-                  (conj list-keys (migrate-file-v1 folder fn env buffer-size file-name fn serializer read-handlers write-handlers))))))
+                  (conj list-keys (migrate-file-v1 folder fn-l env buffer-size file-name file-name serializer read-handlers write-handlers))))))
           #{}
           file-paths)
          async/merge
          (async/into #{}))))
 
-(defrecord FileSystemStore [folder serializer read-handlers write-handlers buffer-size detect-old-version locks config]
+(defrecord FileSystemStore [folder serializer compressor encryptor read-handlers write-handlers buffer-size detect-old-version locks config]
   PEDNAsyncKeyValueStore
   (-get [this key]
     (io-operation [key] folder config serializer read-handlers write-handlers buffer-size {:operation :read-edn
+                                                                                           :compressor compressor
+                                                                                           :encryptor  encryptor
                                                                                            :format    :data
                                                                                            :version version
                                                                                            :detect-old-files detect-old-version
@@ -670,13 +650,13 @@
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path  & {:keys [serializer read-handlers write-handlers buffer-size config version detect-old-file-schema?]
-            :or   {serializer     (ser/fressian-serializer)
-                   read-handlers  (atom {})
-                   write-handlers (atom {})
-                   buffer-size    (* 1024 1024)
-                   config         {:fsync true}}}]
-  (let [detect-old-version (when detect-old-file-schema? (atom (detect-old-file-schema  "/tmp/konserve-fs-migration-test")))
+  [path & {:keys [serializer compressor encryptor read-handlers write-handlers buffer-size config version detect-old-file-schema?]
+           :or   {serializer     (ser/fressian-serializer)
+                  read-handlers  (atom {})
+                  write-handlers (atom {})
+                  buffer-size    (* 1024 1024)
+                  config         {:fsync true}}}]
+  (let [detect-old-version (when detect-old-file-schema? (atom (detect-old-file-schema path)))
         _                  (check-and-create-folder path)
         store              (map->FileSystemStore {:detect-old-version detect-old-version
                                                   :folder             path
@@ -689,6 +669,11 @@
     (go store)))
 
 (comment
+                                        ;compressor => function , encrpto => function
+
+  ;=> ser then compressoion then encrpt
+
+;=> TODO add compressor ns
 
   ;TODO list-keys => old-files + test => for migration
                                         ;TODO gc test => create own gc
@@ -706,7 +691,7 @@
 
                                         ; :100,120s/"erse"/"ersete"/g => va
   (do
-    (def store (<!! (new-fs-store "/tmp/konserve-fs-migration-test"))))
+    (def store (<!! (new-fs-store "/tmp/konserve-test"))))
 
                                   ;:serializer-map :fress :detect-old-file-schema? true))))
 
@@ -714,10 +699,6 @@
 
 
 
-;new idea
-  {:fressian (ser/fressian-serializer)}
-
-  (<!! (-assoc-in store ["lol2"] (fn [e] {:foo "foo"}) 1))
 
   (<!! (-assoc-in store ["foo4"] (fn [e] {:foo "foo4"}) 1))
 
