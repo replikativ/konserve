@@ -57,9 +57,9 @@
 
 (def version 1)
 
-(def compresson 1)
+(def compressor 1)
 
-(def encrypt 1)
+(def encryptor 1)
 
 (defprotocol BlobToChannel
   (blob->channel [input buffer-size]))
@@ -171,7 +171,7 @@
   (let [int-bb           (ByteBuffer/allocate 4)
         _                (.putInt int-bb meta)
         meta-array       (.array int-bb)
-        env-array        (byte-array [version compresson encrypt serializer])
+        env-array        (byte-array [version compressor encryptor serializer])
         return-buffer    (ByteBuffer/allocate 8)
         _                (.put return-buffer env-array)
         _                (.put return-buffer meta-array)
