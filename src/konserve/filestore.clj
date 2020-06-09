@@ -7,7 +7,7 @@
    [incognito.fressian :refer [incognito-read-handlers
                                incognito-write-handlers]]
    [konserve.protocols :refer [PEDNAsyncKeyValueStore
-                               -get -get-meta -get-version -update-in -dissoc -assoc-in
+                               -get -get-meta -update-in -dissoc -assoc-in
                                PBinaryAsyncKeyValueStore -bget -bassoc
                                -serialize -deserialize
                                PKeyIterable
@@ -570,7 +570,7 @@
                                                                                            :version version
                                                                                            :msg       {:type :read-meta-error
                                                                                                        :key  key}}))
-  (-get-version [this key]
+  #_(-get-version [this key]
     (io-operation [key] folder config serializer read-handlers write-handlers buffer-size {:operation :read-version
                                                                                            :detect-old-files detect-old-version
                                                                                            :version version
