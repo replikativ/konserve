@@ -5,7 +5,7 @@
             [konserve.core :refer :all]
             [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
-            [konserve.filestore :refer [new-fs-store delete-store list-keys]])
+            [konserve.filestore :refer [new-fs-store delete-store]])
   (:import [org.fressian.handlers WriteHandler ReadHandler]))
 
 (def custom-tag "java.util.Date")

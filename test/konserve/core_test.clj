@@ -42,8 +42,11 @@
                                  (go
                                    (is (= (map byte (slurp input-stream))
                                           (range 10)))))))
-      (is (= #{:baz :binbar}
-             (<!! (async/into #{} (keys store))))))))
+      (let  [{:keys [key type :konserve.core/timestamp]} (first (<!! (keys store)))]
+         (are [x y] (= x y)
+           (type (java.util.Date.)) (type timestamp)
+           true (contains? #{:foo :baz} key)
+           true (contains? #{:edn} type))))))
 
 (deftest append-store-test
   (testing "Test the append store functionality."
@@ -142,3 +145,5 @@
       (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (keys store))
                #{}))))))
+
+

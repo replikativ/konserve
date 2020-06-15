@@ -58,4 +58,7 @@
           (recur (<? (go-f res f)) r)
           res))))
 
+(defn invert-map [m]
+  (->> (map (fn [[k v]] [v k]) m)
+       (into {})))
 

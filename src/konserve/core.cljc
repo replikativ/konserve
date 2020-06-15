@@ -9,6 +9,9 @@
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
                             [konserve.core :refer [go-locked]])))
 
+(defn init []
+  )
+
 (defn- cljs-env?
   "Take the &env from a macro, and tell whether we are expanding into cljs."
   [env]
@@ -225,6 +228,7 @@
    store key
    (<! (-bassoc store key (partial meta-update key :binary) val))))
 
+;rename list-meta 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
   ([store] (-keys store)))

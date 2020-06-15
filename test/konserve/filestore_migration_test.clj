@@ -21,7 +21,7 @@
           ]
       (are [x y] (= x y)
         list-old-store #{[4] [7] [6] [9] [3] [8] [0] [5] [2] [1]}
-        list-keys-new  (range 0 10))))
+        list-keys-new  (range 0 10)))))
 
 #_(deftest old-filestore-v2
   (testing "edn migration"

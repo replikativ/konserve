@@ -64,7 +64,13 @@
 (defn string-serializer []
   (map->StringSerializer {}))
 
+(defn construct->class [m]
+  (->> (map (fn [[k v]] [(class v) k]) m)
+          (into {})))
 
+(def byte->serializer
+  {0 (string-serializer)
+   1 (fressian-serializer)})
 
-
-
+(def serializer-class->byte
+  (construct->class byte->serializer))

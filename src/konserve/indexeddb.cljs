@@ -229,7 +229,8 @@
       res))
 
 
-  (comment
+(comment
+    ;;new-gc
     ;; jack in figwheel cljs REPL
     (require 'figwheel-sidecar.repl-api)
     (figwheel-sidecar.repl-api/cljs-repl)
