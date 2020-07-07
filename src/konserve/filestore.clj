@@ -15,7 +15,7 @@
                                -keys
                                PStoreSerializer
                                -serialize -deserialize]]
-  [konserve.utils :refer [go-try <? throw-if-exception]]
+  [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! timeout chan go close! put!]])
   (:import
@@ -124,7 +124,7 @@
   (let [[bis read] (blob->channel input-stream buffer-size)
         buffer     (ByteBuffer/allocate buffer-size)
         stop       (+ buffer-size start)]
-    (go-try
+    (go-try-
         (loop [start-byte start
                stop-byte  stop]
           (let [size   (read bis buffer)
@@ -134,7 +134,7 @@
               (close! res-ch)
               (do (.write ac buffer start-byte stop-byte (completion-write-handler res-ch {:type :write-binary-error
                                                                                            :key  key}))
-                  (<? res-ch)
+                  (<?- res-ch)
                   (.clear buffer)
                   (recur (+ buffer-size start-byte) (+ buffer-size stop-byte))))))
         (finally
@@ -148,10 +148,10 @@
         _         (.write bos byte-array)
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
-    (go-try
+    (go-try-
      (.write ac-new buffer 0 8 (completion-write-handler result-ch {:type :write-edn-error
                                                                     :key  key}))
-     (<? result-ch)
+     (<?- result-ch)
      (finally
        (close! result-ch)
        (.clear buffer)
@@ -165,10 +165,10 @@
         stop-byte (.size bos)
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
-    (go-try
+    (go-try-
      (.write ac-new buffer start-byte stop-byte (completion-write-handler result-ch {:type :write-edn-error
                                                                                      :key  key}))
-     (<? result-ch)
+     (<?- result-ch)
      (finally
        (close! result-ch)
        (.clear buffer)
@@ -215,10 +215,10 @@
           serializer-id        (get serializer-class->byte (type (fressian-serializer)))
           compressor-id        (get compressor->byte compressor)
           byte-array           (to-byte-array version serializer-id compressor-id 1 meta-size)]
-      (go-try
-        (<? (write-header ac-new key byte-array))
-        (<? (write-edn ac-new key serializer compressor write-handlers 8 meta))
-        (<? (if (= operation :write-binary)
+      (go-try-
+        (<?- (write-header ac-new key byte-array))
+        (<?- (write-edn ac-new key serializer compressor write-handlers 8 meta))
+        (<?- (if (= operation :write-binary)
                 (write-binary input ac-new buffer-size key start-byte)
                 (write-edn ac-new key serializer compressor write-handlers start-byte value)))
           (.close ac-new)
@@ -289,11 +289,11 @@
                                                                                                         :start-byte (+ meta-size Long/BYTES)
                                                                                                         :stop-byte  file-size})
         res-ch                            (chan)]
-    (go-try
+    (go-try-
       (.read ac bb start-byte stop-byte
           (completion-read-handler res-ch bb meta-size file-size env
                                    (partial -deserialize (compressor serializer) read-handlers)))
-      (<? res-ch)
+      (<?- res-ch)
       (finally
         (.clear bb)))))
 
@@ -342,7 +342,7 @@
         size-data            (.size ac-data-file)
         bb-data              (when-not binary? (ByteBuffer/allocate size-data))
         res-ch-data          (chan)]
-    (go-try
+    (go-try-
         (when-not binary?
           (.read ac-data-file bb-data 0 size-data
                  (completion-read-old-handler res-ch-data bb-data serializer read-handlers
@@ -350,7 +350,7 @@
                                                :path data-path})))
       (let [[[nkey] data] (if binary?
                             [[key] true]
-                            (<? res-ch-data))
+                            (<?- res-ch-data))
             [meta old]    (if binary?
                             [{:key key :type :binary ::timestamp (java.util.Date.)}
                              {:operation :write-binary
@@ -372,8 +372,8 @@
                               (swap! detect-old-files disj old-file-name)
                               r))]
         (if (contains? #{:write-binary :write-edn} operation)
-          (<? (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))
-          (let [[_ value] (<? (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))]
+          (<?- (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))
+          (let [[_ value] (<?- (update-file folder nil new-path serializer write-handlers buffer-size [nkey] env [nil nil]))]
             (if (= operation :read-meta)
               (return-value meta)
               (if (= operation :read-binary)
@@ -382,11 +382,11 @@
                       start-byte 0
                       stop-byte  file-size
                       res-ch     (chan)]
-                  (go-try
+                  (go-try-
                       (.read ac-data-file bb start-byte stop-byte
                              (completion-read-handler res-ch bb nil file-size env
                                                       (partial -deserialize serializer read-handlers)))
-                    (<? res-ch)
+                    (<?- res-ch)
                     (finally
                       (close! res-ch)
                       (.clear bb))))
@@ -411,12 +411,12 @@
         bb-meta              (ByteBuffer/allocate size-meta)
         res-ch-data          (chan)
         res-ch-meta          (chan)]
-      (go-try
+      (go-try-
           (.read ac-meta-file bb-meta 0 size-meta
                  (completion-read-old-handler res-ch-meta bb-meta serializer read-handlers
                                               {:type :read-meta-old-error
                                                :path meta-path}))
-        (let [{:keys [format key]} (<? res-ch-meta)]
+        (let [{:keys [format key]} (<?- res-ch-meta)]
           (when (= :edn format)
             (let [size-data (.size ac-data-file)
                   bb-data   (ByteBuffer/allocate size-data)]
@@ -424,7 +424,7 @@
                      (completion-read-old-handler res-ch-data bb-data serializer read-handlers
                                                   {:type :read-data-old-error
                                                    :path data-path}))))
-          (let [data       (when-not (= :edn format) (<? res-ch-data))
+          (let [data       (when-not (= :edn format) (<?- res-ch-data))
                 [meta old] (if (= :binary format)
                              [{:key key :type :binary ::timestamp (java.util.Date.)}
                               {:operation :write-binary
@@ -442,8 +442,8 @@
                                   old)
                 return-value (fn [r] (do (Files/delete meta-path) (Files/delete data-path) (swap! detect-old-files disj old-file-name) r))]
             (if (contains? #{:write-binary :write-edn} operation)
-              (<? (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))
-              (let [[_ value] (<? (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))]
+              (<?- (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))
+              (let [[_ value] (<?- (update-file folder nil new-path serializer write-handlers buffer-size [key] env [nil nil]))]
                 (if (= operation :read-meta)
                   (return-value meta)
                   (if (= operation :read-binary)
@@ -452,11 +452,11 @@
                           start-byte 0
                           stop-byte  file-size
                           res-ch     (chan)]
-                      (go-try
+                      (go-try-
                           (.read ac-data-file bb start-byte stop-byte
                                  (completion-read-handler res-ch bb nil file-size env
                                                           (partial -deserialize serializer read-handlers)))
-                        (<? res-ch)
+                        (<?- res-ch)
                         (finally
                           (close! res-ch)
                           (.clear bb))))
@@ -505,24 +505,24 @@
             (let [header-size 8
                   bb          (ByteBuffer/allocate header-size)
                   res-ch      (chan)]
-              (go-try
+              (go-try-
                   (.read ac bb 0 header-size
                          (completion-read-header-handler res-ch bb
                                                          {:type :read-meta-size-error
                                                           :key  key}))
-                  (let [[serializer-id compressor-id meta-size] (<? res-ch)
+                  (let [[serializer-id compressor-id meta-size] (<?- res-ch)
                         serializer                              (byte->serializer serializer-id)
                         compressor                              (byte->compressor compressor-id)
-                        old                                     (<? (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size))]
+                        old                                     (<?- (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size))]
                     (if (or (= :write-edn operation) (= :write-binary operation))
-                      (<? (update-file folder config path serializer write-handlers buffer-size key-vec env old))
+                      (<?- (update-file folder config path serializer write-handlers buffer-size key-vec env old))
                       old))
                 (finally
                   (close! res-ch)
                   (.clear bb)
                   (.close ac))))
-            (go-try
-                (<? (update-file folder config path serializer write-handlers buffer-size key-vec env [nil nil]))
+            (go-try-
+                (<?- (update-file folder config path serializer write-handlers buffer-size key-vec env [nil nil]))
               (finally
                 (.close ac)))))
         (go nil)))))
@@ -541,15 +541,15 @@
                     path-name (.toString path)
                     env       (update-in env [:msg :keys] (fn [old] path-name))
                     res-ch    (chan)]
-                (conj list-keys (go-try
+                (conj list-keys (go-try-
                                     (.read ac bb 0 Long/BYTES
                                            (completion-read-header-handler res-ch bb
                                                                               {:type :read-list-keys
                                                                                :path path-name}))
-                                  (let [[serializer-id compressor-id meta-size] (<? res-ch)
+                                  (let [[serializer-id compressor-id meta-size] (<?- res-ch)
                                         serializer  (byte->serializer serializer-id)
                                         compressor  (byte->compressor compressor-id)]
-                                    (<? (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size)))
+                                    (<?- (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size)))
                                   (finally
                                     (.clear bb)
                                     (.close ac)

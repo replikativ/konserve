@@ -5,10 +5,10 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src"]
   :test-paths ["test"]
-  :dependencies [[org.clojure/clojure "1.10.0" :scope "provided"]
+  :dependencies [[org.clojure/clojure "1.10.1" :scope "provided"]
                  [io.replikativ/incognito "0.2.5"]
+                 [io.replikativ/superv.async "0.2.9-SNAPSHOT"]
                  [fress "0.3.1"]
-                 [org.clojure/core.async "1.1.587"]
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
                  [io.replikativ/hasch "0.3.5"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]

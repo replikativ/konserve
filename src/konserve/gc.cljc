@@ -1,17 +1,17 @@
 (ns konserve.gc
   (:require [konserve.core :refer [dissoc keys]]
-            [konserve.utils :refer [go-try <? reduce<]]))
-
+            [superv.async :refer [go-try- <?- reduce<?-]])
+  #?(:cljs (:require-macros [superv.async :refer [go-try- <?-]])))
 
 (defn sweep! [store whitelist ts]
-  (go-try
-      (<? (reduce<
+  (go-try-
+      (<?- (reduce<?-
            (fn [deleted-files {:keys [key konserve.core/timestamp] :as meta}]
-             (go-try
+             (go-try-
                  (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime timestamp)))
                    deleted-files
                    (do
-                     (<? (dissoc store key))
+                     (<?- (dissoc store key))
                      (conj deleted-files key)))))
            #{}
-           (<? (keys store))))))
+           (<?- (keys store))))))
