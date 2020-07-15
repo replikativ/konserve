@@ -9,9 +9,6 @@
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
                             [konserve.core :refer [go-locked]])))
 
-(defn init []
-  )
-
 (defn- cljs-env?
   "Take the &env from a macro, and tell whether we are expanding into cljs."
   [env]
