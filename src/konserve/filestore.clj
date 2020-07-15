@@ -12,7 +12,7 @@
                                PKeyIterable
                                -keys
                                -serialize -deserialize]]
-  [superv.async :refer [go-try- <?-]]
+   [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! chan go close! put!]])
   (:import
@@ -163,8 +163,9 @@
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
     (go-try-
-     (.write ac-new buffer start-byte stop-byte (completion-write-handler result-ch {:type :write-edn-error
-                                                                                     :key  key}))
+        (.write ac-new buffer start-byte stop-byte
+                (completion-write-handler result-ch {:type :write-edn-error
+                                                     :key  key}))
      (<?- result-ch)
      (finally
        (close! result-ch)
@@ -689,9 +690,11 @@
                   write-handlers (atom {})
                   buffer-size    (* 1024 1024)
                   config         {:fsync true}}}]
-  (let [detect-old-version (when detect-old-file-schema? (atom (detect-old-file-schema path)))
-        _                  (when-not (empty? @detect-old-version)
-                             (prn (str (count @detect-old-version) " old files detected. Migration is necessary.")))
+  (let [detect-old-version (when detect-old-file-schema?
+                             (atom (detect-old-file-schema path)))
+        _                  (when detect-old-file-schema?
+                             (when-not (empty? @detect-old-version)
+                               (prn (str (count @detect-old-version) " old files detected. Migration is necessary."))))
         _                  (check-and-create-folder path)
         store              (map->FileSystemStore {:detect-old-version detect-old-version
                                                   :folder             path
