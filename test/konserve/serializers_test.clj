@@ -25,7 +25,7 @@
   (testing "Test the custom fressian serializers functionality."
     (let [folder "/tmp/konserve-fs-serializers-test"
           _      (delete-store folder)
-          store  (<!! (new-fs-store folder :serializer (fressian-serializer custom-read-handler custom-write-handler)))]
+          store  (<!! (new-fs-store folder :serializers {:FressianSerializer (fressian-serializer custom-read-handler custom-write-handler)}))]
       (is (= (<!! (get-in store [:foo]))
              nil))
       (<!! (assoc-in store [:foo] (java.util.Date.)))

@@ -43,13 +43,13 @@
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v1")
           store     (<!! (old-store/new-fs-store-v1 "/tmp/konserve-fs-migration-test-v1"))
           _         (dotimes [x 10]
-                           (<!! (old-store/-bassoc store x (byte-array (range 10)))))
+                      (<!! (old-store/-bassoc store x (byte-array (range 10)))))
           new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v1" :detect-old-file-schema? true))
           _         (dotimes [x 10]
-                           (<!! (bget new-store x
-                                      (fn [{:keys [input-stream]}]
-                                        (go 
-                                          true)))))
+                      (<!! (bget new-store x
+                                 (fn [{:keys [input-stream]}]
+                                   (go 
+                                     true)))))
 
           list-keys (<!! (keys new-store))]
       (are [x y] (= x y)
@@ -68,13 +68,13 @@
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v1")
           store     (<!! (old-store/new-fs-store-v1 "/tmp/konserve-fs-migration-test-v1"))
           _         (dotimes [x 10]
-                           (<!! (old-store/-bassoc store x (byte-array (range 10)))))
+                      (<!! (old-store/-bassoc store x (byte-array (range 10)))))
           new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v1" :detect-old-file-schema? true))
           list-keys (<!! (keys new-store))]
       (are [x y] (= x y)
         #{{:type :stale-binary,
-            :msg
-            "Old binary file detected. Use bget insteat of keys for migration."}}
+           :msg
+           "Old binary file detected. Use bget insteat of keys for migration."}}
         (into #{} (map #(dissoc % :file-name) list-keys))))))
 
 (deftest old-filestore-v2
@@ -130,18 +130,18 @@
           {:key 8, :type :edn}}
         (into #{} (map #(dissoc % :konserve.filestore/timestamp) list-keys-new)))))
   (testing "binary migration single calls"
-      (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2")
-            store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2"))
-            _         (dotimes [x 10]
-                        (<!! (old-store/-bassoc store x (byte-array (range 10)))))
-            new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v2" :detect-old-file-schema? true))
-            _         (dotimes [x 10]
-                        (<!! (bget new-store x
-                                   (fn [{:keys [_]}]
-                                     (go 
-                                       true)))))
+    (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2")
+          store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2"))
+          _         (dotimes [x 10]
+                      (<!! (old-store/-bassoc store x (byte-array (range 10)))))
+          new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v2" :detect-old-file-schema? true))
+          _         (dotimes [x 10]
+                      (<!! (bget new-store x
+                                 (fn [{:keys [_]}]
+                                   (go 
+                                     true)))))
 
-            list-keys (<!! (keys new-store))]
+          list-keys (<!! (keys new-store))]
       (are [x y] (= x y)
         #{{:key 0, :type :binary}
           {:key 2, :type :binary}
@@ -155,12 +155,12 @@
           {:key 8, :type :binary}}
         (into #{} (map #(dissoc % :konserve.filestore/timestamp) list-keys)))))
   (testing "binary migration list-keys"
-      (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2")
-            store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2"))
-            _         (dotimes [x 10]
-                        (<!! (old-store/-bassoc store x (byte-array (range 10)))))
-            new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v2" :detect-old-file-schema? true))
-            list-keys (<!! (keys new-store))]
+    (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2")
+          store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2"))
+          _         (dotimes [x 10]
+                      (<!! (old-store/-bassoc store x (byte-array (range 10)))))
+          new-store (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v2" :detect-old-file-schema? true))
+          list-keys (<!! (keys new-store))]
       (are [x y] (= x y)
         #{{:key 0, :type :binary}
           {:key 2, :type :binary}

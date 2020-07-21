@@ -74,3 +74,17 @@
 
 (def serializer-class->byte
   (construct->class byte->serializer))
+
+(defn construct->keys [m]
+  (->> (map (fn [[k v]] [(-> v class .getSimpleName keyword) v]) m)
+       (into {})))
+
+(def key->serializer
+  (construct->keys byte->serializer))
+
+(defn construct->byte [m n]
+  (->> (map (fn [[k0 v0] [k1 v1]] [k0 k1]) m n)
+       (into {})))
+
+(def byte->key
+  (construct->byte byte->serializer key->serializer))

@@ -1,7 +1,7 @@
 (ns konserve.filestore
   (:require
    [clojure.java.io :as io]
-   [konserve.serializers :refer [byte->serializer serializer-class->byte fressian-serializer]]
+   [konserve.serializers :refer [byte->key byte->serializer serializer-class->byte key->serializer]]
    [konserve.compressor :refer [byte->compressor compressor->byte lz4-compressor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [includes?]]
@@ -209,7 +209,7 @@
         meta-size            (.size bos)
         _                    (.close bos)
         start-byte           (+ Long/BYTES meta-size)
-        serializer-id        (get serializer-class->byte (type (fressian-serializer)))
+        serializer-id        (get serializer-class->byte (type serializer))
         compressor-id        (get compressor->byte compressor)
         byte-array           (to-byte-array version serializer-id compressor-id 1 meta-size)]
       (go-try-
@@ -488,14 +488,15 @@
 
 (defn- io-operation
   "Read/Write File with AsynchronousFileChannel. For better understanding use Flow-Chart of Konserve."
-  [key-vec folder serializer read-handlers write-handlers buffer-size {:keys [detect-old-files operation] :as env}]
+  [key-vec folder serializers read-handlers write-handlers buffer-size {:keys [detect-old-files operation default-serializer] :as env}]
   (let [key           (first  key-vec)
         uuid-key      (uuid key)
         file-name     (str folder "/" uuid-key ".ksv")
         env           (assoc env :file-name file-name)
         path          (Paths/get file-name (into-array String []))
         file-exists?  (Files/exists path (into-array LinkOption []))
-        old-file-name (when detect-old-files (first (filter #(clojure.string/includes? % (str uuid-key)) @detect-old-files)))]
+        old-file-name (when detect-old-files (first (filter #(clojure.string/includes? % (str uuid-key)) @detect-old-files)))
+        serializer    (get serializers default-serializer)]
     (if (and old-file-name (not file-exists?))
       (if (clojure.string/includes? old-file-name "meta")
         (migrate-file-v2 folder env buffer-size old-file-name file-name serializer read-handlers write-handlers)
@@ -516,10 +517,8 @@
                                                          {:type :read-meta-size-error
                                                           :key  key}))
                   (let [[serializer-id compressor-id meta-size] (<?- res-ch)
-                        ser                              (byte->serializer serializer-id)
-                        serializer                       (if (= (type ser) (type serializer))
-                                                           serializer
-                                                           ser)
+                        serializer-key                          (byte->key serializer-id)
+                        serializer                              (get serializers serializer-key)
                         compressor                              (byte->compressor compressor-id)
                         old                                     (<?- (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size))]
                     (if (or (= :write-edn operation) (= :write-binary operation))
@@ -537,8 +536,9 @@
 
 (defn- list-keys
   "Return all Keys of the Filestore."
-  [folder serializer read-handlers write-handlers buffer-size env]
+  [folder serializers read-handlers write-handlers buffer-size env]
   (let [path       (Paths/get folder (into-array String []))
+        serializer (get serializers (:default-serializer env))
         file-paths (Files/newDirectoryStream path)]
     (->> (reduce
           (fn [list-keys path]
@@ -555,7 +555,8 @@
                                                                            {:type :read-list-keys
                                                                             :path path-name}))
                                   (let [[serializer-id compressor-id meta-size] (<?- res-ch)
-                                        serializer                              (byte->serializer serializer-id)
+                                        serializer-key                          (byte->key serializer-id)
+                                        serializer                              (get serializers serializer-key)
                                         compressor                              (byte->compressor compressor-id)]
                                     (<?- (read-file ac serializer read-handlers (assoc env :compressor compressor) meta-size)))
                                   (finally
@@ -584,67 +585,73 @@
          async/merge
          (async/into #{}))))
 
-(defrecord FileSystemStore [folder serializer compressor encryptor read-handlers write-handlers buffer-size detect-old-version locks config]
+(defrecord FileSystemStore [folder serializers default-serializer compressor encryptor read-handlers write-handlers buffer-size detect-old-version locks config]
   PEDNAsyncKeyValueStore
   (-get [this key]
-    (io-operation [key] folder serializer read-handlers write-handlers buffer-size {:operation :read-edn
-                                                                                    :compressor compressor
-                                                                                    :format    :data
-                                                                                    :version version
-                                                                                    :detect-old-files detect-old-version
-                                                                                    :msg       {:type :read-edn-error
-                                                                                                :key  key}}))
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation :read-edn
+                                                                                     :compressor compressor
+                                                                                     :format    :data
+                                                                                     :version version
+                                                                                     :default-serializer default-serializer
+                                                                                     :detect-old-files detect-old-version
+                                                                                     :msg       {:type :read-edn-error
+                                                                                                 :key  key}}))
   (-get-meta [this key]
-    (io-operation [key] folder serializer read-handlers write-handlers buffer-size {:operation :read-meta
-                                                                                    :compressor compressor
-                                                                                    :detect-old-files detect-old-version
-                                                                                    :version version
-                                                                                    :msg       {:type :read-meta-error
-                                                                                                :key  key}}))
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation :read-meta
+                                                                                     :compressor compressor
+                                                                                     :detect-old-files detect-old-version
+                                                                                     :default-serializer default-serializer
+                                                                                     :version version
+                                                                                     :msg       {:type :read-meta-error
+                                                                                                 :key  key}}))
 
   (-assoc-in [this key-vec meta-up val] (-update-in this key-vec meta-up (fn [_] val) []))
 
   (-update-in [this key-vec meta-up up-fn args]
-    (io-operation key-vec folder serializer read-handlers write-handlers buffer-size {:operation  :write-edn
-                                                                                      :compressor compressor
-                                                                                      :detect-old-files detect-old-version
-                                                                                      :version version
-                                                                                      :up-fn      up-fn
-                                                                                      :up-fn-args args
-                                                                                      :up-fn-meta meta-up
-                                                                                      :config     config
-                                                                                      :msg        {:type :write-edn-error
-                                                                                                   :key  (first key-vec)}}))
+    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size {:operation  :write-edn
+                                                                                       :compressor compressor
+                                                                                       :detect-old-files detect-old-version
+                                                                                       :version version
+                                                                                       :default-serializer default-serializer
+                                                                                       :up-fn      up-fn
+                                                                                       :up-fn-args args
+                                                                                       :up-fn-meta meta-up
+                                                                                       :config     config
+                                                                                       :msg        {:type :write-edn-error
+                                                                                                    :key  (first key-vec)}}))
   (-dissoc [this key]
     (delete-file key folder))
   PBinaryAsyncKeyValueStore
   (-bget [this key locked-cb]
-    (io-operation [key] folder serializer read-handlers write-handlers buffer-size {:operation :read-binary
-                                                                                    :detect-old-files detect-old-version
-                                                                                    :compressor compressor
-                                                                                    :config    config
-                                                                                    :version version
-                                                                                    :locked-cb locked-cb
-                                                                                    :msg       {:type :read-binary-error
-                                                                                                :key  key}}))
-  (-bassoc [this key meta-up input]
-    (io-operation [key] folder serializer read-handlers write-handlers buffer-size {:operation  :write-binary
-                                                                                    :detect-old-files detect-old-version
-                                                                                    :compressor compressor
-                                                                                    :input      input
-                                                                                    :version version
-                                                                                    :up-fn-meta meta-up
-                                                                                    :config     config
-                                                                                    :msg        {:type :write-binary-error
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation :read-binary
+                                                                                     :detect-old-files detect-old-version
+                                                                                     :default-serializer default-serializer
+                                                                                     :compressor compressor
+                                                                                     :config    config
+                                                                                     :version version
+                                                                                     :locked-cb locked-cb
+                                                                                     :msg       {:type :read-binary-error
                                                                                                  :key  key}}))
+  (-bassoc [this key meta-up input]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation  :write-binary
+                                                                                     :detect-old-files detect-old-version
+                                                                                     :default-serializer default-serializer
+                                                                                     :compressor compressor
+                                                                                     :input      input
+                                                                                     :version version
+                                                                                     :up-fn-meta meta-up
+                                                                                     :config     config
+                                                                                     :msg        {:type :write-binary-error
+                                                                                                  :key  key}}))
   PKeyIterable
   (-keys [this]
-    (list-keys folder serializer read-handlers write-handlers buffer-size {:operation :read-meta
-                                                                           :detect-old-files detect-old-version
-                                                                           :version version
-                                                                           :compressor compressor
-                                                                           :config config
-                                                                           :msg {:type :read-all-keys-error}})))
+    (list-keys folder serializers read-handlers write-handlers buffer-size {:operation :read-meta
+                                                                            :default-serializer default-serializer
+                                                                            :detect-old-files detect-old-version
+                                                                            :version version
+                                                                            :compressor compressor
+                                                                            :config config
+                                                                            :msg {:type :read-all-keys-error}})))
 
 (defn- check-and-create-folder
   "Helper Function to Check if Folder is not writable"
@@ -681,13 +688,13 @@
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path & {:keys [serializer compressor read-handlers write-handlers buffer-size config detect-old-file-schema?]
-           :or   {serializer     (fressian-serializer)
-                  compressor     lz4-compressor
-                  read-handlers  (atom {})
-                  write-handlers (atom {})
-                  buffer-size    (* 1024 1024)
-                  config         {:fsync true}}}]
+  [path & {:keys [default-serializer serializers compressor read-handlers write-handlers buffer-size config detect-old-file-schema?]
+           :or   {default-serializer :FressianSerializer
+                  compressor         lz4-compressor
+                  read-handlers      (atom {})
+                  write-handlers     (atom {})
+                  buffer-size        (* 1024 1024)
+                  config             {:fsync true}}}]
   (let [detect-old-version (when detect-old-file-schema?
                              (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
@@ -696,7 +703,8 @@
         _                  (check-and-create-folder path)
         store              (map->FileSystemStore {:detect-old-version detect-old-version
                                                   :folder             path
-                                                  :serializer         serializer
+                                                  :default-serializer default-serializer
+                                                  :serializers        (merge key->serializer serializers)
                                                   :compressor         compressor
                                                   :read-handlers      read-handlers
                                                   :write-handlers     write-handlers
