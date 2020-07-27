@@ -7,7 +7,51 @@
             [konserve.filestore :refer [new-fs-store delete-store]]
             [clojure.java.io :as io]))
 
+(defn compliance-test [store]
+  (testing "Test the core API."
+    (let [store (<!! store)]
+      (is (= (<!! (get store :foo))
+             nil))
+      (<!! (assoc store :foo :bar))
+      (is (= (<!! (get store :foo))
+             :bar))
+      (<!! (assoc-in store [:foo] :bar2))
+      (is (= :bar2 (<!! (get store :foo))))
+      (is (= :default
+             (<!! (get-in store [:fuu] :default))))
+      (is (= :bar2 (<!! (get store :foo))))
+      (is (= :default
+             (<!! (get-in store [:fuu] :default))))
+      (<!! (update-in store [:foo] name))
+      (is (= "bar2"
+             (<!! (get store :foo))))
+      (<!! (assoc-in store [:baz] {:bar 42}))
+      (is (= (<!! (get-in store [:baz :bar]))
+             42))
+      (<!! (update-in store [:baz :bar] inc))
+      (is (= (<!! (get-in store [:baz :bar]))
+             43))
+      (<!! (update-in store [:baz :bar] + 2 3))
+      (is (= (<!! (get-in store [:baz :bar]))
+             48))
+      (<!! (dissoc store :foo))
+      (is (= (<!! (get-in store [:foo]))
+             nil))
+      (<!! (bassoc store :binbar (byte-array (range 10))))
+      (<!! (bget store :binbar (fn [{:keys [input-stream]}]
+                                 (go
+                                   (is (= (map byte (slurp input-stream))
+                                          (range 10)))))))
+      (let  [{:keys [key type :konserve.core/timestamp]} (first (<!! (keys store)))]
+         (are [x y] (= x y)
+           (type (java.util.Date.)) (type timestamp)
+           true (contains? #{:foo :baz} key)
+           true (contains? #{:edn} type))))))
+
 (deftest memory-store-test
+  (compliance-test (new-mem-store)))
+
+(deftest memory-store-test  
   (testing "Test the core API."
     (let [store (<!! (new-mem-store))]
       (is (= (<!! (get store :foo))
