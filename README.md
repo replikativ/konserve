@@ -1,8 +1,15 @@
 # konserve
 
+<p align="center">
+<a href="https://clojars.org/replikativ/konserve"> <img src="https://img.shields.io/clojars/v/replikativ/konserve.svg" /></a>
+<a href="https://circleci.com/gh/replikativ/konserve"><img src="https://circleci.com/gh/replikativ/konserve.svg?style=shield"/></a>
+<a href="https://versions.deps.co/replikativ/konserve" title="Dependencies Status"><img src="https://versions.deps.co/replikativ/konserve/status.svg" /></a>
+</p>
+
+
 [*Simple durability, made flexible.*](https://whilo.github.io/articles/16/unified-storage-io)
 
-A simple document store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. `update-in` especially allows to run functions atomically and returns old and new value. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores). An append-log for fast writes is also implemented. 
+A simple document store protocol defined with [core.async](https://github.com/clojure/core.async) semantics to allow Clojuresque collection operations on associative key-value stores, both from Clojure and ClojureScript for different backends. Data is generally serialized with [edn](https://github.com/edn-format/edn) semantics or, if supported, as native binary blobs and can be accessed similar to `clojure.core` functions `get-in`,`assoc-in` and `update-in`. `update-in` especially allows to run functions atomically and returns old and new value. Each operation is run atomically and must be consistent (in fact ACID), but further consistency is not supported (Riak, CouchDB and many scalable solutions don't have transactions over keys for that reason). This is meant to be a building block for more sophisticated storage solutions (Datomic also builds on kv-stores). An append-log for fast writes is also implemented.
 
 ## Features
 - *cross-platform* between Clojure and ClojureScript (including node.js)
@@ -65,12 +72,12 @@ Due to its simplicity it is also fairly fast as it directly serializes Clojure, 
   ;; mem-store: ~0.003 secs
 ~~~
 
-It is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures and balanced trees. To store values under non-conflicting keys, have a look at [hasch](https://github.com/replikativ/hasch). 
+It is not necessarily fast depending on the usage pattern. The general idea is to write most values once (e.g. in form of index fragments) and only update one place once all data is written, similar to Clojure's persistent datastructures and balanced trees. To store values under non-conflicting keys, have a look at [hasch](https://github.com/replikativ/hasch).
 
 
 ## Combined usage with other writers
 
-konserve assumes currently that it accesses its keyspace in the store exclusively. It uses [hasch](https://github.com/replikativ/hasch) to support arbitrary edn keys and hence does not normally clash with outside usage even when the same keys are used. To support multiple konserve clients in the store the backend has to support locking and proper transactions on keys internally, which is the case for backends like CouchDB, Redis and Riak. 
+konserve assumes currently that it accesses its keyspace in the store exclusively. It uses [hasch](https://github.com/replikativ/hasch) to support arbitrary edn keys and hence does not normally clash with outside usage even when the same keys are used. To support multiple konserve clients in the store the backend has to support locking and proper transactions on keys internally, which is the case for backends like CouchDB, Redis and Riak.
 
 
 ## Serialization formats
@@ -93,11 +100,11 @@ From a Clojure REPL run:
     (:require [konserve.filestore :refer [new-fs-store]]
               [konserve.core :as k]
               [clojure.core.async :as async :refer [<!!]]))
-              
-              
+
+
 ;; Note: We use the thread blocking operations <!! here only to synchronize
-;; with the REPL. <!! is blocking IO and does not compose well with async 
-;; contexts, so prefer composing your application with go and <! instead. 
+;; with the REPL. <!! is blocking IO and does not compose well with async
+;; contexts, so prefer composing your application with go and <! instead.
 
 (def store (<!! (new-fs-store "/tmp/store")))
 
@@ -193,10 +200,17 @@ konserve.js.update_in(store,
                       function(res) { console.log("Result:", res); });
 ~~~
 
+## Release
+Konserve follows the replikativ release workflow. Commits on the branch development trigger a
+test/build/release-pipeline on CircleCI and deploy a SNAPSHOT to Clojars. Commits on master
+trigger a test/build/release-pipeline on CircleCI and deploy a release to Clojars.
+
+More details are [written down in the Datahike repository](https://github.com/replikativ/datahike/blob/development/doc/release.md).
+
 ## TODO
 - add stress tests with https://github.com/madthanu/alice (for filestore)
 - implement https://github.com/maxogden/abstract-blob-store for cljs
-- verify proper directory fsync for filestore 
+- verify proper directory fsync for filestore
   http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
