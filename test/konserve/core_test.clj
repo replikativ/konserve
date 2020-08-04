@@ -8,7 +8,7 @@
             [konserve.filestore :refer [new-fs-store delete-store]]
             [clojure.java.io :as io]))
 
-(deftest memory-store-test
+#_(deftest memory-store-compliance-test
   (compliance-test (new-mem-store)))
 
 (deftest memory-store-test  

@@ -59,19 +59,6 @@
    store key
    (<! (-exists? store key))))
 
-(defn get
-  "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
-  ([store key]
-   (get store key nil))
-  ([store key not-found]
-   (go-locked
-    store key
-    (let [a (<! (-get store key))]
-      (if (some? a)
-        a 
-        not-found)))))
-
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
    is not present, or the not-found value if supplied."
@@ -84,6 +71,14 @@
       (if (some? a)
         (clojure.core/get-in a (rest key-vec))
         not-found)))))
+
+(defn get
+  "Returns the value stored described by key. Returns nil if the key
+   is not present, or the not-found value if supplied."
+  ([store key]
+   (get store key nil))
+  ([store key not-found]
+   (get-in store [key] not-found)))
 
 (defn get-meta
   "Returns the value stored described by key. Returns nil if the key

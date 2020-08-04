@@ -237,7 +237,9 @@
           (:read-edn :read-meta) (let [bais-read (ByteArrayInputStream. (.array bb))
                                        value     (fn-read bais-read)
                                        _         (.close bais-read)]
-                                   (put! res-ch value))
+                                   (when value
+                                     (put! res-ch value))
+                                   (close! res-ch))
           :write-binary          (let [bais-read (ByteArrayInputStream. (.array bb))
                                        value     (fn-read bais-read)
                                        _         (.close bais-read)]
