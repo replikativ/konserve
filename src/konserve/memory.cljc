@@ -49,7 +49,7 @@
         nil))
   PKeyIterable
   (-keys [_]
-    (go (mapv first (vals @state)))))
+    (go (set (map first (vals @state))))))
 
 #?(:clj
    (defmethod print-method MemoryStore

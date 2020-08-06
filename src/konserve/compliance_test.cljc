@@ -39,8 +39,17 @@
                                (go
                                  (is (= (map byte (slurp input-stream))
                                         (range 10)))))))
-    (let  [{:keys [key type :konserve.core/timestamp]} (first (<!! (keys store)))]
+    (let  [list-keys (<!! (keys store))]
       (are [x y] (= x y)
-        (type (java.util.Date.)) (type timestamp)
-        true                     (contains? #{:foo :baz} key)
-        true                     (contains? #{:edn} type)))))
+        #{{:key :baz,
+           :type :edn}
+          {:key :binbar,
+           :type :binary}}
+        (->> list-keys (map #(clojure.core/dissoc % :konserve.core/timestamp)) set)
+        true
+        (every?
+         (fn [{:keys [:konserve.core/timestamp]}]
+           (= (type (java.util.Date.)) (type timestamp)))
+         list-keys)))))
+
+
