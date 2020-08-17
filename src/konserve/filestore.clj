@@ -3,8 +3,9 @@
    [clojure.java.io :as io]
    [konserve.serializers :refer [byte->key byte->serializer serializer-class->byte key->serializer]]
    [konserve.compressor :refer [byte->compressor compressor->byte lz4-compressor]]
+   [konserve.encryptor :refer [encryptor->byte byte->encryptor null-encryptor]]
    [hasch.core :refer [uuid]]
-   [clojure.string :refer [includes?]]
+   [clojure.string :refer [includes? ends-with?]]
    [konserve.protocols :refer [PEDNAsyncKeyValueStore
                                -get -get-meta -update-in -dissoc -assoc-in
                                PBinaryAsyncKeyValueStore -bget -bassoc
@@ -12,6 +13,7 @@
                                PKeyIterable
                                -keys
                                -serialize -deserialize]]
+   [konserve.storage-layout :refer [Layout1 -get-raw]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! chan go close! put!]])
@@ -193,7 +195,8 @@
 
 (defn- update-file
   "Write File into Filesystem. It Write first the meta-size, that is stored in (1Byte), the meta-data and the actual data."
-  [folder path serializer write-handlers buffer-size [key & rkey] {:keys [compressor version file-name up-fn up-fn-args up-fn-meta config operation input]} [old-meta old-value]]
+  [folder path serializer write-handlers buffer-size [key & rkey] {:keys [compressor encryptor version file-name up-fn up-fn-args
+                                                                          up-fn-meta config operation input]} [old-meta old-value]]
   (let [path-new             (Paths/get (str file-name ".new") (into-array String []))
         standard-open-option (into-array StandardOpenOption
                                          [StandardOpenOption/WRITE
@@ -211,7 +214,8 @@
         start-byte           (+ Long/BYTES meta-size)
         serializer-id        (get serializer-class->byte (type serializer))
         compressor-id        (get compressor->byte compressor)
-        byte-array           (to-byte-array version serializer-id compressor-id 1 meta-size)]
+        encryptor-id         (get encryptor->byte encryptor)
+        byte-array           (to-byte-array version serializer-id compressor-id encryptor-id meta-size)]
       (go-try-
         (<?- (write-header ac-new key byte-array))
         (<?- (write-edn ac-new key serializer compressor write-handlers 8 meta))
@@ -269,7 +273,7 @@
 
 (defn- read-file
   "Read meta, edn and binary."
-  [^AsynchronousFileChannel ac serializer read-handlers {:keys [compressor operation] :as env} meta-size]
+  [^AsynchronousFileChannel ac serializer read-handlers {:keys [compressor encryptor operation] :as env} meta-size]
   (let [file-size                         (.size ac)
         {:keys [bb start-byte stop-byte]} (cond
                                             (= operation :write-edn)                                   {:bb         (ByteBuffer/allocate file-size)
@@ -291,7 +295,7 @@
     (go-try-
       (.read ac bb start-byte stop-byte
           (completion-read-handler res-ch bb meta-size file-size env
-                                   (partial -deserialize (compressor serializer) read-handlers)))
+                                   (partial -deserialize (encryptor (compressor serializer)) read-handlers)))
       (<?- res-ch)
       (finally
         (.clear bb)))))
@@ -544,7 +548,7 @@
         file-paths (Files/newDirectoryStream path)]
     (->> (reduce
           (fn [list-keys path]
-            (if (clojure.string/includes? (.toString path) ".ksv")
+            (if (ends-with? (.toString path) ".ksv")
               (let [ac          (AsynchronousFileChannel/open path (into-array StandardOpenOption [StandardOpenOption/READ]))
                     header-size 8
                     bb          (ByteBuffer/allocate header-size)
@@ -592,6 +596,7 @@
   (-get [this key]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation :read-edn
                                                                                      :compressor compressor
+                                                                                     :encryptor encryptor
                                                                                      :format    :data
                                                                                      :version version
                                                                                      :default-serializer default-serializer
@@ -601,6 +606,7 @@
   (-get-meta [this key]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size {:operation :read-meta
                                                                                      :compressor compressor
+                                                                                     :encryptor encryptor
                                                                                      :detect-old-files detect-old-version
                                                                                      :default-serializer default-serializer
                                                                                      :version version
@@ -612,6 +618,7 @@
   (-update-in [this key-vec meta-up up-fn args]
     (io-operation key-vec folder serializers read-handlers write-handlers buffer-size {:operation  :write-edn
                                                                                        :compressor compressor
+                                                                                       :encryptor encryptor
                                                                                        :detect-old-files detect-old-version
                                                                                        :version version
                                                                                        :default-serializer default-serializer
@@ -629,6 +636,7 @@
                                                                                      :detect-old-files detect-old-version
                                                                                      :default-serializer default-serializer
                                                                                      :compressor compressor
+                                                                                     :encryptor encryptor
                                                                                      :config    config
                                                                                      :version version
                                                                                      :locked-cb locked-cb
@@ -639,6 +647,7 @@
                                                                                      :detect-old-files detect-old-version
                                                                                      :default-serializer default-serializer
                                                                                      :compressor compressor
+                                                                                     :encryptor encryptor
                                                                                      :input      input
                                                                                      :version version
                                                                                      :up-fn-meta meta-up
@@ -652,8 +661,18 @@
                                                                             :detect-old-files detect-old-version
                                                                             :version version
                                                                             :compressor compressor
+                                                                            :encryptor encryptor
                                                                             :config config
-                                                                            :msg {:type :read-all-keys-error}})))
+                                                                            :msg {:type :read-all-keys-error}}))
+
+
+  Layout1
+  (-get-raw [this key]
+    (go
+      (slurp (str folder "/" (uuid key) ".ksv"))))
+  (-put-raw [this key blob]
+    (go
+      (throw (ex-info "Not implemented yet." {:type :not-implemented})))))
 
 (defn- check-and-create-folder
   "Helper Function to Check if Folder is not writable"
@@ -674,7 +693,7 @@
        (cond
          (or
           (includes? file-name "data")
-          (includes? file-name ".ksv"))    old-list
+          (ends-with? file-name ".ksv"))    old-list
          (re-find #"meta(?!\S)" file-name) (into old-list (detect-old-file-schema file-name))
          :else                             (into old-list [file-name]))))
    #{}
@@ -690,9 +709,10 @@
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path & {:keys [default-serializer serializers compressor read-handlers write-handlers buffer-size config detect-old-file-schema?]
+  [path & {:keys [default-serializer serializers compressor encryptor read-handlers write-handlers buffer-size config detect-old-file-schema?]
            :or   {default-serializer :FressianSerializer
                   compressor         lz4-compressor
+                  encryptor          null-encryptor
                   read-handlers      (atom {})
                   write-handlers     (atom {})
                   buffer-size        (* 1024 1024)
@@ -708,9 +728,10 @@
                                                   :default-serializer default-serializer
                                                   :serializers        (merge key->serializer serializers)
                                                   :compressor         compressor
+                                                  :encryptor          encryptor
                                                   :read-handlers      read-handlers
                                                   :write-handlers     write-handlers
-                                                  :buffer-size        buffer-size    
+                                                  :buffer-size        buffer-size
                                                   :locks              (atom {})
                                                   :config             config})]
     (go store)))
