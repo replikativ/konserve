@@ -158,9 +158,9 @@
 
 (defn- write-edn
   "Write Operation for Edn. In the Filestore it would be for meta-data or data-value."
-  [^AsynchronousFileChannel ac-new key serializer compressor write-handlers start-byte value]
+  [^AsynchronousFileChannel ac-new key serializer compressor encryptor write-handlers start-byte value]
   (let [bos       (ByteArrayOutputStream.)
-        _         (-serialize (compressor serializer) bos write-handlers value)
+        _         (-serialize (encryptor (compressor serializer)) bos write-handlers value)
         stop-byte (.size bos)
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
@@ -208,7 +208,7 @@
                                  (apply update-in old-value rkey up-fn up-fn-args)
                                  (apply up-fn old-value up-fn-args)))
         bos                  (ByteArrayOutputStream.)
-        _                    (-serialize (compressor serializer) bos write-handlers meta)
+        _                    (-serialize (encryptor (compressor serializer)) bos write-handlers meta)
         meta-size            (.size bos)
         _                    (.close bos)
         start-byte           (+ Long/BYTES meta-size)
@@ -218,18 +218,20 @@
         byte-array           (to-byte-array version serializer-id compressor-id encryptor-id meta-size)]
       (go-try-
         (<?- (write-header ac-new key byte-array))
-        (<?- (write-edn ac-new key serializer compressor write-handlers 8 meta))
+        (<?- (write-edn ac-new key serializer compressor encryptor write-handlers 8 meta))
         (<?- (if (= operation :write-binary)
                 (write-binary input ac-new buffer-size key start-byte)
-                (write-edn ac-new key serializer compressor write-handlers start-byte value)))
-          (.close ac-new)
-          (Files/move path-new path
-                      (into-array [StandardCopyOption/ATOMIC_MOVE]))
-          (when (:fsync config)
-            (sync-folder folder))
-          (if (= operation :write-edn) [old-value value] true)
-          (finally
-            (.close ac-new)))))
+                (write-edn ac-new key serializer compressor encryptor write-handlers start-byte value)))
+        (when (:fsync config)
+          (.force ac-new true))
+        (.close ac-new)
+        (Files/move path-new path
+                    (into-array [StandardCopyOption/ATOMIC_MOVE]))
+        (when (:fsync config)
+          (sync-folder folder))
+        (if (= operation :write-edn) [old-value value] true)
+        (finally
+          (.close ac-new)))))
 
 (defn completion-read-handler
   "Callback function for read-file. It can return following data: binary/edn/meta. The Binary is within a locked function turnt back."
@@ -295,7 +297,7 @@
     (go-try-
       (.read ac bb start-byte stop-byte
           (completion-read-handler res-ch bb meta-size file-size env
-                                   (partial -deserialize (encryptor (compressor serializer)) read-handlers)))
+                                   (partial -deserialize (compressor (encryptor serializer)) read-handlers)))
       (<?- res-ch)
       (finally
         (.clear bb)))))
@@ -335,7 +337,7 @@
 
 (defn- migrate-file-v1
   "Migration Function For Konserve Version, who has old file-schema."
-  [folder key {:keys [version input up-fn detect-old-files compressor operation locked-cb]} buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
+  [folder key {:keys [version input up-fn detect-old-files compressor encryptor operation locked-cb]} buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
         new-path             (Paths/get new-file-name (into-array String []))
         data-path            (Paths/get old-file-name (into-array String []))
@@ -366,6 +368,7 @@
                                           :key  key}}])
             env           (merge {:version    version
                                   :compressor compressor
+                                  :encryptor  encryptor
                                   :file-name  new-file-name
                                   :up-fn-meta (fn [_] meta)}
                                  old)
@@ -405,7 +408,7 @@
 (defn- migrate-file-v2
   "Migration Function For Konserve Version, who has Meta and Data Folders.
    Write old file into new Konserve directly."
-  [folder {:keys [version input up-fn detect-old-files locked-cb operation compressor]} buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
+  [folder {:keys [version input up-fn detect-old-files locked-cb operation compressor encryptor]} buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
         new-path             (Paths/get new-file-name (into-array String []))
         meta-path            (Paths/get old-file-name (into-array String []))
@@ -444,6 +447,7 @@
                                              :key  key}}])
                 env          (merge {:version    version
                                      :compressor compressor
+                                     :encryptor  encryptor
                                      :file-name  new-file-name
                                      :up-fn-meta (fn [_] meta)}
                                   old)
@@ -501,6 +505,7 @@
         env           (assoc env :file-name file-name)
         path          (Paths/get file-name (into-array String []))
         file-exists?  (Files/exists path (into-array LinkOption []))
+        ;; TODO this filter has linear cost in the number of keys, better lookup names directly
         old-file-name (when detect-old-files (first (filter #(clojure.string/includes? % (str uuid-key)) @detect-old-files)))
         serializer    (get serializers default-serializer)]
     (if (and old-file-name (not file-exists?))
