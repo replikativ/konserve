@@ -1,5 +1,5 @@
 (ns konserve.filestore-test
-  (:refer-clojure :exclude [get update-in assoc-in dissoc exists? keys])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!! go chan put! close!] :as async]
             [konserve.core :refer :all]

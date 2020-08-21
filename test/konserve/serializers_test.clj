@@ -1,8 +1,7 @@
 (ns konserve.serializers-test
-  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists?])
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!!]]
-            [konserve.core :refer :all]
+            [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
             [konserve.filestore :refer [new-fs-store delete-store]])
@@ -26,12 +25,12 @@
     (let [folder "/tmp/konserve-fs-serializers-test"
           _      (delete-store folder)
           store  (<!! (new-fs-store folder :serializers {:FressianSerializer (fressian-serializer custom-read-handler custom-write-handler)}))]
-      (is (= (<!! (get-in store [:foo]))
+      (is (= (<!! (k/get-in store [:foo]))
              nil))
-      (<!! (assoc-in store [:foo] (java.util.Date.)))
-      (is (= (type (<!! (get-in store [:foo])))
+      (<!! (k/assoc-in store [:foo] (java.util.Date.)))
+      (is (= (type (<!! (k/get-in store [:foo])))
              java.util.Date))
-      (<!! (dissoc store :foo))
-      (is (= (<!! (get-in store [:foo]))
+      (<!! (k/dissoc store :foo))
+      (is (= (<!! (k/get-in store [:foo]))
              nil))
       (delete-store folder))))
