@@ -14,21 +14,8 @@
           _      (spit "/tmp/foo" (range 1 10))
           _      (delete-store folder)
           store  (<!! (new-fs-store folder))]
-      (testing "edn" (is (= (<!! (get store :foo))
-                            nil))
-               (<!! (assoc-in store [:foo] {:bar :baz}))
-               (is (= (<!! (get store :foo))
-                      {:bar :baz}))
-               (<!! (assoc-in store [:baz] 0))
-               (<!! (update-in store [:baz] inc))
-               (is (= (<!! (get store :baz)) 1))
-               (is (= (<!! (keys store))
-                      #{(<!! (get-meta store :foo)) (<!! (get-meta store :baz))}))
-               (<!! (dissoc store :foo))
-               (is (= (<!! (get store :foo))
-                      nil))
-               (is (= (<!! (keys store))
-                      #{(<!! (get-meta store :baz))})))
+      (testing "compliance test"
+        (compliance-test store))
       (testing "Binary"
         (testing "ByteArray"
           (let [res-ch (chan)]
