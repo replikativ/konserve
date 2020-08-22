@@ -539,10 +539,12 @@
         (migrate-file-v1 folder key env buffer-size old-file-name file-name serializer read-handlers write-handlers))
       (if (or file-exists? (= :write-edn operation) (= :write-binary operation))
         (let [standard-open-option (if file-exists?
-                                     (into-array StandardOpenOption [StandardOpenOption/READ])
+                                     (into-array StandardOpenOption [StandardOpenOption/READ
+                                                                     StandardOpenOption/WRITE])
                                      (into-array StandardOpenOption [StandardOpenOption/WRITE
                                                                      StandardOpenOption/CREATE]))
-              ac                   (AsynchronousFileChannel/open path standard-open-option)]
+              ac                   (AsynchronousFileChannel/open path standard-open-option)
+              lock                 (.get (.lock ac))]
           (if file-exists?
             (let [header-size 8
                   bb          (ByteBuffer/allocate header-size)
@@ -565,10 +567,12 @@
                 (finally
                   (close! res-ch)
                   (.clear bb)
+                  (.release lock)
                   (.close ac))))
             (go-try-
                 (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
               (finally
+                (.release lock)
                 (.close ac)))))
         (go nil)))))
 
@@ -631,7 +635,7 @@
                (recur (into list-keys
                             (loop [meta-list-keys #{}
                                    [meta-path & meta-file-names]
-                                   (vec (Files/newDirectoryStream (Paths/get file-name (into-array String []))))]
+                                   (vec (Files/newDirectoryStream path))]
                               (if meta-path
                                 (let [old-file-name (-> meta-path .toString)
                                       file-name     (str folder "/" (-> meta-path .getFileName .toString) ".ksv")
