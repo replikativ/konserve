@@ -1,9 +1,18 @@
 (ns konserve.compliance-test
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.core.async :refer [<!! go chan]]
+            [clojure.string :as str]
             [konserve.core :refer :all]
             #?(:clj [clojure.test :refer :all]
                :cljs [cljs.test :refer :all :include-macros true])))
+
+(defrecord UnknownType []) ;custom type used to corrupt store
+
+(defn exception? [thing]
+  (let [ex (type thing)]
+    (or (= clojure.lang.ExceptionInfo ex) 
+        (= java.lang.Exception ex) 
+        (= java.lang.Throwable ex))))
 
 (defn compliance-test [store]
   (testing "Test the core API."
@@ -50,6 +59,27 @@
         (every?
          (fn [{:keys [:konserve.core/timestamp]}]
            (= (type (java.util.Date.)) (type timestamp)))
-         list-keys)))))
+         list-keys)))
+    
+    (let [corrupt (-> store ; let's corrupt our store
+                    (clojure.core/assoc-in [:config] (UnknownType.)) ;common naming convention
+                    (clojure.core/assoc-in [:con] (UnknownType.)) 
+                    (clojure.core/assoc-in [:conn] (UnknownType.)) 
+                    (clojure.core/assoc-in [:store] (UnknownType.)) 
+                    (clojure.core/assoc-in [:serializers] (UnknownType.)) ;parts of the konserve protocol
+                    (clojure.core/assoc-in [:compressor] (UnknownType.))
+                    (clojure.core/assoc-in [:encryptor] (UnknownType.)) 
+                    (clojure.core/assoc-in [:read-handlers] (atom (UnknownType.))) 
+                    (clojure.core/assoc-in [:write-handlers] (atom (UnknownType.))))]
+      (is (exception? (<!! (get corrupt :bad))))
+      (is (exception? (<!! (get-meta corrupt :bad))))
+      (is (exception? (<!! (assoc corrupt :bad 10))))
+      (is (exception? (<!! (dissoc corrupt :bad))))
+      (is (exception? (<!! (assoc-in corrupt [:bad :robot] 10))))
+      (is (exception? (<!! (update-in corrupt [:bad :robot] inc))))
+      (is (exception? (<!! (exists? corrupt :bad))))
+      (is (exception? (<!! (keys corrupt))))
+      (is (exception? (<!! (bget corrupt :bad (fn [_] nil)))))   
+      (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10)))))))))
 
 
