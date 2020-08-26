@@ -1,12 +1,13 @@
 (ns konserve.compliance-test
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.core.async :refer [<!! go chan]]
-            [clojure.string :as str]
             [konserve.core :refer :all]
             #?(:clj [clojure.test :refer :all]
                :cljs [cljs.test :refer :all :include-macros true])))
 
-(defrecord UnknownType []) ;custom type used to corrupt store
+
+
+(deftype UnknownType [])
 
 (defn exception? [thing]
   (let [ex (type thing)]
@@ -61,16 +62,9 @@
            (= (type (java.util.Date.)) (type timestamp)))
          list-keys)))
     
-    (let [corrupt (-> store ; let's corrupt our store
-                    (clojure.core/assoc-in [:config] (UnknownType.)) ;common naming convention
-                    (clojure.core/assoc-in [:con] (UnknownType.)) 
-                    (clojure.core/assoc-in [:conn] (UnknownType.)) 
-                    (clojure.core/assoc-in [:store] (UnknownType.)) 
-                    (clojure.core/assoc-in [:serializers] (UnknownType.)) ;parts of the konserve protocol
-                    (clojure.core/assoc-in [:compressor] (UnknownType.))
-                    (clojure.core/assoc-in [:encryptor] (UnknownType.)) 
-                    (clojure.core/assoc-in [:read-handlers] (atom (UnknownType.))) 
-                    (clojure.core/assoc-in [:write-handlers] (atom (UnknownType.))))]
+    (let [params (clojure.core/keys store)
+          corruptor (fn [s k] (clojure.core/assoc-in s [k] (UnknownType.)))
+          corrupt (reduce corruptor store params)]
       (is (exception? (<!! (get corrupt :bad))))
       (is (exception? (<!! (get-meta corrupt :bad))))
       (is (exception? (<!! (assoc corrupt :bad 10))))
