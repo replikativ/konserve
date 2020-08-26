@@ -63,7 +63,10 @@
          list-keys)))
     
     (let [params (clojure.core/keys store)
-          corruptor (fn [s k] (clojure.core/assoc-in s [k] (UnknownType.)))
+          corruptor (fn [s k] 
+                        (if (= (type (k s)) clojure.lang.Atom)
+                          (clojure.core/assoc-in s [k] (atom {})) 
+                          (clojure.core/assoc-in s [k] (UnknownType.))))
           corrupt (reduce corruptor store params)]
       (is (exception? (<!! (get corrupt :bad))))
       (is (exception? (<!! (get-meta corrupt :bad))))
