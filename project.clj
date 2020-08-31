@@ -16,7 +16,8 @@
                  [org.clojure/clojurescript "1.10.520"]
                  [com.google.javascript/closure-compiler-unshaded "v20190325"]
                  [org.clojure/google-closure-library "0.0-20190213-2033d5d9"]
-                 [org.lz4/lz4-java "1.6.0"]]
+                 [org.lz4/lz4-java "1.6.0"]
+                 [tick "0.4.26-alpha"]]
   :profiles
   {:cljs
    {:source-paths ["src/cljs"]
