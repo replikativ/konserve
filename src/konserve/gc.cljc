@@ -1,8 +1,7 @@
 (ns konserve.gc
   (:refer-clojure :exclude [dissoc keys])
   (:require [konserve.core :refer [dissoc keys]]
-            [superv.async :refer [go-try- <?- reduce<?-]])
-  #?(:cljs (:require-macros [superv.async :refer [go-try- <?-]])))
+            [superv.async :refer [go-try- <?- reduce<?-]]))
 
 (defn sweep! [store whitelist ts]
   (go-try-
