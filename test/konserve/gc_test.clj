@@ -1,4 +1,5 @@
 (ns konserve.gc-test
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc keys])
   (:require [konserve.gc :refer [sweep!]]
             [clojure.test :refer :all]
             [konserve.core :refer :all]
