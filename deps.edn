@@ -1,0 +1,21 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.10.1"} 
+        io.replikativ/incognito {:mvn/version "0.2.5"}
+        io.replikativ/superv.async {:mvn/version "0.2.9-SNAPSHOT"}
+        fress {:mvn/version "0.3.1"}
+        org.clojure/data.fressian {:mvn/version "0.2.1"} ;; for filestore
+        io.replikativ/hasch {:mvn/version "0.3.7"}
+        org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
+
+        org.clojure/clojurescript {:mvn/version "1.10.520"}
+        ;com.google.javascript/closure-compiler-unshaded "v20190325"
+       ; org.clojure/google-closure-library "0.0-20190213-2033d5d9"
+        org.lz4/lz4-java {:mvn/version "1.6.0"}
+        tick {:mvn/version "0.4.26-alpha"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.10.21"}
+                               binaryage/devtools   {:mvn/version "1.0.2"}}
+                  :extra-paths ["test"]}
+           :dev  {:extra-deps {criterium                {:mvn/version "0.4.4"}}}
+           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.0.641"}
+                               org.clojure/test.check   {:mvn/version "0.9.0"}}
+                  :extra-paths ["test"]}}}

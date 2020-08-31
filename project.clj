@@ -10,7 +10,7 @@
                  [io.replikativ/superv.async "0.2.9-SNAPSHOT"]
                  [fress "0.3.1"]
                  [org.clojure/data.fressian "0.2.1"] ;; for filestore
-                 [io.replikativ/hasch "0.3.5"]
+                 [io.replikativ/hasch "0.3.7"]
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
                  [thheller/shadow-cljs "2.8.109"]
                  [org.clojure/clojurescript "1.10.520"]
