@@ -31,25 +31,25 @@
         (clojure.core/get (swap! locks (fn [old]
                                          (if (old key) old
                                              (clojure.core/assoc old key c))))
-             key))))
+                          key))))
 
 #?(:clj
    (defmacro go-locked [store key & code]
-     (let [res`(if-cljs
-                (cljs.core.async.macros/go
-                  (let [l# (get-lock ~store ~key)]
-                    (try
-                      (cljs.core.async/<! l#)
-                      ~@code
-                      (finally
-                        (cljs.core.async/put! l# :unlocked)))))
-                (go
-                  (let [l# (get-lock ~store ~key)]
-                    (try
-                      (<! l#)
-                      ~@code
+     (let [res `(if-cljs
+                 (cljs.core.async.macros/go
+                   (let [l# (get-lock ~store ~key)]
+                     (try
+                       (cljs.core.async/<! l#)
+                       ~@code
                        (finally
-                        (put! l# :unlocked))))))]
+                         (cljs.core.async/put! l# :unlocked)))))
+                 (go
+                   (let [l# (get-lock ~store ~key)]
+                     (try
+                       (<! l#)
+                       ~@code
+                       (finally
+                         (put! l# :unlocked))))))]
        res)))
 
 (defn exists?
@@ -130,10 +130,10 @@
    (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val))))
 
 (defn assoc
- "Associates the key-vec to the value, any missing collections for
+  "Associates the key-vec to the value, any missing collections for
  the key-vec (nested maps and vectors) are newly created."
- [store key val]
- (assoc-in store [key] val))
+  [store key val]
+  (assoc-in store [key] val))
 
 (defn dissoc
   "Removes an entry from the store. "
@@ -165,36 +165,36 @@
   "Loads the whole append log stored at "
   [store key]
   (go
-   (let [head (<! (get store key))
-         [append-log? last-id first-id] head] 
-     (when (and head (not= append-log? :append-log))
-       (throw (ex-info "This is not an append-log." {:key key})))
-     (when first-id
-       (loop [{:keys [next elem]} (<! (get store first-id))
-              hist []]
-         (if next
-           (recur (<! (get store next))
-                  (conj hist elem))
-           (conj hist elem)))))))
+    (let [head (<! (get store key))
+          [append-log? last-id first-id] head]
+      (when (and head (not= append-log? :append-log))
+        (throw (ex-info "This is not an append-log." {:key key})))
+      (when first-id
+        (loop [{:keys [next elem]} (<! (get store first-id))
+               hist []]
+          (if next
+            (recur (<! (get store next))
+                   (conj hist elem))
+            (conj hist elem)))))))
 
 (defn reduce-log
   "Loads the whole append log stored at "
   [store key reduce-fn acc]
   (go
-   (let [head (<! (get store key))
-         [append-log? last-id first-id] head] 
-     (when (and head (not= append-log? :append-log))
-       (throw (ex-info "This is not an append-log." {:key key})))
-     (if first-id
-       (loop [id first-id
-              acc acc]
-         (let [{:keys [next elem]} (<! (get store id))]
-           (if (and next (not= id last-id))
-             (recur next (reduce-fn acc elem))
-             (reduce-fn acc elem))))
-       acc))))
+    (let [head (<! (get store key))
+          [append-log? last-id first-id] head]
+      (when (and head (not= append-log? :append-log))
+        (throw (ex-info "This is not an append-log." {:key key})))
+      (if first-id
+        (loop [id first-id
+               acc acc]
+          (let [{:keys [next elem]} (<! (get store id))]
+            (if (and next (not= id last-id))
+              (recur next (reduce-fn acc elem))
+              (reduce-fn acc elem))))
+        acc))))
 
-(defn bget 
+(defn bget
   "Calls locked-cb with a platform specific binary representation inside
   the lock, e.g. wrapped InputStream on the JVM and Blob in
   JavaScript. You need to properly close/dispose the object when you
@@ -212,7 +212,7 @@
    store key
    (<! (-bget store key locked-cb))))
 
-(defn bassoc 
+(defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
   [store key val]

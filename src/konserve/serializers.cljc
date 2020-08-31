@@ -59,14 +59,14 @@
        (binding [clojure.core/*out* output-stream]
          (pr val)))
     #?(:cljs
-         (pr-str val))))
+       (pr-str val))))
 
 (defn string-serializer []
   (map->StringSerializer {}))
 
 (defn construct->class [m]
   (->> (map (fn [[k v]] [(class v) k]) m)
-          (into {})))
+       (into {})))
 
 (def byte->serializer
   {0 (string-serializer)
