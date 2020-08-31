@@ -1,0 +1,19 @@
+{:deps {:aliases [:cljs]}
+
+ :builds
+ {:app
+  {:target :browser
+   :output-dir "public/js"
+   :asset-path "/js"
+   :modules {:main {:entries [konserve.core]}}}
+
+  :browser-test
+  {:target :browser-test
+   :test-dir  "resources/public/js/test"
+   :devtools {:http-port 8021
+              :http-root "resources/public/js/test"}}
+
+  :node-test
+  {:target :node-test
+   :output-to "out/node-tests.js"
+   :autorun true}}}

@@ -4,10 +4,9 @@
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
-            #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
-               :cljs [cljs.core.async :refer [chan poll! put! <!]]))
-  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
-                            [konserve.core :refer [go-locked]])))
+            [tick.alpha.api :as t]
+            [clojure.core.async :refer [chan poll! put! <! go]])
+  #?(:cljs (:require-macros [konserve.core :refer [go-locked]])))
 
 (defn- cljs-env?
   "Take the &env from a macro, and tell whether we are expanding into cljs."
@@ -33,24 +32,14 @@
                                              (clojure.core/assoc old key c))))
                           key))))
 
-#?(:clj
-   (defmacro go-locked [store key & code]
-     (let [res `(if-cljs
-                 (cljs.core.async.macros/go
-                   (let [l# (get-lock ~store ~key)]
-                     (try
-                       (cljs.core.async/<! l#)
-                       ~@code
-                       (finally
-                         (cljs.core.async/put! l# :unlocked)))))
-                 (go
-                   (let [l# (get-lock ~store ~key)]
-                     (try
-                       (<! l#)
-                       ~@code
-                       (finally
-                         (put! l# :unlocked))))))]
-       res)))
+(defmacro go-locked [store key & code]
+  `(go
+     (let [l# (get-lock ~store ~key)]
+       (try
+         (<! l#)
+         ~@code
+         (finally
+           (put! l# :unlocked))))))
 
 (defn exists?
   "Checks whether value is in the store."
@@ -102,8 +91,8 @@
   value not exist, if it does it will update the timestamp to date now. "
   [key type old]
   (if (empty? old)
-    {:key key :type type ::timestamp (java.util.Date.)}
-    (clojure.core/assoc old ::timestamp (java.util.Date.))))
+    {:key key :type type ::timestamp (t/inst)}
+    (clojure.core/assoc old ::timestamp (t/inst))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
@@ -224,3 +213,4 @@
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
   ([store] (-keys store)))
+

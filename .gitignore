@@ -10,6 +10,11 @@ pom.xml.asc
 /.nrepl-port
 /.repl*
 out
+.shadow-cljs
+.cpcache
+.calva
+node_modules
+public 
 
 .idea
 *.iml
