@@ -3,11 +3,13 @@
   :CUSTOM_ID: h:6f85a7f4-3694-4703-8c0b-ffcc34f2e5c9
   :END:
   
+#+BEGIN_EXPORT html
 <p align="center">
 <a href="https://clojars.org/replikativ/konserve"> <img src="https://img.shields.io/clojars/v/replikativ/konserve.svg" /></a>
 <a href="https://circleci.com/gh/replikativ/konserve"><img src="https://circleci.com/gh/replikativ/konserve.svg?style=shield"/></a>
 <a href="https://versions.deps.co/replikativ/konserve" title="Dependencies Status"><img src="https://versions.deps.co/replikativ/konserve/status.svg" /></a>
 </p>
+#+END_EXPORT
 
 
 [[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
