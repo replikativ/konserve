@@ -1,5 +1,5 @@
 (ns konserve.gc
-  (:require [konserve.core :refer [dissoc keys]]
+  (:require [konserve.core :as k]
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:cljs (:require-macros [superv.async :refer [go-try- <?-]])))
 
@@ -11,7 +11,7 @@
                  (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime timestamp)))
                    deleted-files
                    (do
-                     (<?- (dissoc store key))
+                     (<?- (k/dissoc store key))
                      (conj deleted-files key)))))
            #{}
-           (<?- (keys store))))))
+           (<?- (k/keys store))))))

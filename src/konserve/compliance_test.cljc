@@ -1,5 +1,5 @@
 (ns konserve.compliance-test
-  (:refer-clojure :exclude [get update-in assoc-in dissoc exists? keys])
+  (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.core.async :refer [<!! go chan]]
             [konserve.core :refer :all]
             #?(:clj [clojure.test :refer :all]
