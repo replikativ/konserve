@@ -327,12 +327,20 @@ namespace:
    :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
    :END:
 
-*** 0.6
+*** 0.6.0-alpha1
     :PROPERTIES:
     :CUSTOM_ID: h:c5fec032-a11d-4e4c-a367-9b8990168a75
     :END:
 
-- extend API to be more like Clojure's (thanks to @MrEbbinghaus)
+    - introduce common storage layouts and store serialization context with each
+      key value pair, this will facilitate migration code in the future
+    - implementation for the filestore (thanks to @FerdiKuehne)
+    - introduce metadata to track edit timestamps
+    - add garbage collector
+    - introduce superv.async error handling
+    - extend API to be more like Clojure's (thanks to @MrEbbinghaus)
+    - add logging
+    - update on ClojureScript support still pending
 
 *** 0.5.1
     :PROPERTIES:

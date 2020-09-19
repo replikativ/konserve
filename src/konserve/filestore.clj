@@ -13,7 +13,7 @@
                                PKeyIterable
                                -keys
                                -serialize -deserialize]]
-   [konserve.storage-layout :refer [Layout1 -get-raw]]
+   [konserve.storage-layout :refer [LinearLayout -get-raw]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! chan go close! put!]]
@@ -749,7 +749,7 @@
                 :msg {:type :read-all-keys-error}}))
 
 
-  Layout1
+  LinearLayout
   (-get-raw [this key]
     (go
       (slurp (str folder "/" (uuid key) ".ksv"))))
