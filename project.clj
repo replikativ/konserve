@@ -45,5 +45,10 @@
      :compiler {:output-to "target/unit-tests.js"
                 :optimizations :none
                 :target :nodejs
-                :main konserve.konserve-test}}}})
- 
+                :main konserve.konserve-test}}}}
+  :deploy-repositories
+    [["clojars"
+      {:url           "https://clojars.org/repo"
+       :username      :env
+       :password      :env
+       :sign-releases false}]])
