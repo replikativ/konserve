@@ -10,11 +10,8 @@
 (deftype UnknownType [])
 
 (defn exception? [thing]
-  (let [ex (type thing)]
-    (or (= clojure.lang.ExceptionInfo ex) 
-        (= java.lang.Exception ex) 
-        (= java.lang.Throwable ex))))
-
+  (instance? Throwable thing))
+  
 (defn compliance-test [store]
   (testing "Test the core API."
     (is (= (<!! (get store :foo))
