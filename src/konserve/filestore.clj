@@ -16,17 +16,18 @@
    [konserve.storage-layout :refer [Layout1 -get-raw]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
-    :refer [<!! <! >! chan go close! put!]])
+    :refer [<!! <! >! chan go close! put!]]
+   [taoensso.timbre :as timbre :refer [info]])
   (:import
    [java.io Reader File InputStream
-    ByteArrayOutputStream ByteArrayInputStream FileInputStream]
+     ByteArrayOutputStream ByteArrayInputStream FileInputStream]
    [java.nio.channels Channels FileChannel AsynchronousFileChannel CompletionHandler]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Paths OpenOption LinkOption
     StandardOpenOption]))
 
 (defn- sync-folder
-  "Helper Function to Synchrenize the Folder of the Filestore"
+  "Helper Function to synchronize the folder of the filestore"
   [folder]
   (let [p (.getPath (FileSystems/getDefault) folder (into-array String []))
         fc (FileChannel/open p (into-array OpenOption []))]
@@ -158,7 +159,7 @@
        (.close bos)))))
 
 (defn- write-edn
-  "Write Operation for Edn. In the Filestore it would be for meta-data or data-value."
+  "Write Operation for edn. In the Filestore it would be for meta-data or data-value."
   [^AsynchronousFileChannel ac-new key serializer compressor encryptor write-handlers start-byte value]
   (let [bos       (ByteArrayOutputStream.)
         _         (-serialize (encryptor (compressor serializer)) bos write-handlers value)
@@ -195,7 +196,7 @@
     return-array))
 
 (defn- update-file
-  "Write File into Filesystem. It Write first the meta-size, that is stored in (1Byte),
+  "Write file into filesystem. It write first the meta-size, that is stored in (1Byte),
   the meta-data and the actual data."
   [folder path serializer write-handlers buffer-size [key & rkey]
    {:keys [compressor encryptor version file-name up-fn up-fn-args
@@ -804,7 +805,7 @@
                              (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-version)
-                               (prn (str (count @detect-old-version) " old files detected. Migration is necessary."))))
+                               (info (count @detect-old-version) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
         _                  (check-and-create-folder path)
         store              (map->FileSystemStore {:detect-old-version detect-old-version
                                                   :folder             path

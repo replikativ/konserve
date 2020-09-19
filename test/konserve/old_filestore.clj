@@ -10,7 +10,8 @@
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
             [clojure.edn :as edn]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [taoensso.timbre :as timbre :refer [debug]])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
@@ -366,7 +367,7 @@
                                                  :exception e}))
                                      (finally
                                        (.close fis))))))
-                             (println "Stale key file detected: " fn))))))
+                             (debug "Stale key file detected: " fn))))))
                  async/merge
                  (async/into #{}))]
     fns))

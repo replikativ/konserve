@@ -6,17 +6,17 @@
   :source-paths ["src"]
   :test-paths ["test"]
   :dependencies [[org.clojure/clojure "1.10.1" :scope "provided"]
-                 [io.replikativ/incognito "0.2.5"]
-                 [io.replikativ/superv.async "0.2.9-SNAPSHOT"]
+                 [org.clojure/clojurescript "1.10.773" :scope "provided"]
+                 [io.replikativ/hasch "0.3.7"]
+                 [io.replikativ/superv.async "0.2.11"]
                  [fress "0.3.1"]
-                 [org.clojure/data.fressian "0.2.1"] ;; for filestore
-                 [io.replikativ/hasch "0.3.5"]
+                 [org.clojure/data.fressian "1.0.0"] ;; for filestore
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
-                 [thheller/shadow-cljs "2.8.109"]
-                 [org.clojure/clojurescript "1.10.520"]
-                 [com.google.javascript/closure-compiler-unshaded "v20190325"]
-                 [org.clojure/google-closure-library "0.0-20190213-2033d5d9"]
-                 [org.lz4/lz4-java "1.6.0"]]
+                 ;; reactivate for nodejs support
+                 #_[com.google.javascript/closure-compiler-unshaded "v20190325"]
+                 #_[org.clojure/google-closure-library "0.0-20190213-2033d5d9"]
+                 [org.lz4/lz4-java "1.7.1"]
+                 [com.taoensso/timbre "4.10.0"]]
   :profiles
   {:cljs
    {:source-paths ["src/cljs"]

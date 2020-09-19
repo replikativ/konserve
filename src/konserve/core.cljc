@@ -4,6 +4,7 @@
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
+            [taoensso.timbre :as timbre :refer [trace]]
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
                :cljs [cljs.core.async :refer [chan poll! put! <!]]))
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
@@ -55,6 +56,7 @@
 (defn exists?
   "Checks whether value is in the store."
   [store key]
+  (trace "exists? on key " key)
   (go-locked
    store key
    (<! (-exists? store key))))
@@ -65,6 +67,7 @@
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
+   (trace "get-in on key " key)
    (go-locked
     store key-vec
     (let [a (<! (-get store (first key-vec)))]
@@ -78,6 +81,7 @@
   ([store key]
    (get store key nil))
   ([store key not-found]
+   (trace "get-in on key " key)
    (get-in store [key] not-found)))
 
 (defn get-meta
@@ -86,6 +90,7 @@
   ([store key]
    (get-meta store key nil))
   ([store key not-found]
+   (trace "get-meta on key " key)
    (go-locked
     store key
     (let [a (<! (-get-meta store key))]
@@ -114,6 +119,7 @@
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   [store key-vec up-fn & args]
+  (trace "update-in on key " key)
   (go-locked
    store (first key-vec)
    (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn args))))
@@ -123,12 +129,14 @@
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   [store key meta-up-fn fn & args]
+  (trace "update on key " key)
   (apply update-in store [key] meta-up-fn fn args))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
   [store key-vec val & args]
+  (trace "assoc-in on key " key)
   (go-locked
    store (first key-vec)
    (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val))))
@@ -137,11 +145,13 @@
  "Associates the key-vec to the value, any missing collections for
  the key-vec (nested maps and vectors) are newly created."
  [store key val]
+ (trace "assoc on key " key)
  (assoc-in store [key] val))
 
 (defn dissoc
   "Removes an entry from the store. "
   [store key]
+  (trace "dissoc on key " key)
   (go-locked
    store key
    (<! (-dissoc store key))))
@@ -150,6 +160,7 @@
   "Append the Element to the log at the given key or create a new append log there.
   This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
   [store key elem]
+  (trace "append on key " key)
   (go-locked
    store key
    (let [head (<! (-get store key))
@@ -168,6 +179,7 @@
 (defn log
   "Loads the whole append log stored at "
   [store key]
+  (trace "log on key " key)
   (go
    (let [head (<! (get store key))
          [append-log? last-id first-id] head] 
@@ -184,6 +196,7 @@
 (defn reduce-log
   "Loads the whole append log stored at "
   [store key reduce-fn acc]
+  (trace "reduce-log on key " key)
   (go
    (let [head (<! (get store key))
          [append-log? last-id first-id] head] 
@@ -212,6 +225,7 @@
         (io/copy is tmp-file))))
   "
   [store key locked-cb]
+  (trace "bget on key " key)
   (go-locked
    store key
    (<! (-bget store key locked-cb))))
@@ -220,6 +234,7 @@
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
   [store key val]
+  (trace "bassoc on key " key)
   (go-locked
    store key
    (<! (-bassoc store key (partial meta-update key :binary) val))))
@@ -227,4 +242,6 @@
 ;rename list-meta 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
-  ([store] (-keys store)))
+  ([store]
+   (trace "fetching keys")
+   (-keys store)))
