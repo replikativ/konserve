@@ -5,10 +5,9 @@
                                         -keys]]
             [hasch.core :refer [uuid]]
             [taoensso.timbre :as timbre :refer [trace]]
-            #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
-               :cljs [cljs.core.async :refer [chan poll! put! <!]]))
-  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
-                            [konserve.core :refer [go-locked]])))
+            [clojure.core.async :refer [chan poll! put! <! go]])
+  #?(:cljs (:require-macros [konserve.core :refer [go-locked]])))
+
 
 (defn- cljs-env?
   "Take the &env from a macro, and tell whether we are expanding into cljs."
@@ -34,24 +33,14 @@
                                              (clojure.core/assoc old key c))))
              key))))
 
-#?(:clj
-   (defmacro go-locked [store key & code]
-     (let [res`(if-cljs
-                (cljs.core.async.macros/go
-                  (let [l# (get-lock ~store ~key)]
-                    (try
-                      (cljs.core.async/<! l#)
-                      ~@code
-                      (finally
-                        (cljs.core.async/put! l# :unlocked)))))
-                (go
-                  (let [l# (get-lock ~store ~key)]
-                    (try
-                      (<! l#)
-                      ~@code
-                       (finally
-                        (put! l# :unlocked))))))]
-       res)))
+(defmacro go-locked [store key & code]
+  `(go
+     (let [l# (get-lock ~store ~key)]
+       (try
+         (<! l#)
+         ~@code
+         (finally
+           (put! l# :unlocked))))))
 
 (defn exists?
   "Checks whether value is in the store."

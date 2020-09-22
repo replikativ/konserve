@@ -1,0 +1,18 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.10.1"} 
+        org.clojure/clojurescript {:mvn/version "1.10.764"}
+        io.replikativ/incognito {:mvn/version "0.2.5"}
+        io.replikativ/superv.async {:mvn/version "0.2.9-SNAPSHOT"}
+        fress {:mvn/version "0.3.1"}
+        org.clojure/data.fressian {:mvn/version "0.2.1"} ;; for filestore
+        io.replikativ/hasch {:mvn/version "0.3.7"}
+        org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
+        org.lz4/lz4-java {:mvn/version "1.6.0"}
+        com.taoensso/timbre {:mvn/version "4.10.0"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.10.21"}
+                               binaryage/devtools   {:mvn/version "1.0.2"}}
+                  :extra-paths ["test"]}
+           :dev  {:extra-deps {criterium                {:mvn/version "0.4.4"}}}
+           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.0.641"}
+                               org.clojure/test.check   {:mvn/version "0.9.0"}}
+                  :extra-paths ["test"]}}}

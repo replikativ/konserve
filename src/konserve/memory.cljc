@@ -9,8 +9,7 @@
                                         -bget -bassoc
                                         PKeyIterable
                                         -keys]]
-            [clojure.core.async :as async])
-  #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
+            [clojure.core.async :as async :refer [go]]))
 
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
