@@ -18,13 +18,12 @@
    [clojure.core.async :refer [go <!! chan close! put!]]
    [taoensso.timbre :refer [info trace]])
   (:import
-   [java.io ByteArrayInputStream FileInputStream]
-   [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
-   [java.nio ByteBuffer]
-   [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption
-    StandardOpenOption]
-   [sun.nio.ch FileLockImpl]
-   (java.util Date UUID)))
+    [java.io ByteArrayInputStream FileInputStream Closeable]
+    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
+    [java.nio ByteBuffer]
+    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
+    [sun.nio.ch FileLockImpl]
+    (java.util Date UUID)))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -77,7 +76,7 @@
 
 (defn count-konserve-keys [dir]
   "Counts konserve files in the directory."
-  (reduce (fn [c path] (if (.endsWith path ".ksv") (inc c) c))
+  (reduce (fn [c path] (if (.endsWith ^String path ".ksv") (inc c) c))
           0
           (list-files dir)))
 
@@ -192,12 +191,12 @@
                                       (assoc msg :exception t)))
                     (close! ch))))
         (finally
-          (.clear buffer)))
+          (.clear ^ByteBuffer buffer)))
       ch))
   (-write-meta [this meta-arr env]
     (let [{:keys [msg]} env
           ch (chan)
-          meta-size (alength meta-arr)
+          meta-size (alength ^bytes meta-arr)
           buffer (ByteBuffer/wrap meta-arr)]
       (try
         (.write this buffer header-size (+ header-size meta-size)
@@ -250,14 +249,14 @@
                                            (assoc msg :exception t)))
                          (close! ch))))
              (<?- ch)
-             (.clear buffer)
+             (.clear ^ByteBuffer buffer)
              (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
        (catch Exception e
          (trace "write-binary error: " e)
          e)
        (finally
-         (.close bis)
-         (.clear buffer)))))
+         (.close ^Closeable bis)
+         (.clear ^ByteBuffer buffer)))))
   (-read-header [this env]
     (let [{:keys [msg]} env
           ch (chan)
@@ -377,7 +376,7 @@
               (.clear buffer)
               (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
         (finally
-          (.close bis)
+          (.close ^Closeable bis)
           (.clear buffer)))))
   (-read-header [this _env]
     (let [buffer (ByteBuffer/allocate header-size)]
@@ -450,6 +449,14 @@
         (finally
           (.clear buffer))))))
 
+(defn get-file-channel [path sync?]
+  (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])]
+    (if sync?
+      (let [channel (FileChannel/open path standard-open-option)]
+        [channel (.size channel)])
+      (let [channel (AsynchronousFileChannel/open path standard-open-option)]
+        [channel (.size channel)]))))
+
 (defn- migrate-file-v1
   "Migration function for konserve version with old file-schema."
   [{:keys [base detected-old-blobs] :as backing}
@@ -459,20 +466,15 @@
     :as env}]
   (let [key (first key-vec)
         store-key (key->store-key key)
-        standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
-        new-path             (Paths/get base (into-array String [store-key]))
         data-path            (Paths/get old-path (into-array String []))
-        ac-data-file         (if sync?
-                               (FileChannel/open data-path standard-open-option)
-                               (AsynchronousFileChannel/open data-path standard-open-option))
+        [c-data-file size-data] (get-file-channel data-path sync?)
         binary?              (includes? old-path "B_")]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-
                  (let [[[nkey] data] (if binary?
                                        [[key] true]
                                        (->>
-                                        (<?- (-read ac-data-file 0 (.size ac-data-file)
+                                        (<?- (-read c-data-file 0 size-data
                                                     {:type :read-data-old-error
                                                      :path data-path}
                                                     env))
@@ -508,10 +510,9 @@
                        (if (= operation :read-meta)
                          (return-value meta)
                          (if (= operation :read-binary)
-                           (let [file-size  (.size ^AsynchronousFileChannel ac-data-file)
-                                 start-byte 0
-                                 stop-byte  file-size
-                                 res (<?- (-read ac-data-file start-byte stop-byte
+                           (let [start-byte 0
+                                 stop-byte size-data
+                                 res (<?- (-read c-data-file start-byte stop-byte
                                                  {:type :migration-v1-read-binary-error
                                                   :key key}
                                                  (assoc env
@@ -522,7 +523,7 @@
                  (finally
                    (when binary?
                      (Files/delete data-path))
-                   (.close ^AsynchronousFileChannel ac-data-file))))))
+                   (.close ^AsynchronousFileChannel c-data-file))))))
 
 (defn- migrate-file-v2
   "Migration Function For Konserve Version, who has Meta and Data Bases.
@@ -531,20 +532,14 @@
    old-path
    serializer read-handlers write-handlers
    {:keys [version input up-fn locked-cb operation compressor encryptor sync? buffer-size] :as env}]
-  (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
-        meta-path            (Paths/get old-path (into-array String []))
+  (let [meta-path            (Paths/get old-path (into-array String []))
         data-store-key       (clojure.string/replace old-path #"meta" "data")
         data-path            (Paths/get data-store-key (into-array String []))
-        ac-meta-file         (if sync?
-                               (FileChannel/open meta-path standard-open-option)
-                               (AsynchronousFileChannel/open meta-path standard-open-option))
-        ac-data-file         (if sync?
-                               (FileChannel/open data-path standard-open-option)
-                               (AsynchronousFileChannel/open data-path standard-open-option))
-        size-meta            (.size ac-meta-file)]
+        [c-meta-file size-meta] (get-file-channel meta-path sync?)
+        [c-data-file size-data] (get-file-channel data-path sync?)]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (let [{:keys [format key]} (->> (<?- (-read ac-meta-file 0 size-meta
+                 (let [{:keys [format key]} (->> (<?- (-read c-meta-file 0 size-meta
                                                              {:type :read-meta-old-error
                                                               :path meta-path}
                                                              env))
@@ -552,7 +547,7 @@
                                                  (-deserialize serializer read-handlers))
                        store-key (key->store-key key)
                        data         (when (= :edn format)
-                                      (->> (<?- (-read ac-data-file 0 (.size ac-data-file)
+                                      (->> (<?- (-read c-data-file 0 size-data
                                                        {:type :read-data-old-error
                                                         :path data-path}
                                                        env))
@@ -588,10 +583,9 @@
                        (if (= operation :read-meta)
                          (return-value meta)
                          (if (= operation :read-binary)
-                           (let [file-size (.size ac-data-file)
-                                 start-byte 0
-                                 stop-byte  file-size
-                                 res (<?- (-read ac-data-file start-byte stop-byte
+                           (let [start-byte 0
+                                 stop-byte size-data
+                                 res (<?- (-read c-data-file start-byte stop-byte
                                                  {:type :migration-v2-binary-read-error
                                                   :key key}
                                                  (assoc env
@@ -602,8 +596,8 @@
                              (Files/delete data-path))
                            (return-value (second value)))))))
                  (finally
-                   (<?- (-close ac-data-file env))
-                   (<?- (-close ac-meta-file env)))))))
+                   (<?- (-close c-data-file env))
+                   (<?- (-close c-meta-file env)))))))
 
 (defn migrate-old-files [{:keys [base] :as backing} old-store-key serializer read-handlers write-handlers {:keys [sync?] :as env}]
   (async+sync

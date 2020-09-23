@@ -36,7 +36,7 @@
 (defn key->store-key [key]
   (str (uuid key) ".ksv"))
 
-(defn store-key->uuid-key [store-key]
+(defn store-key->uuid-key [^String store-key]
   (cond
     (.endsWith store-key ".ksv") (subs store-key 0 (- (.length store-key) 4))
     (.endsWith store-key ".ksv.new") (subs store-key 0 (- (.length store-key) 8))

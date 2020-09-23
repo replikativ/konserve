@@ -1,7 +1,9 @@
 (ns konserve.nio-helpers
-  (:import [java.nio.channels Channels]
+  (:import [java.nio.channels Channels ReadableByteChannel]
            [java.io Reader File InputStream
-            ByteArrayInputStream FileInputStream]))
+                    ByteArrayInputStream FileInputStream StringReader]
+           (java.util Arrays)
+           (java.nio ByteBuffer)))
 
 (def
   ^{:doc "Type object for a Java primitive byte array."
@@ -20,28 +22,28 @@
   InputStream
   (blob->channel [input buffer-size]
     [(Channels/newChannel input)
-     (fn [bis buffer]  (.read bis buffer))])
+     (fn [bis buffer]  (.read ^ReadableByteChannel bis ^ByteBuffer buffer))])
 
   File
   (blob->channel [input buffer-size]
-    [(Channels/newChannel (FileInputStream. input))
-     (fn [bis buffer]  (.read bis buffer))])
+    [(Channels/newChannel (FileInputStream. ^String input))
+     (fn [bis buffer]  (.read ^ReadableByteChannel bis buffer))])
 
   String
   (blob->channel [input buffer-size]
     [(Channels/newChannel (ByteArrayInputStream. (.getBytes input)))
-     (fn [bis buffer]  (.read bis buffer))])
+     (fn [bis buffer]  (.read ^ReadableByteChannel bis buffer))])
 
   Reader
   (blob->channel [input buffer-size]
     [input
      (fn [bis nio-buffer]
        (let [char-array (make-array Character/TYPE buffer-size)
-             size (.read bis char-array)]
+             size (.read ^StringReader bis ^chars char-array)]
          (try
            (when-not (= size -1)
-             (let [char-array (java.util.Arrays/copyOf char-array size)]
-               (.put nio-buffer (.getBytes (String. char-array)))))
+             (let [char-array-copy (Arrays/copyOf ^chars char-array size)]
+               (.put ^ByteBuffer nio-buffer (.getBytes (String. char-array-copy)))))
            size
            (catch Exception e
              (throw e)))))]))
@@ -51,12 +53,12 @@
   BlobToChannel
   {:blob->channel (fn [input _]
                     [(Channels/newChannel (ByteArrayInputStream. input))
-                     (fn [bis buffer] (.read bis buffer))])})
+                     (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])})
 
 (extend
  char-array-type
   BlobToChannel
   {:blob->channel (fn [input _]
-                    [(Channels/newChannel (ByteArrayInputStream. (.getBytes (String. input))))
-                     (fn [bis buffer] (.read bis buffer))])})
+                    [(Channels/newChannel (ByteArrayInputStream. (.getBytes (String. ^chars input))))
+                     (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])})
 

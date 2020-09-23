@@ -8,17 +8,16 @@
                                         -serialize -deserialize]]
             [clojure.core.async :as async
              :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
-            [clojure.edn :as edn]
-            [clojure.string :as str]
-            [taoensso.timbre :as timbre :refer [debug]])
+            [taoensso.timbre :refer [debug]])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
-            ByteArrayInputStream]
+            ByteArrayInputStream File Writer]
            [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
            [java.nio ByteBuffer]
-           [java.nio.file Files StandardCopyOption FileSystems Path OpenOption
-            StandardOpenOption]))
+           [java.nio.file Files StandardCopyOption FileSystems OpenOption
+                          StandardOpenOption]
+           (java.util UUID)))
 
 ;; A useful overview over fsync on Linux:
 ;; https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai
@@ -311,7 +310,7 @@
               (.close fos))))))))
 
 (defmethod print-method FileSystemStoreV1
-  [store writer]
+  [^FileSystemStoreV1 store ^Writer writer]
   (.write writer (str "FileStore[\"" (:folder store) ", " (.hasheq store) "\"]")))
 
 (defn new-fs-store-v1
@@ -322,7 +321,7 @@
                 config {:fsync true}}}]
   (let [f (io/file path)
         locks (atom {})
-        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
+        test-file (io/file (str path "/" (UUID/randomUUID)))]
     (when-not (.exists f)
       (.mkdir f))
       ;; simple test to ensure we can write to the folder
@@ -356,7 +355,7 @@
                            (if (and (.exists f) (.exists fd))
                              (async/<!
                               (async/thread
-                                (let [fis (DataInputStream. (FileInputStream. f))]
+                                (let [fis (DataInputStream. (FileInputStream. ^File f))]
                                   (try
                                     (-deserialize serializer read-handlers fis)
                                     (catch Exception e
@@ -387,7 +386,7 @@
 
 (defn- read-key
   "help function for -update-in"
-  [folder f fkey serializer read-handlers]
+  [folder ^File f fkey serializer read-handlers]
   (when (.exists f)
     (let [fis (DataInputStream. (FileInputStream. f))]
       (try
@@ -469,7 +468,7 @@
 
 (defn- read-edn
   "Helper Function for -get-in"
-  [f res-ch folder fn fkey rkey serializer read-handlers]
+  [^File f res-ch folder fn fkey rkey serializer read-handlers]
   (if-not (.exists f)
     (close! res-ch)
     (try
@@ -521,7 +520,7 @@
 
 (defn- read-binary
   "Helper function for -bget"
-  [f res-ch folder fn key locked-cb]
+  [^File f res-ch folder fn key locked-cb]
   (if-not (.exists f)
     (close! res-ch)
     (try
@@ -564,7 +563,7 @@
                                :key       key
                                :exception e}))))))
 
-(defn- read-binary-old [f folder fn key locked-cb]
+(defn- read-binary-old [^File f folder fn key locked-cb]
   (let [res-ch-old (chan)]
     (try
       (let [ac (AsynchronousFileChannel/open (.getPath (FileSystems/getDefault)
@@ -705,12 +704,12 @@
       ch)))
 
 (defmethod print-method FileSystemStoreV2
-  [store writer]
+  [^FileSystemStoreV2 store ^Writer writer]
   (.write writer (str "FileStore[\"" (:folder store) ", " (.hasheq store) "\"]")))
 
 (defn- check-and-create-folder [path]
   (let [f         (io/file path)
-        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
+        test-file (io/file (str path "/" (UUID/randomUUID)))]
     (when-not (.exists f)
       (.mkdir f))
     ;; simple test to ensure we can write to the folders
@@ -730,7 +729,7 @@
                  (map (fn [fn]
                         (go-locked
                          store fn
-                         (let [f (io/file (str folder "/" fn))]
+                         (let [^File f (io/file (str folder "/" fn))]
                            (when (.exists f)
                              (let [fis (DataInputStream. (FileInputStream. f))]
                                (try
@@ -743,7 +742,7 @@
                                              :key fn
                                              :exception e}))
                                  (finally
-                                   (.close fis)))))))))
+                                   (.close ^DataInputStream fis)))))))))
                  async/merge
                  (async/into #{}))]
     fns))

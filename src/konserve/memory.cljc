@@ -91,7 +91,7 @@
 #?(:clj
    (defmethod print-method MemoryStore
      [^MemoryStore store writer]
-     (.write writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
+     (.write ^java.io.StringWriter writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
 
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and

@@ -5,20 +5,21 @@
             [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
             [konserve.filestore :refer [connect-fs-store delete-store]])
-  (:import [org.fressian.handlers WriteHandler ReadHandler]))
+  (:import [org.fressian.handlers WriteHandler ReadHandler]
+           (java.util Date)))
 
 (def custom-tag "java.util.Date")
 
 (def custom-read-handler
   {custom-tag (reify ReadHandler
                 (read [_ reader tag component-count]
-                  (java.util.Date. (.readObject reader))))})
+                  (Date. ^long (.readObject reader))))})
 
 (def custom-write-handler
-  {java.util.Date {custom-tag (reify WriteHandler
+  {Date {custom-tag (reify WriteHandler
                                 (write [_ writer instant]
                                   (.writeTag    writer custom-tag 1)
-                                  (.writeObject writer (.getTime  instant))))}})
+                                  (.writeObject writer (.getTime ^Date instant))))}})
 
 (deftest serializers-test
   (testing "Test the custom fressian serializers functionality."
@@ -27,9 +28,9 @@
           store  (<!! (connect-fs-store folder :serializers {:FressianSerializer (fressian-serializer custom-read-handler custom-write-handler)}))]
       (is (= (<!! (k/get-in store [:foo]))
              nil))
-      (<!! (k/assoc-in store [:foo] (java.util.Date.)))
+      (<!! (k/assoc-in store [:foo] (Date.)))
       (is (= (type (<!! (k/get-in store [:foo])))
-             java.util.Date))
+             Date))
       (<!! (k/dissoc store :foo))
       (is (= (<!! (k/get-in store [:foo]))
              nil))

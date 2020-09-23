@@ -25,7 +25,8 @@
                        :main-opts ["-m" "benchmark.core"]}
            :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.60.977"}
                                org.clojure/test.check   {:mvn/version "1.1.1"}}
-                  :extra-paths ["test"]}
+                  :extra-paths ["test"]
+                  :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
            :jar {:extra-deps {seancorfield/depstar {:mvn/version "1.1.116"}}
                  :main-opts ["-m" "hf.depstar.jar" "replikativ-konserve.jar"]}
            :deploy {:extra-deps {deps-deploy/deps-deploy {:mvn/version "0.0.9"}}
