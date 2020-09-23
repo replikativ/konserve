@@ -5,6 +5,13 @@
             #?(:clj [clojure.test :refer :all]
                :cljs [cljs.test :refer :all :include-macros true])))
 
+
+
+(deftype UnknownType [])
+
+(defn exception? [thing]
+  (instance? Throwable thing))
+  
 (defn compliance-test [store]
   (testing "Test the core API."
     (is (= (<!! (get store :foo))
@@ -50,6 +57,23 @@
         (every?
          (fn [{:keys [:konserve.core/timestamp]}]
            (= (type (java.util.Date.)) (type timestamp)))
-         list-keys)))))
+         list-keys)))
+    
+    (let [params (clojure.core/keys store)
+          corruptor (fn [s k] 
+                        (if (= (type (k s)) clojure.lang.Atom)
+                          (clojure.core/assoc-in s [k] (atom {})) 
+                          (clojure.core/assoc-in s [k] (UnknownType.))))
+          corrupt (reduce corruptor store params)]
+      (is (exception? (<!! (get corrupt :bad))))
+      (is (exception? (<!! (get-meta corrupt :bad))))
+      (is (exception? (<!! (assoc corrupt :bad 10))))
+      (is (exception? (<!! (dissoc corrupt :bad))))
+      (is (exception? (<!! (assoc-in corrupt [:bad :robot] 10))))
+      (is (exception? (<!! (update-in corrupt [:bad :robot] inc))))
+      (is (exception? (<!! (exists? corrupt :bad))))
+      (is (exception? (<!! (keys corrupt))))
+      (is (exception? (<!! (bget corrupt :bad (fn [_] nil)))))   
+      (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10)))))))))
 
 

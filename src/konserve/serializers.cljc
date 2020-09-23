@@ -64,9 +64,15 @@
 (defn string-serializer []
   (map->StringSerializer {}))
 
-(defn construct->class [m]
-  (->> (map (fn [[k v]] [(class v) k]) m)
-          (into {})))
+#?(:clj
+   (defn construct->class [m]
+     (->> (map (fn [[k v]] [(class v) k]) m)
+          (into {}))))
+
+#?(:cljs
+   (defn construct->class [m]
+     (->> (map (fn [[k v]] [(pr-str (type v)) k]) m)
+          (into {}))))
 
 (def byte->serializer
   {0 (string-serializer)
@@ -75,9 +81,16 @@
 (def serializer-class->byte
   (construct->class byte->serializer))
 
-(defn construct->keys [m]
-  (->> (map (fn [[k v]] [(-> v class .getSimpleName keyword) v]) m)
-       (into {})))
+#(:clj
+  (defn construct->keys [m]
+    (->> (map (fn [[k v]] [(-> v class .getSimpleName keyword) v]) m)
+         (into {}))))
+
+#(:cljs
+  (defn construct->keys [m]
+    (->> (map (fn [[k v]] [(-> v type pr-str) v]) m)
+         (into {}))))
+
 
 (def key->serializer
   (construct->keys byte->serializer))
