@@ -81,12 +81,12 @@
 (def serializer-class->byte
   (construct->class byte->serializer))
 
-#(:clj
+#?(:clj
   (defn construct->keys [m]
     (->> (map (fn [[k v]] [(-> v class .getSimpleName keyword) v]) m)
          (into {}))))
 
-#(:cljs
+#?(:cljs
   (defn construct->keys [m]
     (->> (map (fn [[k v]] [(-> v type pr-str) v]) m)
          (into {}))))
