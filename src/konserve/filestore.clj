@@ -19,11 +19,11 @@
     :refer [<!! <! >! chan go close! put!]]
    [taoensso.timbre :as timbre :refer [info]])
   (:import
-   [java.io Reader File InputStream
+   [java.io Reader File InputStream StringReader Closeable DataInput
      ByteArrayOutputStream ByteArrayInputStream FileInputStream]
-   [java.nio.channels Channels FileChannel AsynchronousFileChannel CompletionHandler]
+   [java.nio.channels Channels FileChannel AsynchronousFileChannel CompletionHandler ReadableByteChannel FileLock]
    [java.nio ByteBuffer]
-   [java.nio.file Files StandardCopyOption FileSystems Paths OpenOption LinkOption
+   [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption
     StandardOpenOption]))
 
 (defn- sync-folder
@@ -67,28 +67,28 @@
   InputStream
   (blob->channel [input buffer-size]
     [(Channels/newChannel input)
-     (fn [bis buffer]  (.read bis buffer))])
+     (fn [bis buffer] (.read ^ReadableByteChannel bis ^ByteBuffer buffer))])
 
   File
   (blob->channel [input buffer-size]
-    [(Channels/newChannel (FileInputStream. input))
-     (fn [bis buffer]  (.read bis buffer))])
+    [(Channels/newChannel (FileInputStream. ^String input))
+     (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])
 
   String
   (blob->channel [input buffer-size]
     [(Channels/newChannel (ByteArrayInputStream. (.getBytes input)))
-     (fn [bis buffer]  (.read bis buffer))])
+     (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])
 
   Reader
   (blob->channel [input buffer-size]
     [input
      (fn [bis nio-buffer]
        (let [char-array (make-array Character/TYPE buffer-size)
-             size (.read bis char-array)]
+             size (.read ^StringReader bis ^chars char-array)]
          (try
            (when-not (= size -1)
-             (let [char-array (java.util.Arrays/copyOf char-array size)]
-               (.put nio-buffer (.getBytes (String. char-array)))))
+             (let [char-array (java.util.Arrays/copyOf ^chars char-array size)]
+               (.put ^ByteBuffer nio-buffer ^"[B" (.getBytes (String. char-array)))))
            size
            (catch Exception e
              (throw e)))))]))
@@ -98,14 +98,14 @@
   BlobToChannel
   {:blob->channel (fn [input _]
                     [(Channels/newChannel (ByteArrayInputStream. input))
-                   (fn [bis buffer] (.read bis buffer))])})
+                   (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])})
 
 (extend
   char-array-type
   BlobToChannel
   {:blob->channel (fn [input _]
-                    [(Channels/newChannel (ByteArrayInputStream. (.getBytes (String. input))))
-                     (fn [bis buffer] (.read bis buffer))])})
+                    [(Channels/newChannel (ByteArrayInputStream. (.getBytes (String. ^chars input))))
+                     (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])})
 
 (defn- completion-write-handler
   "Callback Function for Binary write. It only close the go-channel."
@@ -136,17 +136,17 @@
                                                                                    {:type :write-binary-error
                                                                                     :key  key}))
                   (<?- res-ch)
-                  (.clear buffer)
+                  (.clear ^ByteBuffer buffer)
                   (recur (+ buffer-size start-byte) (+ buffer-size stop-byte))))))
         (finally
-          (.close bis)
-          (.clear buffer)))))
+          (.close ^Closeable bis)
+          (.clear ^ByteBuffer buffer)))))
 
 (defn- write-header
   "Write File-Header"
   [^AsynchronousFileChannel ac-new key byte-array]
   (let [bos       (ByteArrayOutputStream.)
-        _         (.write bos byte-array)
+        _         (.write bos byte-array 0 (count byte-array))
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
     (go-try-
@@ -155,7 +155,7 @@
      (<?- result-ch)
      (finally
        (close! result-ch)
-       (.clear buffer)
+       (.clear ^ByteBuffer buffer)
        (.close bos)))))
 
 (defn- write-edn
@@ -263,10 +263,10 @@
                                        _          (.close bais-value)]
                                    (put! res-ch [meta value]))
           :read-version          (let [array   (.array bb)
-                                       version (.readShort array)]
+                                       version (.readShort ^DataInput array)]
                                    (put! res-ch version))
           :read-serializer       (let [array   (.array bb)
-                                       ser     (.readShort array)]
+                                       ser     (.readShort ^DataInput array)]
                                    (put! res-ch ser))
           :read-binary           (go (>! res-ch (<! (locked-cb {:input-stream (ByteArrayInputStream. (.array bb))
                                                                 :size         file-size
@@ -282,7 +282,7 @@
   "Read meta, edn and binary."
   [^AsynchronousFileChannel ac serializer read-handlers {:keys [compressor encryptor operation] :as env} meta-size]
   (let [file-size                         (.size ac)
-        {:keys [bb start-byte stop-byte]} (cond
+        {:keys [^ByteBuffer bb start-byte stop-byte]} (cond
                                             (= operation :write-edn)
                                             {:bb         (ByteBuffer/allocate file-size)
                                              :start-byte Long/BYTES
@@ -336,7 +336,7 @@
 (defn completion-read-old-handler [res-ch bb serializer read-handlers msg]
   (proxy [CompletionHandler] []
     (completed [res att]
-      (let [bais (ByteArrayInputStream. (.array bb))]
+      (let [bais (ByteArrayInputStream. (.array ^ByteBuffer bb))]
         (try
           (let [value (-deserialize serializer read-handlers bais)]
             (put! res-ch value)
@@ -373,7 +373,7 @@
             [meta old]    (if binary?
                             [{:key key :type :binary :konserve.core/timestamp (java.util.Date.)}
                              {:operation :write-binary
-                              :input     (if input input (FileInputStream. old-file-name))
+                              :input     (if input input (FileInputStream. ^String old-file-name))
                               :msg       {:type :write-binary-error
                                           :key  key}}]
                             [{:key nkey :type :edn :konserve.core/timestamp (java.util.Date.)}
@@ -411,7 +411,7 @@
                          (<?- res-ch)
                          (finally
                            (close! res-ch)
-                           (.clear bb)))))
+                           (.clear ^ByteBuffer bb)))))
                 (return-value (second value)))))))
       (finally
         (if binary?
@@ -453,7 +453,7 @@
                 [meta old]   (if (= :binary format)
                                [{:key key :type :binary :konserve.core/timestamp (java.util.Date.)}
                                 {:operation :write-binary
-                                 :input     (if input input (FileInputStream. data-file-name))
+                                 :input     (if input input (FileInputStream. ^String data-file-name))
                                  :msg       {:type :write-binary-error
                                              :key  key}}]
                                [{:key key :type :edn :konserve.core/timestamp (java.util.Date.)}
@@ -494,7 +494,7 @@
                                (Files/delete meta-path)
                                (Files/delete data-path)
                                (close! res-ch)
-                               (.clear bb)))))
+                               (.clear ^ByteBuffer bb)))))
                     (return-value (second value))))))))
         (finally
           (close! res-ch-data)
@@ -551,7 +551,7 @@
                   bb          (ByteBuffer/allocate header-size)
                   res-ch      (chan)]
               (go-try-
-                  (.read ac bb 0 header-size
+                  (.read ^AsynchronousFileChannel ac ^ByteBuffer bb 0 header-size
                          (completion-read-header-handler res-ch bb
                                                          {:type :read-meta-size-error
                                                           :key  key}))
@@ -568,12 +568,12 @@
                 (finally
                   (close! res-ch)
                   (.clear bb)
-                  (.release lock)
+                  (.release ^FileLock lock)
                   (.close ac))))
             (go-try-
                 (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
               (finally
-                (.release lock)
+                (.release ^FileLock lock)
                 (.close ac)))))
         (go nil)))))
 
@@ -588,20 +588,20 @@
             [path & file-paths] file-paths]
        (if path
          (cond
-           (ends-with? (.toString path) ".new")
+           (ends-with? (.toString ^Path path) ".new")
            (recur list-keys file-paths)
 
-           (ends-with? (.toString path) ".ksv")
+           (ends-with? (.toString ^Path path) ".ksv")
            (let [ac          (AsynchronousFileChannel/open
                               path (into-array StandardOpenOption [StandardOpenOption/READ]))
                  header-size 8
                  bb          (ByteBuffer/allocate header-size)
-                 path-name   (.toString path)
+                 path-name   (.toString ^Path path)
                  env         (update-in env [:msg :keys] (fn [_] path-name))
                  res-ch      (chan)]
              (recur
               (try
-                (.read ac bb 0 Long/BYTES
+                (.read ^AsynchronousFileChannel ac ^ByteBuffer bb 0 Long/BYTES
                        (completion-read-header-handler res-ch bb
                                                        {:type :read-list-keys
                                                         :path path-name}))
@@ -618,14 +618,14 @@
                 (catch Exception
                     list-keys)
                 (finally
-                  (.clear bb)
-                  (.close ac)
+                  (.clear ^ByteBuffer bb)
+                  (.close ^AsynchronousFileChannel ac)
                   (close! res-ch)))
               file-paths))
 
            :else ;; need migration
-           (let [file-name (-> path .toString)
-                 fn-l      (str folder "/" (-> path .getFileName .toString) ".ksv")
+           (let [file-name (-> ^Path path .toString)
+                 fn-l      (str folder "/" (-> ^Path path ^Path (.getFileName) .toString) ".ksv")
                  env       (update-in env [:msg :keys] (fn [_] file-name))]
              (cond
                ;; ignore the data folder
@@ -638,8 +638,8 @@
                                    [meta-path & meta-file-names]
                                    (vec (Files/newDirectoryStream path))]
                               (if meta-path
-                                (let [old-file-name (-> meta-path .toString)
-                                      file-name     (str folder "/" (-> meta-path .getFileName .toString) ".ksv")
+                                (let [old-file-name (-> ^Path meta-path .toString)
+                                      file-name     (str folder "/" (-> ^Path meta-path ^Path (.getFileName) .toString) ".ksv")
                                       env           (assoc-in env [:msg :keys] old-file-name)
                                       env           (assoc env :operation :read-meta)]
                                   (recur
@@ -772,7 +772,7 @@
 (defn detect-old-file-schema [folder]
   (reduce
    (fn [old-list path]
-     (let [file-name (-> path .toString)]
+     (let [file-name (-> ^Path path .toString)]
        (cond
          (or
           (includes? file-name "data")
