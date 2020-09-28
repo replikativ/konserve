@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+
+# Compile for browser
+npm run ci-test
+
+# Compile for node
+npx shadow-cljs compile node-test

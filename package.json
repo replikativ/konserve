@@ -1,0 +1,15 @@
+{
+  "name": "CITests",
+  "description": "Testing",
+  "scripts": {
+    "ci-test": "npx shadow-cljs compile ci && npx karma start --single-run"
+  },
+  "devDependencies": {
+    "karma": "^2.0.5",
+    "karma-chrome-launcher": "^2.2.0",
+    "karma-cljs-test": "^0.1.0"
+  },
+  "dependencies": {
+    "shadow-cljs": "^2.11.4"
+  }
+}

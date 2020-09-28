@@ -1,12 +1,15 @@
 {:paths ["src"]
- :deps {org.clojure/clojure {:mvn/version "1.10.1"} 
-        org.clojure/clojurescript {:mvn/version "1.10.764"}
-        io.replikativ/incognito {:mvn/version "0.2.5"}
-        io.replikativ/superv.async {:mvn/version "0.2.9-SNAPSHOT"}
+ :deps {org.clojure/clojure {:mvn/version "1.10.1"}
+        org.clojure/clojurescript {:mvn/version "1.10.773"}
+        org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         fress {:mvn/version "0.3.1"}
-        org.clojure/data.fressian {:mvn/version "0.2.1"} ;; for filestore
+        io.replikativ/incognito {:mvn/version "0.2.5"}
         io.replikativ/hasch {:mvn/version "0.3.7"}
+        io.replikativ/superv.async {:mvn/version "0.2.11"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
+        ;; reactivate for nodejs support
+        ;com.google.javascript/closure-compiler-unshaded {:mvn/version "v20190325"}
+        ;org.clojure/google-closure-library {:mvn/version "0.0-20190213-2033d5d9"}
         org.lz4/lz4-java {:mvn/version "1.6.0"}
         com.taoensso/timbre {:mvn/version "4.10.0"}}
  :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.10.21"}
@@ -15,4 +18,10 @@
            :dev  {:extra-deps {criterium                {:mvn/version "0.4.4"}}}
            :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.0.641"}
                                org.clojure/test.check   {:mvn/version "0.9.0"}}
-                  :extra-paths ["test"]}}}
+                  :extra-paths ["test"]}
+                      :jar {:extra-deps {seancorfield/depstar {:mvn/version "1.1.116"}}
+                            :main-opts ["-m" "hf.depstar.jar" "replikativ-konserve.jar"]}
+:deploy {:extra-deps {deps-deploy/deps-deploy {:mvn/version "0.0.9"}}
+         :main-opts ["-m" "deps-deploy.deps-deploy" "deploy" "replikativ-konserve.jar"]}
+:format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
+         :main-opts ["-m" "cljfmt.main" "check"]}}}
