@@ -1,10 +1,10 @@
 (ns konserve.filestore-migration-test
- (:refer-clojure :exclude [get get-in keys update update-in assoc assoc-in exists? bget bassoc])
- (:require [clojure.test :refer [deftest testing are]]
-           [konserve.old-filestore :as old-store]
-           [clojure.core.async :refer [go <!!]]
-           [konserve.core :refer [get bget keys]]
-           [konserve.filestore :refer [new-fs-store delete-store]]))
+  (:refer-clojure :exclude [get get-in keys update update-in assoc assoc-in exists? bget bassoc])
+  (:require [clojure.test :refer [deftest testing are]]
+            [konserve.old-filestore :as old-store]
+            [clojure.core.async :refer [go <!!]]
+            [konserve.core :refer [get bget keys]]
+            [konserve.filestore :refer [new-fs-store delete-store]]))
 
 (deftest old-filestore-v1
   (testing "edn migration single call"
@@ -17,7 +17,7 @@
           list-keys-new  (doall (map #(<!! (get new-store %)) (range 0 10)))]
       (are [x y] (= x y)
         #{[4] [7] [6] [9] [3] [8] [0] [5] [2] [1]} list-old-store
-        (range 0 10) list-keys-new  )))
+        (range 0 10) list-keys-new)))
   (testing "edn migration list-keys"
     (let [_              (delete-store "/tmp/konserve-fs-migration-test-v1-2")
           store          (<!! (old-store/new-fs-store-v1 "/tmp/konserve-fs-migration-test-v1-2"))
@@ -48,7 +48,7 @@
           _         (dotimes [x 10]
                       (<!! (bget new-store x
                                  (fn [{:keys [input-stream]}]
-                                   (go 
+                                   (go
                                      true)))))
 
           list-keys (<!! (keys new-store))]
@@ -118,7 +118,7 @@
           {:key 8, :format :edn}
           {:key 6, :format :edn}
           {:key 9, :format :edn}
-          {:key 2, :format :edn}} list-old-store 
+          {:key 2, :format :edn}} list-old-store
         #{{:key 0, :type :edn}
           {:key 2, :type :edn}
           {:key 7, :type :edn}
@@ -139,7 +139,7 @@
           _         (dotimes [x 10]
                       (<!! (bget new-store x
                                  (fn [{:keys [_]}]
-                                   (go 
+                                   (go
                                      true)))))
 
           list-keys (<!! (keys new-store))]

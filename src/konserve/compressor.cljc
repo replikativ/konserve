@@ -6,9 +6,9 @@
 (defrecord NullCompressor [serializer]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-      (-deserialize serializer read-handlers bytes))
+    (-deserialize serializer read-handlers bytes))
   (-serialize [_ bytes write-handlers val]
-      (-serialize serializer bytes write-handlers val)))
+    (-serialize serializer bytes write-handlers val)))
 
 (defrecord Lz4Compressor [serializer]
   PStoreSerializer
