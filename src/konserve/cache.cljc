@@ -6,7 +6,7 @@
   (:require [konserve.protocols :refer [-exists? -get -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
-              :cljs [cljs.cache :as cache])
+               :cljs [cljs.cache :as cache])
             [konserve.core :refer [meta-update]]
             [konserve.core :refer [go-locked]]
             [clojure.core.async :refer [chan poll! put! <! go]]))

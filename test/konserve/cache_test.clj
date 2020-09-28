@@ -5,7 +5,6 @@
             [clojure.core.async :refer [<!!]]
             [clojure.test :refer :all]))
 
-
 (deftest cache-test
   (testing "Testing the cache namespace"
     (let [test-store (<!! (fstore/new-fs-store "/tmp/cache-store"))

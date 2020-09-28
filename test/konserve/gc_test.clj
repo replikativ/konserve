@@ -24,7 +24,7 @@
         (is (= #{:foo2 :foo3} (<!! (sweep! store whitelist ts))))
         ;it seems clock of threads are not sync.
         #_(prn (.getTime ts) (map (fn [e] [(:key e) (-> e :konserve.core/timestamp .getTime)]) (<!! (keys store))))))))
- 
+
 (deftest file-store-gc-test
   (testing "Test the GC."
     (let [folder "/tmp/konserve-gc"
