@@ -17,6 +17,7 @@
                  #_[org.clojure/google-closure-library "0.0-20190213-2033d5d9"]
                  [org.lz4/lz4-java "1.7.1"]
                  [com.taoensso/timbre "4.10.0"]]
+  :global-vars {*warn-on-reflection* true}
   :profiles
   {:cljs
    {:source-paths ["src/cljs"]
