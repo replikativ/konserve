@@ -1,4 +1,4 @@
-(defproject io.replikativ/konserve "0.6.0-alpha1"
+(defproject io.replikativ/konserve "0.6.0-alpha2"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
@@ -39,14 +39,14 @@
  ; :cljsbuild {}
   #_{
      ;:test-commands {"unit-tests" ["node" "target/unit-tests.js"]}
-   :builds
-   {:tests
-    {:source-paths ["src" "test"]
-     :notify-command ["node" "target/unit-tests.js"]
-     :compiler {:output-to "target/unit-tests.js"
-                :optimizations :none
-                :target :nodejs
-                :main konserve.konserve-test}}}}
+     :builds
+     {:tests
+      {:source-paths ["src" "test"]
+       :notify-command ["node" "target/unit-tests.js"]
+       :compiler {:output-to "target/unit-tests.js"
+                  :optimizations :none
+                  :target :nodejs
+                  :main konserve.konserve-test}}}}
   :deploy-repositories
     [["clojars"
       {:url           "https://clojars.org/repo"
