@@ -2,14 +2,13 @@
   :PROPERTIES:
   :CUSTOM_ID: h:6f85a7f4-3694-4703-8c0b-ffcc34f2e5c9
   :END:
-  
-#+BEGIN_EXPORT html
-<p align="center">
-<a href="https://clojars.org/replikativ/konserve"> <img src="https://img.shields.io/clojars/v/replikativ/konserve.svg" /></a>
-<a href="https://circleci.com/gh/replikativ/konserve"><img src="https://circleci.com/gh/replikativ/konserve.svg?style=shield"/></a>
-<a href="https://versions.deps.co/replikativ/konserve" title="Dependencies Status"><img src="https://versions.deps.co/replikativ/konserve/status.svg" /></a>
-</p>
-#+END_EXPORT
+
+[[https://clojurians.slack.com/archives/CB7GJAN0L][https://img.shields.io/badge/slack-join_chat-brightgreen.svg]]
+[[https://clojars.org/io.replikativ/konserve][https://img.shields.io/clojars/v/io.replikativ/konserve.svg]]
+[[https://circleci.com/gh/replikativ/konserve][https://circleci.com/gh/replikativ/konserve.svg?style=shield]]
+[[https://github.com/replikativ/konserve/tree/development][https://img.shields.io/github/last-commit/replikativ/konserve/development.svg]]
+[[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
+
 
 
 [[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
@@ -184,7 +183,7 @@ You can read and write custom records according to
    :END:
 
 Add to your leiningen dependencies:
-[[http://clojars.org/io.replikativ/konserve][[[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
+[[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
 From a Clojure REPL run: 
 #+BEGIN_SRC clojure 
