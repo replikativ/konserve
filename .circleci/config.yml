@@ -99,6 +99,7 @@ workflows:
           requires:
             - setup
       - deploy-snapshot:
+          context: clojars-deploy
           filters:
             branches:
               only: development
@@ -107,6 +108,7 @@ workflows:
             - unittest
             - build
       - deploy-release:
+          context: clojars-deploy
           filters:
             branches:
               only: master
