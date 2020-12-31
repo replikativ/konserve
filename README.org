@@ -18,7 +18,7 @@ A simple document store protocol defined with [[https://github.com/clojure/core.
 Clojuresque collection operations on associative key-value stores, both from
 Clojure and ClojureScript for different backends. Data is generally serialized
 with [[https://github.com/edn-format/edn][edn]] semantics or, if supported, as native binary blobs and can be accessed
-similar to =clojure.core= functions =get-in=,=assoc-in= and =update-in=.
+similar to =clojure.core= functions =get-in=, =assoc-in= and =update-in=.
 =update-in= especially allows to run functions atomically and returns old and
 new value. Each operation is run atomically and must be consistent (in fact
 ACID), but further consistency is not supported (Riak, CouchDB and many scalable
