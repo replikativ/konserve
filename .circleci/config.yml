@@ -6,18 +6,24 @@ orbs:
 workflows:
   build-test-and-deploy:
     jobs:
-      - lein/setup
+      - lein/setup:
+          context: dockerhub-deploy
       - lein/format:
+          context: dockerhub-deploy
           requires:
             - lein/setup
       - lein/unittest:
+          context: dockerhub-deploy
           requires:
             - lein/setup
       - lein/build:
+          context: dockerhub-deploy
           requires:
             - lein/setup
       - lein/deploy-snapshot:
-          context: clojars-deploy
+          context:
+            - dockerhub-deploy
+            - clojars-deploy
           filters:
             branches:
               only: development
@@ -27,7 +33,9 @@ workflows:
             - lein/build
             - lein/unittest
       - lein/deploy-release:
-          context: clojars-deploy
+          context:
+            - dockerhub-deploy
+            - clojars-deploy
           filters:
             branches:
               only: master
