@@ -8,10 +8,6 @@ workflows:
     jobs:
       - lein/setup:
           context: dockerhub-deploy
-      - lein/format:
-          context: dockerhub-deploy
-          requires:
-            - lein/setup
       - lein/unittest:
           context: dockerhub-deploy
           requires:
@@ -29,7 +25,6 @@ workflows:
               only: development
           requires:
             - lein/setup
-            - lein/format
             - lein/build
             - lein/unittest
       - lein/deploy-release:
@@ -41,6 +36,5 @@ workflows:
               only: master
           requires:
             - lein/setup
-            - lein/format
             - lein/build
             - lein/unittest
