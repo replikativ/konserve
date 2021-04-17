@@ -9,7 +9,7 @@
   (-get [this key] "Returns the value stored described by key or nil if the path is not resolvable.")
   (-update-in [this key-vec meta-up-fn up-fn up-fn-args]
     "Updates a position described by key-vec by applying up-fn and storing the result atomically. Returns a vector [old new] of the previous value and the result of applying up-fn (the newly stored value).")
-  (-assoc-in [this key-vec meta-up-fn val]) 
+  (-assoc-in [this key-vec meta-up-fn val])
   (-dissoc [this key]))
 
 (defprotocol PStoreSerializer

@@ -17,10 +17,10 @@
              '({:bar 42}
                {:bar 43})))
       (is (= (<!! (k/reduce-log store
-                               :foo
-                               (fn [acc elem]
-                                 (conj acc elem))
-                               []))
+                                :foo
+                                (fn [acc elem]
+                                  (conj acc elem))
+                                []))
              [{:bar 42} {:bar 43}]))
       (let [{:keys [key type :konserve.core/timestamp]} (<!! (k/get-meta store :foo))]
         (are [x y] (= x y)
