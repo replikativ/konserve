@@ -18,7 +18,6 @@
                  [org.lz4/lz4-java "1.7.1"]
                  [com.taoensso/timbre "5.1.2"]]
   :global-vars {*warn-on-reflection* true}
-  :plugins [[lein-cljfmt "0.7.0"]]
   :profiles
   {:cljs
    {:source-paths ["src/cljs"]

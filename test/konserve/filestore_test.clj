@@ -7,6 +7,7 @@
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [new-fs-store delete-store]]))
 
+
 (deftest filestore-test
   (testing "Test the file store functionality."
     (let [folder "/tmp/konserve-fs-test"
@@ -71,6 +72,7 @@
       (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (keys store))
                #{}))))))
+
 
 (deftest filestore-layout1-test
   (testing "Test Layout 1."

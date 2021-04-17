@@ -83,9 +83,13 @@
 
   my-buf
 
+
   (go (reset! fd (<! res-ch)))
 
   (def fd @fd)
+
+
+
 
   (let [rs          (.createReadStream fs file-name)
         data-buffer (atom {:buffer nil})]
@@ -108,8 +112,11 @@
     (let [[fkey & rkey] key-vec
           file-name (str folder "/" (uuid fkey))]
       (if (.existsSync fs file-name)
-        (let [res-ch (chan)])
-        (go (<! (update-file))))))
+        (let [res-ch (chan)]
+          )
+        (go (<! (update-file))) 
+        )))
+
 
   (defrecord FileSystemNodejsStore [folder serializer read-handlers write-handlers locks config]
     PEDNAsyncKeyValueStore
@@ -138,7 +145,7 @@
                                        :locks          (atom {})
                                        :config         config}))))
 
-  #_(comment
+  #_(comment 
       ;; TODO serializer
       ;; TODO spec konserve.core
       (defonce fs (node/require "fs"))
@@ -396,7 +403,7 @@
                            (close! res-ch)))))))
 
       (defrecord FileSystemNodejsStore
-                 [folder serializer read-handlers write-handlers locks config]
+          [folder serializer read-handlers write-handlers locks config]
         PEDNAsyncKeyValueStore
         (-exists? [this key]
           (let [fn  (uuid key)

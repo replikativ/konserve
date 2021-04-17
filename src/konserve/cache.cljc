@@ -6,13 +6,13 @@
   (:require [konserve.protocols :refer [-exists? -get -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
-               :cljs [cljs.cache :as cache])
+              :cljs [cljs.cache :as cache])
             [konserve.core :refer [meta-update]]
             #?(:clj [konserve.core :refer [go-locked]])
             #?(:clj [clojure.core.async :refer [chan poll! put! <! go]]
-               :cljs [cljs.core.async :refer [chan poll! put! <!]]))
+              :cljs [cljs.core.async :refer [chan poll! put! <!]]))
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]]
-                            [konserve.core :refer [go-locked]])))
+                           [konserve.core :refer [go-locked]])))
 
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32

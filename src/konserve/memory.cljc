@@ -12,6 +12,7 @@
             [clojure.core.async :as async])
   #?(:cljs (:require-macros [cljs.core.async.macros :refer [go]])))
 
+
 (defrecord MemoryStore [state read-handlers write-handlers locks]
   PEDNAsyncKeyValueStore
   (-exists? [this key] (go (if (@state key) true false)))
@@ -39,13 +40,13 @@
     (locked-cb (second (get @state key))))
   (-bassoc [this key meta-up-fn input]
     (go
-      (swap! state
-             (fn [old]
-               (update old key
-                       (fn [[meta data]]
-                         [(meta-up-fn meta) {:input-stream input
-                                             :size         :unknown}]))))
-      nil))
+        (swap! state
+               (fn [old]
+                 (update old key
+                         (fn [[meta data]]
+                           [(meta-up-fn meta) {:input-stream input
+                                               :size         :unknown}]))))
+        nil))
   PKeyIterable
   (-keys [_]
     (go (set (map first (vals @state))))))
