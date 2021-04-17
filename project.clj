@@ -1,27 +1,27 @@
-(defproject io.replikativ/konserve "0.6.0-alpha2"
+(defproject io.replikativ/konserve "0.6.0-alpha3"
   :description "Durable cross-platform key-value store protocol with core.async."
   :url "http://github.com/replikativ/konserve"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src"]
   :test-paths ["test"]
-  :dependencies [[org.clojure/clojure "1.10.1" :scope "provided"]
-                 [org.clojure/clojurescript "1.10.773" :scope "provided"]
+  :dependencies [[org.clojure/clojure "1.10.3" :scope "provided"]
+                 [org.clojure/clojurescript "1.10.758" :scope "provided"]
                  [io.replikativ/hasch "0.3.7"]
                  [io.replikativ/superv.async "0.2.11"]
-                 [fress "0.3.1"]
+                 [fress/fress "0.3.2"]
                  [org.clojure/data.fressian "1.0.0"] ;; for filestore
                  [org.clojars.mmb90/cljs-cache "0.1.4"]
                  ;; reactivate for nodejs support
                  #_[com.google.javascript/closure-compiler-unshaded "v20190325"]
                  #_[org.clojure/google-closure-library "0.0-20190213-2033d5d9"]
                  [org.lz4/lz4-java "1.7.1"]
-                 [com.taoensso/timbre "4.10.0"]]
+                 [com.taoensso/timbre "5.1.2"]]
   :global-vars {*warn-on-reflection* true}
   :profiles
   {:cljs
    {:source-paths ["src/cljs"]
-    :dependencies [[thheller/shadow-cljs "2.8.109"]]}}
+    :dependencies [[thheller/shadow-cljs "2.12.5"]]}}
 
 
   #_( :plugins [[lein-cljsbuild "1.1.7"]]
