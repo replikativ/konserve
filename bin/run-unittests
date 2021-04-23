@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+TIMBRE_LEVEL=':warn' lein test
