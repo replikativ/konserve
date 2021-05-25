@@ -40,13 +40,13 @@
   {0 null-compressor
    1 #?(:clj (try
               ;; LZ4 requires native code that breaks the native-image executable atm.
-               (if (org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode)
-                 unsupported-compressor
-                 lz4-compressor)
+              (if (Class/forName "org.graalvm.nativeimage.ImageInfo")
+                #_(org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode)
+                unsupported-compressor
+                lz4-compressor)
                (catch Exception _
                  lz4-compressor))
         :cljs unsupported-compressor)})
 
 (def compressor->byte
   (invert-map byte->compressor))
-
