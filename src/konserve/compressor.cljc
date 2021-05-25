@@ -10,6 +10,13 @@
   (-serialize [_ bytes write-handlers val]
     (-serialize serializer bytes write-handlers val)))
 
+(defrecord UnsupportedCompressor [serializer]
+  PStoreSerializer
+  (-deserialize [_ read-handlers bytes]
+    (throw (ex-info "Unsupported compressor." {:bytes bytes})))
+  (-serialize [_ bytes write-handlers val]
+    (throw (ex-info "Unsupported compressor." {:bytes bytes}))))
+
 (defrecord Lz4Compressor [serializer]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
@@ -23,12 +30,22 @@
 (defn null-compressor [serializer]
   (NullCompressor. serializer))
 
+(defn unsupported-compressor [serializer]
+  (UnsupportedCompressor. serializer))
+
 (defn lz4-compressor [serializer]
   (Lz4Compressor. serializer))
 
 (def byte->compressor
   {0 null-compressor
-   1 lz4-compressor})
+   1 #?(:clj (try
+              ;; LZ4 requires native code that breaks the native-image executable atm.
+               (if (org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode)
+                 unsupported-compressor
+                 lz4-compressor)
+               (catch Exception _
+                 lz4-compressor))
+        :cljs unsupported-compressor)})
 
 (def compressor->byte
   (invert-map byte->compressor))
