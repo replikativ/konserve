@@ -2,7 +2,7 @@
   (:require
    [clojure.java.io :as io]
    [konserve.serializers :refer [byte->key byte->serializer serializer-class->byte key->serializer]]
-   [konserve.compressor :refer [byte->compressor compressor->byte lz4-compressor]]
+   [konserve.compressor :refer [byte->compressor compressor->byte null-compressor]]
    [konserve.encryptor :refer [encryptor->byte byte->encryptor null-encryptor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [includes? ends-with?]]
@@ -24,7 +24,8 @@
    [java.nio.channels Channels FileChannel AsynchronousFileChannel CompletionHandler]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Paths OpenOption LinkOption
-    StandardOpenOption]))
+    StandardOpenOption]
+   [sun.nio.ch FileLockImpl]))
 
 (defn- sync-folder
   "Helper Function to synchronize the folder of the filestore"
@@ -143,9 +144,9 @@
 
 (defn- write-header
   "Write File-Header"
-  [^AsynchronousFileChannel ac-new key byte-array]
+  [^AsynchronousFileChannel ac-new key bytearray]
   (let [bos       (ByteArrayOutputStream.)
-        _         (.write bos byte-array)
+        _         (.write bos (byte-array bytearray))
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
     (go-try-
@@ -200,16 +201,25 @@
   [folder path serializer write-handlers buffer-size [key & rkey]
    {:keys [compressor encryptor version file-name up-fn up-fn-args
            up-fn-meta config operation input]} [old-meta old-value]]
-  (let [path-new             (Paths/get (str file-name ".new") (into-array String []))
-        standard-open-option (into-array StandardOpenOption
-                                         [StandardOpenOption/WRITE
-                                          StandardOpenOption/CREATE])
-        ac-new               (AsynchronousFileChannel/open path-new standard-open-option)
-        meta                 (up-fn-meta old-meta)
+  (let [meta                 (up-fn-meta old-meta)
         value                (when (= operation :write-edn)
                                (if-not (empty? rkey)
                                  (apply update-in old-value rkey up-fn up-fn-args)
                                  (apply up-fn old-value up-fn-args)))
+
+        path-new             (Paths/get (if (:in-place? config)
+                                          file-name
+                                          (str file-name ".new"))
+                                        (into-array String []))
+        ;; TODO this copy method throws a java.lang.ClassNotFoundException: java.nio.file.Files in the native image
+        #_(when (:in-place? config) ;; let's back things up before writing then
+            (Files/copy path-new (Paths/get (str file-name ".backup")
+                                            (into-array String []))
+                        (into-array [StandardCopyOption/REPLACE_EXISTING])))
+        standard-open-option (into-array StandardOpenOption
+                                         [StandardOpenOption/WRITE
+                                          StandardOpenOption/CREATE])
+        ac-new               (AsynchronousFileChannel/open path-new standard-open-option)
         bos                  (ByteArrayOutputStream.)
         _                    (-serialize (encryptor (compressor serializer)) bos write-handlers meta)
         meta-size            (.size bos)
@@ -226,12 +236,13 @@
             (write-binary input ac-new buffer-size key start-byte)
             (write-edn ac-new key serializer compressor encryptor write-handlers start-byte value)))
      (when (:fsync config)
-       (.force ac-new true))
-     (.close ac-new)
-     (Files/move path-new path
-                 (into-array [StandardCopyOption/ATOMIC_MOVE]))
-     (when (:fsync config)
+       (.force ac-new true)
        (sync-folder folder))
+     (.close ac-new)
+
+     (when-not (:in-place? config)
+       (Files/move path-new path
+                   (into-array [StandardCopyOption/ATOMIC_MOVE])))
      (if (= operation :write-edn) [old-value value] true)
      (finally
        (.close ac-new)))))
@@ -281,27 +292,28 @@
   "Read meta, edn and binary."
   [^AsynchronousFileChannel ac serializer read-handlers {:keys [compressor encryptor operation] :as env} meta-size]
   (let [file-size                         (.size ac)
-        {:keys [bb start-byte stop-byte]} (cond
-                                            (= operation :write-edn)
-                                            {:bb         (ByteBuffer/allocate file-size)
-                                             :start-byte Long/BYTES
-                                             :stop-byte  file-size}
-                                            (= operation :read-version)
-                                            {:bb         (ByteBuffer/allocate 1)
-                                             :start-byte 0
-                                             :stop-byte  1}
-                                            (= operation :read-serializer)
-                                            {:bb         (ByteBuffer/allocate 1)
-                                             :start-byte 3
-                                             :stop-byte  4}
-                                            (or (= operation :read-meta)  (= operation :write-binary))
-                                            {:bb         (ByteBuffer/allocate meta-size)
-                                             :start-byte Long/BYTES
-                                             :stop-byte  (+ meta-size Long/BYTES)}
-                                            :else
-                                            {:bb         (ByteBuffer/allocate (- file-size meta-size Long/BYTES))
-                                             :start-byte (+ meta-size Long/BYTES)
-                                             :stop-byte  file-size})
+        {:keys [^ByteBuffer bb start-byte stop-byte]}
+        (cond
+          (= operation :write-edn)
+          {:bb         (ByteBuffer/allocate file-size)
+           :start-byte Long/BYTES
+           :stop-byte  file-size}
+          (= operation :read-version)
+          {:bb         (ByteBuffer/allocate 1)
+           :start-byte 0
+           :stop-byte  1}
+          (= operation :read-serializer)
+          {:bb         (ByteBuffer/allocate 1)
+           :start-byte 3
+           :stop-byte  4}
+          (or (= operation :read-meta)  (= operation :write-binary))
+          {:bb         (ByteBuffer/allocate meta-size)
+           :start-byte Long/BYTES
+           :stop-byte  (+ meta-size Long/BYTES)}
+          :else
+          {:bb         (ByteBuffer/allocate (- file-size meta-size Long/BYTES))
+           :start-byte (+ meta-size Long/BYTES)
+           :stop-byte  file-size})
         res-ch                            (chan)]
     (go-try-
      (.read ac bb start-byte stop-byte
@@ -544,7 +556,7 @@
                                      (into-array StandardOpenOption [StandardOpenOption/WRITE
                                                                      StandardOpenOption/CREATE]))
               ac                   (AsynchronousFileChannel/open path standard-open-option)
-              lock                 (.get (.lock ac))]
+              ^FileLockImpl lock   (.get (.lock ac))]
           (if file-exists?
             (let [header-size 8
                   bb          (ByteBuffer/allocate header-size)
@@ -567,12 +579,12 @@
                (finally
                  (close! res-ch)
                  (.clear bb)
-                 (.release lock)
+                 (.release ^FileLockImpl lock)
                  (.close ac))))
             (go-try-
              (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
              (finally
-               (.release lock)
+               (.release ^FileLockImpl lock)
                (.close ac)))))
         (go nil)))))
 
@@ -788,15 +800,18 @@
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path & {:keys [default-serializer serializers compressor encryptor read-handlers write-handlers
+  [path & {:keys [default-serializer serializers compressor encryptor
+                  read-handlers write-handlers
                   buffer-size config detect-old-file-schema?]
            :or   {default-serializer :FressianSerializer
-                  compressor         lz4-compressor
+                  compressor         null-compressor
+                  ;; lz4-compressor
                   encryptor          null-encryptor
                   read-handlers      (atom {})
                   write-handlers     (atom {})
                   buffer-size        (* 1024 1024)
-                  config             {:fsync true}}}]
+                  config             {:fsync true
+                                      :in-place? false}}}]
   (let [detect-old-version (when detect-old-file-schema?
                              (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
