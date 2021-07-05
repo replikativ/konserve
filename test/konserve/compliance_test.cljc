@@ -1,7 +1,7 @@
 (ns konserve.compliance-test
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.core.async :as async :refer [#?(:clj <!!) go chan <!]]
-            [konserve.core :refer [get assoc assoc-in get-in update-in dissoc bassoc bget keys get-meta exists?]]
+            [konserve.async :refer [get assoc assoc-in get-in update-in dissoc bassoc bget keys get-meta exists?]]
             #?(:cljs [cljs.test :refer [deftest is testing async]])
             #?(:clj [clojure.test :refer :all])
             [konserve.memory :refer [new-mem-store]]))

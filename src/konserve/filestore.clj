@@ -6,14 +6,20 @@
    [konserve.encryptor :refer [encryptor->byte byte->encryptor null-encryptor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [includes? ends-with?]]
-   [konserve.protocols :refer [PEDNAsyncKeyValueStore
-                               -get -get-meta -update-in -dissoc -assoc-in
-                               PBinaryAsyncKeyValueStore -bget -bassoc
+   [konserve.protocols :refer [PAsyncEDNKeyValueStore
+                               -async-update-in
+                               ;;-get -get-meta -update-in -dissoc -assoc-in
+                               PAsyncBinaryKeyValueStore
+                               ;; -bget -bassoc
                                -serialize -deserialize
-                               PKeyIterable
-                               -keys
+                               PAsyncKeyIterable
+                               ;;-keys
+                               PSyncEDNKeyValueStore
+                               -sync-update-in
+                               PSyncBinaryKeyValueStore
+                               PSyncKeyIterable
                                -serialize -deserialize]]
-   [konserve.storage-layout :refer [LinearLayout -get-raw]]
+   [konserve.storage-layout :refer [LinearLayout]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! chan go close! put!]]
@@ -21,11 +27,34 @@
   (:import
    [java.io Reader File InputStream
     ByteArrayOutputStream ByteArrayInputStream FileInputStream]
-   [java.nio.channels Channels FileChannel AsynchronousFileChannel CompletionHandler]
+   [java.nio.channels Channels Channel FileChannel AsynchronousFileChannel CompletionHandler]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Paths OpenOption LinkOption
     StandardOpenOption]
    [sun.nio.ch FileLockImpl]))
+
+(defmacro async+sync
+  [sync? async->sync code]
+  (let [res
+        (if (true? sync?)
+          (if sync?
+            code
+            (clojure.walk/postwalk (fn [n]
+                                      (if-not (meta n)
+                                        (async->sync n n) ;; primitives have no metadata
+                                        (with-meta (async->sync n n)
+                                          (update (meta n) :tag (fn [t] (async->sync t t))))))
+                                    code))
+          `(if ~sync?
+             ~code
+             ~(clojure.walk/postwalk (fn [n]
+                                       (if-not (meta n)
+                                         (async->sync n n) ;; primitives have no metadata
+                                         (with-meta (async->sync n n)
+                                           (update (meta n) :tag (fn [t] (async->sync t t))))))
+                                     code)))]
+    #_(println "expansion" res)
+    res))
 
 (defn- sync-folder
   "Helper Function to synchronize the folder of the filestore"
@@ -118,63 +147,82 @@
                         (assoc msg :exception t)))
       (close! ch))))
 
+(defn write [sync? c buffer start-byte stop-byte handler]
+  (if sync?
+    (.write ^FileChannel c buffer start-byte)
+    (.write ^AsynchronousFileChannel c buffer start-byte stop-byte handler)))
+
 (defn- write-binary
   "Write Binary into file. InputStreams, ByteArrays, CharArray, Reader and Strings as inputs are supported."
-  [input-stream ^AsynchronousFileChannel ac buffer-size key start]
+  [input-stream ac buffer-size key start sync?]
   (let [[bis read] (blob->channel input-stream buffer-size)
         buffer     (ByteBuffer/allocate buffer-size)
         stop       (+ buffer-size start)]
-    (go-try-
-     (loop [start-byte start
-            stop-byte  stop]
-       (let [size   (read bis buffer)
-             _      (.flip buffer)
-             res-ch (chan)]
-         (if (= size -1)
-           (close! res-ch)
-           (do (.write ac buffer start-byte stop-byte (completion-write-handler res-ch
-                                                                                {:type :write-binary-error
-                                                                                 :key  key}))
-               (<?- res-ch)
-               (.clear buffer)
-               (recur (+ buffer-size start-byte) (+ buffer-size stop-byte))))))
-     (finally
-       (.close bis)
-       (.clear buffer)))))
+    (async+sync sync?
+                {go-try- try
+                 <?- identity
+                 AsynchronousFileChannel FileChannel}
+                 (go-try-
+                     (loop [start-byte start
+                            stop-byte  stop]
+                       (let [size   (read bis buffer)
+                             _      (.flip buffer)
+                             res-ch (chan)]
+                         (if (= size -1)
+                           (close! res-ch)
+                           (do (write sync? ac buffer start-byte stop-byte
+                                      (completion-write-handler res-ch
+                                                                {:type :write-binary-error
+                                                                 :key  key}))
+                               (<?- res-ch)
+                               (.clear buffer)
+                               (recur (+ buffer-size start-byte) (+ buffer-size stop-byte))))))
+                   (finally
+                     (.close bis)
+                     (.clear buffer))))))
 
 (defn- write-header
-  "Write File-Header"
-  [^AsynchronousFileChannel ac-new key bytearray]
+  "Write file-header"
+  [ac-new key bytearray sync?]
   (let [bos       (ByteArrayOutputStream.)
         _         (.write bos (byte-array bytearray))
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
-    (go-try-
-     (.write ac-new buffer 0 8 (completion-write-handler result-ch {:type :write-edn-error
-                                                                    :key  key}))
-     (<?- result-ch)
-     (finally
-       (close! result-ch)
-       (.clear buffer)
-       (.close bos)))))
+    (async+sync sync?
+                {go-try- try
+                 <?- identity
+                 AsynchronousFileChannel FileChannel}
+                (go-try-
+                  (write sync? ac-new buffer 0 8 (completion-write-handler result-ch
+                                                                           {:type :write-edn-error
+                                                                            :key  key}))
+                  (<?- result-ch)
+                  (finally
+                    (close! result-ch)
+                    (.clear buffer)
+                    (.close bos))))))
 
 (defn- write-edn
   "Write Operation for edn. In the Filestore it would be for meta-data or data-value."
-  [^AsynchronousFileChannel ac-new key serializer compressor encryptor write-handlers start-byte value]
+  [ac-new key serializer compressor encryptor write-handlers start-byte value sync?]
   (let [bos       (ByteArrayOutputStream.)
         _         (-serialize (encryptor (compressor serializer)) bos write-handlers value)
         stop-byte (.size bos)
         buffer    (ByteBuffer/wrap (.toByteArray bos))
         result-ch (chan)]
-    (go-try-
-     (.write ac-new buffer start-byte stop-byte
-             (completion-write-handler result-ch {:type :write-edn-error
-                                                  :key  key}))
-     (<?- result-ch)
-     (finally
-       (close! result-ch)
-       (.clear buffer)
-       (.close bos)))))
+    (async+sync sync?
+                {go-try- try
+                 <?- identity
+                 AsynchronousFileChannel FileChannel}
+                 (go-try-
+                     (.write ^AsynchronousFileChannel ac-new buffer start-byte stop-byte
+                             (completion-write-handler result-ch {:type :write-edn-error
+                                                                  :key  key}))
+                   (<?- result-ch)
+                   (finally
+                     (close! result-ch)
+                     (.clear buffer)
+                     (.close bos))))))
 
 (defn to-byte-array
   "Return 8 Byte Array with following content
@@ -200,7 +248,7 @@
   the meta-data and the actual data."
   [folder path serializer write-handlers buffer-size [key & rkey]
    {:keys [compressor encryptor version file-name up-fn up-fn-args
-           up-fn-meta config operation input]} [old-meta old-value]]
+           up-fn-meta config operation input sync?]} [old-meta old-value]]
   (let [meta                 (up-fn-meta old-meta)
         value                (when (= operation :write-edn)
                                (if-not (empty? rkey)
@@ -219,7 +267,9 @@
         standard-open-option (into-array StandardOpenOption
                                          [StandardOpenOption/WRITE
                                           StandardOpenOption/CREATE])
-        ac-new               (AsynchronousFileChannel/open path-new standard-open-option)
+        ac-new               (if sync?
+                               (FileChannel/open path-new standard-open-option)
+                               (AsynchronousFileChannel/open path-new standard-open-option))
         bos                  (ByteArrayOutputStream.)
         _                    (-serialize (encryptor (compressor serializer)) bos write-handlers meta)
         meta-size            (.size bos)
@@ -229,23 +279,27 @@
         compressor-id        (get compressor->byte compressor)
         encryptor-id         (get encryptor->byte encryptor)
         byte-array           (to-byte-array version serializer-id compressor-id encryptor-id meta-size)]
-    (go-try-
-     (<?- (write-header ac-new key byte-array))
-     (<?- (write-edn ac-new key serializer compressor encryptor write-handlers 8 meta))
-     (<?- (if (= operation :write-binary)
-            (write-binary input ac-new buffer-size key start-byte)
-            (write-edn ac-new key serializer compressor encryptor write-handlers start-byte value)))
-     (when (:fsync config)
-       (.force ac-new true)
-       (sync-folder folder))
-     (.close ac-new)
+    (async+sync sync?
+                {go-try- try
+                 <?- identity
+                 AsynchronousFileChannel FileChannel}
+                (go-try-
+                    (<?- (write-header ac-new key byte-array sync?))
+                  (<?- (write-edn ac-new key serializer compressor encryptor write-handlers 8 meta sync?))
+                  (<?- (if (= operation :write-binary)
+                         (write-binary input ac-new buffer-size key start-byte sync?)
+                         (write-edn ac-new key serializer compressor encryptor write-handlers start-byte value sync?)))
+                  (when (:fsync config)
+                    (.force ac-new true)
+                    (sync-folder folder))
+                  (.close ac-new)
 
-     (when-not (:in-place? config)
-       (Files/move path-new path
-                   (into-array [StandardCopyOption/ATOMIC_MOVE])))
-     (if (= operation :write-edn) [old-value value] true)
-     (finally
-       (.close ac-new)))))
+                  (when-not (:in-place? config)
+                    (Files/move path-new path
+                                (into-array [StandardCopyOption/ATOMIC_MOVE])))
+                  (if (= operation :write-edn) [old-value value] true)
+                  (finally
+                    (.close ac-new))))))
 
 (defn completion-read-handler
   "Callback function for read-file. It can return following data: binary/edn/meta.
@@ -290,7 +344,7 @@
 
 (defn- read-file
   "Read meta, edn and binary."
-  [^AsynchronousFileChannel ac serializer read-handlers {:keys [compressor encryptor operation] :as env} meta-size]
+  [^Channel ac serializer read-handlers {:keys [compressor encryptor operation sync?] :as env} meta-size]
   (let [file-size                         (.size ac)
         {:keys [^ByteBuffer bb start-byte stop-byte]}
         (cond
@@ -315,13 +369,48 @@
            :start-byte (+ meta-size Long/BYTES)
            :stop-byte  file-size})
         res-ch                            (chan)]
-    (go-try-
-     (.read ac bb start-byte stop-byte
-            (completion-read-handler res-ch bb meta-size file-size env
-                                     (partial -deserialize (compressor (encryptor serializer)) read-handlers)))
-     (<?- res-ch)
-     (finally
-       (.clear bb)))))
+    (if sync?
+      (let [^FileChannel ac ac
+            fn-read (partial -deserialize (compressor (encryptor serializer)) read-handlers)
+            {:keys [locked-cb file-name]} env]
+        (.read ac bb start-byte)
+        ;; same as completion-read-handler, but synchronous
+        (try
+          (case operation
+            (:read-edn :read-meta) (let [bais-read (ByteArrayInputStream. (.array bb))
+                                         value     (fn-read bais-read)
+                                         _         (.close bais-read)]
+                                     value)
+            :write-binary          (let [bais-read (ByteArrayInputStream. (.array bb))
+                                         value     (fn-read bais-read)
+                                         _         (.close bais-read)]
+                                     [value nil])
+            :write-edn             (let [bais-meta  (ByteArrayInputStream. (.array bb) 0 meta-size)
+                                         meta       (fn-read bais-meta)
+                                         _          (.close bais-meta)
+                                         bais-value (ByteArrayInputStream. (.array bb) meta-size file-size)
+                                         value     (fn-read bais-value)
+                                         _          (.close bais-value)]
+                                     [meta value])
+            :read-version          (let [array   (.array bb)
+                                         version (.readShort array)]
+                                     version)
+            :read-serializer       (let [array   (.array bb)
+                                         ser     (.readShort array)]
+                                     ser)
+            :read-binary           (locked-cb {:input-stream (ByteArrayInputStream. (.array bb))
+                                               :size         file-size
+                                               :file         file-name}))
+          (finally
+            (.clear bb))))
+      (let [^AsynchronousFileChannel ac ac]
+        (go-try-
+         (.read ac bb start-byte stop-byte
+                (completion-read-handler res-ch bb meta-size file-size env
+                                         (partial -deserialize (compressor (encryptor serializer)) read-handlers)))
+         (<?- res-ch)
+         (finally
+           (.clear bb)))))))
 
 (defn completion-read-header-handler
   "Callback Function for io/operation. Return the Meta-size that are stored in the ByteBuffer."
@@ -360,95 +449,737 @@
       (put! res-ch (ex-info "Could not read key."
                             (assoc msg :exception t))))))
 
+(defn- delete-file
+  "Remove/Delete key-value pair of Filestore by given key. If success it will return true."
+  [key folder sync?]
+  (let [fn           (str folder "/" (uuid key) ".ksv")
+        path         (Paths/get fn (into-array String []))
+        file-exists? (Files/exists path (into-array LinkOption []))]
+    (if sync?
+      (try
+        (Files/delete path)
+        (catch Exception e
+          (throw (ex-info "Could not delete key."
+                          {:key key
+                           :folder folder
+                           :exeption e}))))
+      (let [res-ch       (chan)]
+        (if file-exists?
+          (try
+            (Files/delete path)
+            (put! res-ch true)
+            (catch Exception e
+              (put! res-ch (ex-info "Could not delete key."
+                                    {:key key
+                                     :folder folder
+                                     :exeption e})))
+            (finally
+              (close! res-ch)))
+          (close! res-ch))
+        res-ch))))
+
+(declare migrate-file-v1 migrate-file-v2)
+
+(defn- io-operation
+  "Read/Write file. For better understanding use the flow-chart of Konserve."
+  [key-vec folder serializers read-handlers write-handlers buffer-size
+   {:keys [detect-old-files operation default-serializer sync?] :as env}]
+  (let [key           (first  key-vec)
+        uuid-key      (uuid key)
+        file-name     (str folder "/" uuid-key ".ksv")
+        env           (assoc env :file-name file-name)
+        path          (Paths/get file-name (into-array String []))
+        file-exists?  (Files/exists path (into-array LinkOption []))
+        old-file-name (when detect-old-files
+                        (let [old-meta (str folder "/meta/" uuid-key)
+                              old (str folder "/"  uuid-key)
+                              old-binary (str folder "/B_"  uuid-key)]
+                          (or (@detect-old-files old-meta)
+                              (@detect-old-files old)
+                              (@detect-old-files old-binary))))
+        serializer    (get serializers default-serializer)]
+    (if (and old-file-name (not file-exists?))
+      (if (clojure.string/includes? old-file-name "meta")
+        (migrate-file-v2 folder env buffer-size old-file-name file-name serializer read-handlers write-handlers)
+        (migrate-file-v1 folder key env buffer-size old-file-name file-name serializer read-handlers write-handlers))
+      (if (or file-exists? (= :write-edn operation) (= :write-binary operation))
+        (let [standard-open-option (if file-exists?
+                                     (into-array StandardOpenOption [StandardOpenOption/READ
+                                                                     StandardOpenOption/WRITE])
+                                     (into-array StandardOpenOption [StandardOpenOption/WRITE
+                                                                     StandardOpenOption/CREATE]))
+              ;; TODO rename
+              ac                   (if sync?
+                                     (FileChannel/open path standard-open-option)
+                                     (AsynchronousFileChannel/open path standard-open-option))
+              ^FileLockImpl lock   (if sync?
+                                     (.lock ac)
+                                     (.get (.lock ac)))]
+          (if file-exists?
+            (let [header-size 8
+                  bb          (ByteBuffer/allocate header-size)]
+              (if sync?
+                (try
+                  (.read ac bb) ;; different read invocation than AsynchronousFileChannel
+                  (let [arr                               (.array bb)
+                        buff-meta                         (ByteBuffer/wrap arr 4 4)
+                        meta-size                         (.getInt buff-meta)
+                        _                                 (.clear buff-meta)
+                        [_ serializer-id compressor-id _] arr
+                        serializer-key                          (byte->key serializer-id)
+                        serializer                              (get serializers serializer-key)
+                        compressor                              (byte->compressor compressor-id)
+                        old                                     (read-file ac serializer read-handlers
+                                                                           (assoc env :compressor compressor)
+                                                                           meta-size)]
+                    (if (or (= :write-edn operation) (= :write-binary operation))
+                      (update-file folder path serializer write-handlers buffer-size key-vec env old)
+                      old))
+                  (finally
+                    (.clear bb)
+                    (.release ^FileLockImpl lock)
+                    (.close ac)))
+
+                (let [res-ch      (chan)]
+                  (go-try-
+                   (.read ac bb 0 header-size
+                          (completion-read-header-handler res-ch bb
+                                                          {:type :read-meta-size-error
+                                                           :key  key}))
+                   (let [[serializer-id compressor-id meta-size] (<?- res-ch)
+                         serializer-key                          (byte->key serializer-id)
+                         serializer                              (get serializers serializer-key)
+                         compressor                              (byte->compressor compressor-id)
+                         old                                     (<?- (read-file ac serializer read-handlers
+                                                                                 (assoc env :compressor compressor)
+                                                                                 meta-size))]
+                     (if (or (= :write-edn operation) (= :write-binary operation))
+                       (<?- (update-file folder path serializer write-handlers buffer-size key-vec env old))
+                       old))
+                   (finally
+                     (close! res-ch)
+                     (.clear bb)
+                     (.release ^FileLockImpl lock)
+                     (.close ac))))))
+            (if sync?
+              (try
+                (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil])
+                (finally
+                  (.release ^FileLockImpl lock)
+                  (.close ac)))
+              (go-try-
+               (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
+               (finally
+                 (.release ^FileLockImpl lock)
+                 (.close ac))))))
+        (if sync? nil (go nil))))))
+
+
+
+(defn- list-keys
+  "Return all keys in the store."
+  [folder serializers read-handlers write-handlers buffer-size {:keys [sync?] :as env}]
+  (let [path       (Paths/get folder (into-array String []))
+        serializer (get serializers (:default-serializer env))
+        file-paths (vec (Files/newDirectoryStream path))]
+    (if sync?
+      (loop [list-keys  #{}
+             [path & file-paths] file-paths]
+        (if path
+          (cond
+            (ends-with? (.toString path) ".new")
+            (recur list-keys file-paths)
+
+            (ends-with? (.toString path) ".ksv")
+            (let [ac          (FileChannel/open
+                               path (into-array StandardOpenOption [StandardOpenOption/READ]))
+                  header-size 8
+                  bb          (ByteBuffer/allocate header-size)
+                  path-name   (.toString path)
+                  env         (update-in env [:msg :keys] (fn [_] path-name))]
+              (recur
+               (try
+                 (.read ac bb)
+                 (let [[serializer-id compressor-id meta-size] (let [arr                               (.array bb)
+                                                                     buff-meta                         (ByteBuffer/wrap arr 4 4)
+                                                                     meta-size                         (.getInt buff-meta)
+                                                                     _                                 (.clear buff-meta)
+                                                                     [_ serializer-id compressor-id _] arr]
+                                                                 (try
+                                                                   (when-not (nil? meta-size)
+                                                                     [serializer-id compressor-id meta-size])
+                                                                   (catch Exception e
+                                                                     (throw (ex-info "Could not read key."
+                                                                                     {:type :read-list-keys
+                                                                                      :path path-name
+                                                                                      :exception e})))))
+                       serializer-key                          (byte->key serializer-id)
+                       serializer                              (get serializers serializer-key)
+                       compressor                              (byte->compressor compressor-id)]
+                   (conj list-keys
+                         (read-file ac serializer read-handlers
+                                    ;; TODO why do we need to add the compressor?
+                                    (assoc env :compressor compressor)
+                                    meta-size)))
+                 ;; it can be that the file has been deleted, ignore reading errors
+                 (catch Exception _
+                   list-keys)
+                 (finally
+                   (.clear bb)
+                   (.close ac)))
+               file-paths))
+
+            :else ;; need migration
+            (let [file-name (-> path .toString)
+                  fn-l      (str folder "/" (-> path .getFileName .toString) ".ksv")
+                  env       (update-in env [:msg :keys] (fn [_] file-name))]
+              (cond
+                ;; ignore the data folder
+                (includes? file-name "data")
+                (recur list-keys file-paths)
+
+                (includes? file-name "meta")
+                (recur (into list-keys
+                             (loop [meta-list-keys #{}
+                                    [meta-path & meta-file-names]
+                                    (vec (Files/newDirectoryStream path))]
+                               (if meta-path
+                                 (let [old-file-name (-> meta-path .toString)
+                                       file-name     (str folder "/" (-> meta-path .getFileName .toString) ".ksv")
+                                       env           (assoc-in env [:msg :keys] old-file-name)
+                                       env           (assoc env :operation :read-meta)]
+                                   (recur
+                                    (conj meta-list-keys
+                                          (migrate-file-v2 folder env buffer-size old-file-name file-name
+                                                           serializer read-handlers write-handlers))
+                                    meta-file-names))
+                                 meta-list-keys)))
+                       file-paths)
+
+                (includes? file-name "B_")
+                (recur
+                 (conj list-keys
+                       {:file-name file-name
+                        :type      :stale-binary
+                        :msg       "Old binary file detected. Use bget insteat of keys for migration."})
+                 file-paths)
+
+                :else
+                (recur
+                 (conj list-keys (migrate-file-v1 folder fn-l env buffer-size file-name file-name serializer read-handlers write-handlers))
+                 file-paths))))
+          list-keys))
+
+      (go-try-
+          (loop [list-keys  #{}
+                 [path & file-paths] file-paths]
+            (if path
+              (cond
+                (ends-with? (.toString path) ".new")
+                (recur list-keys file-paths)
+
+                (ends-with? (.toString path) ".ksv")
+                (let [ac          (AsynchronousFileChannel/open
+                                   path (into-array StandardOpenOption [StandardOpenOption/READ]))
+                      header-size 8
+                      bb          (ByteBuffer/allocate header-size)
+                      path-name   (.toString path)
+                      env         (update-in env [:msg :keys] (fn [_] path-name))
+                      res-ch      (chan)]
+                  (recur
+                   (try
+                     (.read ac bb 0 Long/BYTES
+                            (completion-read-header-handler res-ch bb
+                                                            {:type :read-list-keys
+                                                             :path path-name}))
+                     (let [[serializer-id compressor-id meta-size] (<?- res-ch)
+                           serializer-key                          (byte->key serializer-id)
+                           serializer                              (get serializers serializer-key)
+                           compressor                              (byte->compressor compressor-id)]
+                       (conj list-keys
+                             (<?- (read-file ac serializer read-handlers
+                                             ;; TODO why do we need to add the compressor?
+                                             (assoc env :compressor compressor)
+                                             meta-size))))
+                     ;; it can be that the file has been deleted, ignore reading errors
+                     (catch Exception _
+                       list-keys)
+                     (finally
+                       (.clear bb)
+                       (.close ac)
+                       (close! res-ch)))
+                   file-paths))
+
+                :else ;; need migration
+                (let [file-name (-> path .toString)
+                      fn-l      (str folder "/" (-> path .getFileName .toString) ".ksv")
+                      env       (update-in env [:msg :keys] (fn [_] file-name))]
+                  (cond
+                    ;; ignore the data folder
+                    (includes? file-name "data")
+                    (recur list-keys file-paths)
+
+                    (includes? file-name "meta")
+                    (recur (into list-keys
+                                 (loop [meta-list-keys #{}
+                                        [meta-path & meta-file-names]
+                                        (vec (Files/newDirectoryStream path))]
+                                   (if meta-path
+                                     (let [old-file-name (-> meta-path .toString)
+                                           file-name     (str folder "/" (-> meta-path .getFileName .toString) ".ksv")
+                                           env           (assoc-in env [:msg :keys] old-file-name)
+                                           env           (assoc env :operation :read-meta)]
+                                       (recur
+                                        (conj meta-list-keys
+                                              (<?- (migrate-file-v2 folder env buffer-size old-file-name file-name
+                                                                    serializer read-handlers write-handlers)))
+                                        meta-file-names))
+                                     meta-list-keys)))
+                           file-paths)
+
+                    (includes? file-name "B_")
+                    (recur
+                     (conj list-keys
+                           {:file-name file-name
+                            :type      :stale-binary
+                            :msg       "Old binary file detected. Use bget insteat of keys for migration."})
+                     file-paths)
+
+                    :else
+                    (recur
+                     (conj list-keys (<?- (migrate-file-v1 folder fn-l env buffer-size file-name
+                                                           file-name serializer read-handlers write-handlers)))
+                     file-paths))))
+              list-keys))))))
+
+(defrecord FileSystemStore [folder serializers default-serializer compressor encryptor
+                            read-handlers write-handlers buffer-size detect-old-version locks config]
+
+  ;; ======================================================================
+  ;; Asynchronous API
+
+  PAsyncEDNKeyValueStore
+  (-async-get [_ key]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-edn
+                   :compressor compressor
+                   :encryptor encryptor
+                   :format    :data
+                   :version version
+                   :default-serializer default-serializer
+                   :detect-old-files detect-old-version
+                   :msg       {:type :read-edn-error
+                               :key  key}}))
+  (-async-get-meta [_ key]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-meta
+                   :compressor compressor
+                   :encryptor encryptor
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :version version
+                   :msg       {:type :read-meta-error
+                               :key  key}}))
+
+  (-async-assoc-in [this key-vec meta-up val] (-async-update-in this key-vec meta-up (fn [_] val) []))
+
+  (-async-update-in [_ key-vec meta-up up-fn args]
+    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
+                  {:operation  :write-edn
+                   :compressor compressor
+                   :encryptor encryptor
+                   :detect-old-files detect-old-version
+                   :version version
+                   :default-serializer default-serializer
+                   :up-fn      up-fn
+                   :up-fn-args args
+                   :up-fn-meta meta-up
+                   :config     config
+                   :msg        {:type :write-edn-error
+                                :key  (first key-vec)}}))
+  (-async-dissoc [_ key]
+    (delete-file key folder false))
+  PAsyncBinaryKeyValueStore
+  (-async-bget [_ key locked-cb]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-binary
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :compressor compressor
+                   :encryptor encryptor
+                   :config    config
+                   :version version
+                   :locked-cb locked-cb
+                   :msg       {:type :read-binary-error
+                               :key  key}}))
+  (-async-bassoc [_ key meta-up input]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation  :write-binary
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :compressor compressor
+                   :encryptor encryptor
+                   :input      input
+                   :version version
+                   :up-fn-meta meta-up
+                   :config     config
+                   :msg        {:type :write-binary-error
+                                :key  key}}))
+  PAsyncKeyIterable
+  (-async-keys [_]
+    (list-keys folder serializers read-handlers write-handlers buffer-size
+               {:operation :read-meta
+                :default-serializer default-serializer
+                :detect-old-files detect-old-version
+                :version version
+                :compressor compressor
+                :encryptor encryptor
+                :config config
+                :msg {:type :read-all-keys-error}}))
+
+  ;; ======================================================================
+  ;; Synchronous API
+
+  PSyncEDNKeyValueStore
+  (-sync-get [_ key]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-edn
+                   :compressor compressor
+                   :encryptor encryptor
+                   :format    :data
+                   :version version
+                   :sync? true
+                   :default-serializer default-serializer
+                   :detect-old-files detect-old-version
+                   :msg       {:type :read-edn-error
+                               :key  key}}))
+  (-sync-get-meta [_ key]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-meta
+                   :compressor compressor
+                   :encryptor encryptor
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :version version
+                   :sync? true
+                   :msg       {:type :read-meta-error
+                               :key  key}}))
+
+  (-sync-assoc-in [this key-vec meta-up val] (-sync-update-in this key-vec meta-up (fn [_] val) []))
+
+  (-sync-update-in [_ key-vec meta-up up-fn args]
+    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
+                  {:operation  :write-edn
+                   :compressor compressor
+                   :encryptor encryptor
+                   :detect-old-files detect-old-version
+                   :version version
+                   :default-serializer default-serializer
+                   :up-fn      up-fn
+                   :up-fn-args args
+                   :up-fn-meta meta-up
+                   :config     config
+                   :sync? true
+                   :msg        {:type :write-edn-error
+                                :key  (first key-vec)}}))
+  (-sync-dissoc [_ key]
+    (delete-file key folder true))
+
+  PSyncBinaryKeyValueStore
+  (-sync-bget [_ key locked-cb]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation :read-binary
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :compressor compressor
+                   :encryptor encryptor
+                   :config    config
+                   :version version
+                   :sync? true
+                   :locked-cb locked-cb
+                   :msg       {:type :read-binary-error
+                               :key  key}}))
+  (-sync-bassoc [_ key meta-up input]
+    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                  {:operation  :write-binary
+                   :detect-old-files detect-old-version
+                   :default-serializer default-serializer
+                   :compressor compressor
+                   :encryptor encryptor
+                   :input      input
+                   :version version
+                   :up-fn-meta meta-up
+                   :config     config
+                   :sync?      true
+                   :msg        {:type :write-binary-error
+                                :key  key}}))
+
+  PSyncKeyIterable
+  (-sync-keys [_]
+    (list-keys folder serializers read-handlers write-handlers buffer-size
+               {:operation :read-meta
+                :default-serializer default-serializer
+                :detect-old-files detect-old-version
+                :version version
+                :compressor compressor
+                :encryptor encryptor
+                :config config
+                :sync? true
+                :msg {:type :read-all-keys-error}}))
+
+  LinearLayout
+  (-get-raw [_ key]
+    (go
+      (slurp (str folder "/" (uuid key) ".ksv"))))
+  (-put-raw [_ key blob]
+    (go
+      (throw (ex-info "Not implemented yet." {:type :not-implemented})))))
+
+(defn- check-and-create-folder
+  "Helper Function to Check if Folder is not writable"
+  [path]
+  (let [f         (io/file path)
+        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
+    (when-not (.exists f)
+      (.mkdir f))
+    (when-not (.createNewFile test-file)
+      (throw (ex-info "Cannot write to folder." {:type   :not-writable
+                                                 :folder path})))
+    (.delete test-file)))
+
 (defn- migrate-file-v1
   "Migration Function For Konserve Version, who has old file-schema."
-  [folder key {:keys [version input up-fn detect-old-files compressor encryptor operation locked-cb]}
+  [folder key {:keys [version input up-fn detect-old-files compressor encryptor operation locked-cb sync?]}
    buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
         new-path             (Paths/get new-file-name (into-array String []))
         data-path            (Paths/get old-file-name (into-array String []))
-        ac-data-file         (AsynchronousFileChannel/open data-path standard-open-option)
+        ac-data-file         (if sync?
+                               (FileChannel/open data-path standard-open-option)
+                               (AsynchronousFileChannel/open data-path standard-open-option))
         binary?              (includes? old-file-name "B_")
         size-data            (.size ac-data-file)
         bb-data              (when-not binary? (ByteBuffer/allocate size-data))
         res-ch-data          (chan)]
-    (go-try-
-     (when-not binary?
-       (.read ac-data-file bb-data 0 size-data
-              (completion-read-old-handler res-ch-data bb-data serializer read-handlers
-                                           {:type :read-data-old-error
-                                            :path data-path})))
-     (let [[[nkey] data] (if binary?
-                           [[key] true]
-                           (<?- res-ch-data))
-           [meta old]    (if binary?
-                           [{:key key :type :binary :konserve.core/timestamp (java.util.Date.)}
-                            {:operation :write-binary
-                             :input     (if input input (FileInputStream. old-file-name))
-                             :msg       {:type :write-binary-error
-                                         :key  key}}]
-                           [{:key nkey :type :edn :konserve.core/timestamp (java.util.Date.)}
-                            {:operation :write-edn
-                             :up-fn     (if up-fn (up-fn data) (fn [_] data))
-                             :msg       {:type :write-edn-error
-                                         :key  key}}])
-           env           (merge {:version    version
-                                 :compressor compressor
-                                 :encryptor  encryptor
-                                 :file-name  new-file-name
-                                 :up-fn-meta (fn [_] meta)}
-                                old)
-           return-value  (fn [r]
-                           (Files/delete data-path)
-                           (swap! detect-old-files disj old-file-name)
-                           r)]
-       (if (contains? #{:write-binary :write-edn} operation)
-         (<?- (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil]))
-         (let [value (<?- (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil]))]
-           (if (= operation :read-meta)
-             (return-value meta)
-             (if (= operation :read-binary)
-               (let [file-size  (.size ac-data-file)
-                     bb         (ByteBuffer/allocate file-size)
-                     start-byte 0
-                     stop-byte  file-size
-                     res-ch     (chan)]
-                 (<?- (go-try-
-                       (.read ac-data-file bb start-byte stop-byte
-                              (completion-read-handler res-ch bb nil file-size (assoc env
-                                                                                      :locked-cb locked-cb
-                                                                                      :operation :read-binary)
-                                                       (partial -deserialize serializer read-handlers)))
-                       (<?- res-ch)
-                       (finally
-                         (close! res-ch)
-                         (.clear bb)))))
-               (return-value (second value)))))))
-     (finally
-       (if binary?
-         (Files/delete data-path)
-         (.clear bb-data))
-       (close! res-ch-data)
-       (.close ac-data-file)))))
+    (if sync?
+      (try
+       (when-not binary?
+         (.read ^FileChannel ac-data-file bb-data))
+       (let [[[nkey] data] (if binary?
+                             [[key] true]
+                             (let [bais (ByteArrayInputStream. (.array bb-data))]
+                               (try
+                                 (-deserialize serializer read-handlers bais)
+                                 (catch Exception e
+                                   (throw (ex-info "Could not read key."
+                                                   {:type :read-data-old-error
+                                                    :path data-path
+                                                    :exception e}))))))
+             [meta old]    (if binary?
+                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                              {:operation :write-binary
+                               :input     (if input input (FileInputStream. old-file-name))
+                               :msg       {:type :write-binary-error
+                                           :key  key}}]
+                             [{:key nkey :type :edn :timestamp (java.util.Date.)}
+                              {:operation :write-edn
+                               :up-fn     (if up-fn (up-fn data) (fn [_] data))
+                               :msg       {:type :write-edn-error
+                                           :key  key}}])
+             env           (merge {:version    version
+                                   :compressor compressor
+                                   :encryptor  encryptor
+                                   :file-name  new-file-name
+                                   :up-fn-meta (fn [_] meta)}
+                                  old)
+             return-value  (fn [r]
+                             (Files/delete data-path)
+                             (swap! detect-old-files disj old-file-name)
+                             r)]
+         (if (contains? #{:write-binary :write-edn} operation)
+           (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil])
+           (let [value (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil])]
+             (if (= operation :read-meta)
+               (return-value meta)
+               (if (= operation :read-binary)
+                 (let [file-size  (.size ac-data-file)
+                       bb         (ByteBuffer/allocate file-size)]
+                   (try
+                     (.read ac-data-file bb)
+                     (let [arr                               (.array bb)
+                           buff-meta                         (ByteBuffer/wrap arr 4 4)
+                           meta-size                         (.getInt buff-meta)
+                           _                                 (.clear buff-meta)
+                           [_ serializer-id compressor-id _] arr]
+                       (try
+                         (when-not (nil? meta-size)
+                           [serializer-id compressor-id meta-size])
+                         (catch Exception e
+                           (throw (ex-info "Could not read key." (assoc (:msg env) :exception e))))))
+                     (finally
+                       (.clear bb))))
+                 (return-value (second value)))))))
+       (finally
+         (if binary?
+           (Files/delete data-path)
+           (.clear bb-data))
+         (.close ac-data-file)))
+
+
+      (go-try-
+        (when-not binary?
+          (.read ^AsynchronousFileChannel ac-data-file bb-data 0 size-data
+                 (completion-read-old-handler res-ch-data bb-data serializer read-handlers
+                                              {:type :read-data-old-error
+                                               :path data-path})))
+        (let [[[nkey] data] (if binary?
+                             [[key] true]
+                             (<?- res-ch-data))
+             [meta old]    (if binary?
+                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                              {:operation :write-binary
+                               :input     (if input input (FileInputStream. old-file-name))
+                               :msg       {:type :write-binary-error
+                                           :key  key}}]
+                             [{:key nkey :type :edn :timestamp (java.util.Date.)}
+                              {:operation :write-edn
+                               :up-fn     (if up-fn (up-fn data) (fn [_] data))
+                               :msg       {:type :write-edn-error
+                                           :key  key}}])
+             env           (merge {:version    version
+                                   :compressor compressor
+                                   :encryptor  encryptor
+                                   :file-name  new-file-name
+                                   :up-fn-meta (fn [_] meta)}
+                                  old)
+             return-value  (fn [r]
+                             (Files/delete data-path)
+                             (swap! detect-old-files disj old-file-name)
+                             r)]
+         (if (contains? #{:write-binary :write-edn} operation)
+           (<?- (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil]))
+           (let [value (<?- (update-file folder new-path serializer write-handlers buffer-size [nkey] env [nil nil]))]
+             (if (= operation :read-meta)
+               (return-value meta)
+               (if (= operation :read-binary)
+                 (let [file-size  (.size ac-data-file)
+                       bb         (ByteBuffer/allocate file-size)
+                       start-byte 0
+                       stop-byte  file-size
+                       res-ch     (chan)]
+                   (<?- (go-try-
+                         (.read ac-data-file bb start-byte stop-byte
+                                (completion-read-handler res-ch bb nil file-size (assoc env
+                                                                                        :locked-cb locked-cb
+                                                                                        :operation :read-binary)
+                                                         (partial -deserialize serializer read-handlers)))
+                         (<?- res-ch)
+                         (finally
+                           (close! res-ch)
+                           (.clear bb)))))
+                 (return-value (second value)))))))
+       (finally
+         (if binary?
+           (Files/delete data-path)
+           (.clear bb-data))
+         (close! res-ch-data)
+         (.close ac-data-file))))))
 
 (defn- migrate-file-v2
   "Migration Function For Konserve Version, who has Meta and Data Folders.
    Write old file into new Konserve directly."
-  [folder {:keys [version input up-fn detect-old-files locked-cb operation compressor encryptor]}
+  [folder {:keys [version input up-fn detect-old-files locked-cb operation compressor encryptor sync?]}
    buffer-size old-file-name new-file-name serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
         new-path             (Paths/get new-file-name (into-array String []))
         meta-path            (Paths/get old-file-name (into-array String []))
         data-file-name       (clojure.string/replace old-file-name #"meta" "data")
         data-path            (Paths/get data-file-name (into-array String []))
-        ac-meta-file         (AsynchronousFileChannel/open meta-path standard-open-option)
-        ac-data-file         (AsynchronousFileChannel/open data-path standard-open-option)
+        ac-meta-file         (if sync?
+                               (FileChannel/open meta-path standard-open-option)
+                               (AsynchronousFileChannel/open meta-path standard-open-option))
+        ac-data-file         (if sync?
+                               (FileChannel/open data-path standard-open-option)
+                               (AsynchronousFileChannel/open data-path standard-open-option))
         size-meta            (.size ac-meta-file)
         bb-meta              (ByteBuffer/allocate size-meta)
         res-ch-data          (chan)
         res-ch-meta          (chan)]
+    (if sync?
+      (try
+        (.read ^FileChannel ac-meta-file bb-meta)
+        (let [{:keys [format key]} (let [arr                               (.array bb-meta)
+                                         buff-meta                         (ByteBuffer/wrap arr 4 4)
+                                         meta-size                         (.getInt buff-meta)
+                                         _                                 (.clear buff-meta)
+                                         [_ serializer-id compressor-id _] arr]
+                                     (try
+                                       (when-not (nil? meta-size)
+                                         [serializer-id compressor-id meta-size])
+                                       (catch Exception e
+                                         (throw (ex-info "Could not read key."
+                                                         {:type :read-meta-old-error
+                                                          :path meta-path
+                                                          :exception e})))))
+
+              data         (when (= :edn format) (let [size-data (.size ac-data-file)
+                                                       bb-data   (ByteBuffer/allocate size-data)
+                                                       bais (ByteArrayInputStream. (.array bb-data))]
+                                                   (try
+                                                     (.read ^FileChannel ac-data-file bb-data)
+                                                     (-deserialize serializer read-handlers bais)
+                                                     (catch Exception e
+                                                       (throw (ex-info "Could not read key."
+                                                                       {:type :read-data-old-error
+                                                                        :path data-path
+                                                                        :exception e}))))))
+              [meta old]   (if (= :binary format)
+                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                              {:operation :write-binary
+                               :input     (if input input (FileInputStream. data-file-name))
+                               :msg       {:type :write-binary-error
+                                           :key  key}}]
+                             [{:key key :type :edn :timestamp (java.util.Date.)}
+                              {:operation :write-edn
+                               :up-fn     (if up-fn (up-fn data) (fn [_] data))
+                               :msg       {:type :write-edn-error
+                                           :key  key}}])
+              env          (merge {:version    version
+                                   :compressor compressor
+                                   :encryptor  encryptor
+                                   :file-name  new-file-name
+                                   :up-fn-meta (fn [_] meta)}
+                                  old)
+              return-value (fn [r]
+                             (Files/delete meta-path)
+                             (Files/delete data-path)
+                             (swap! detect-old-files disj old-file-name) r)]
+          (if (contains? #{:write-binary :write-edn} operation)
+            (update-file folder new-path serializer write-handlers buffer-size [key] env [nil nil])
+            (let [value (update-file folder new-path serializer write-handlers buffer-size [key] env [nil nil])]
+              (if (= operation :read-meta)
+                (return-value meta)
+                (if (= operation :read-binary)
+                  (let [file-size  (.size ac-data-file)
+                        bb         (ByteBuffer/allocate file-size)]
+                    (try
+                      (.read ^FileChannel ac-data-file bb)
+                      (locked-cb {:input-stream (ByteArrayInputStream. (.array bb))
+                                  :size         file-size
+                                  :file         data-path})
+                      (finally
+                        (Files/delete meta-path)
+                        (Files/delete data-path)
+                        (.clear bb))))
+                  (return-value (second value)))))))
+     (finally
+       (.clear bb-meta)
+       (.close ac-data-file)
+       (.close ac-meta-file)))
+
+
     (go-try-
-     (.read ac-meta-file bb-meta 0 size-meta
+     (.read ^AsynchronousFileChannel ac-meta-file bb-meta 0 size-meta
             (completion-read-old-handler res-ch-meta bb-meta serializer read-handlers
                                          {:type :read-meta-old-error
                                           :path meta-path}))
@@ -462,12 +1193,12 @@
                                                 :path data-path}))))
        (let [data         (when (= :edn format) (<?- res-ch-data))
              [meta old]   (if (= :binary format)
-                            [{:key key :type :binary :konserve.core/timestamp (java.util.Date.)}
+                            [{:key key :type :binary :timestamp (java.util.Date.)}
                              {:operation :write-binary
                               :input     (if input input (FileInputStream. data-file-name))
                               :msg       {:type :write-binary-error
                                           :key  key}}]
-                            [{:key key :type :edn :konserve.core/timestamp (java.util.Date.)}
+                            [{:key key :type :edn :timestamp (java.util.Date.)}
                              {:operation :write-edn
                               :up-fn     (if up-fn (up-fn data) (fn [_] data))
                               :msg       {:type :write-edn-error
@@ -511,271 +1242,7 @@
        (close! res-ch-data)
        (.clear bb-meta)
        (.close ac-data-file)
-       (.close ac-meta-file)))))
-
-(defn- delete-file
-  "Remove/Delete key-value pair of Filestore by given key. If success it will return true."
-  [key folder]
-  (let [fn           (str folder "/" (uuid key) ".ksv")
-        path         (Paths/get fn (into-array String []))
-        res-ch       (chan)
-        file-exists? (Files/exists path (into-array LinkOption []))]
-    (if file-exists?
-      (do (Files/delete path)
-          (put! res-ch true)
-          (close! res-ch))
-      (close! res-ch))
-    res-ch))
-
-(defn- io-operation
-  "Read/Write file with AsynchronousFileChannel. For better understanding use the flow-chart of Konserve."
-  [key-vec folder serializers read-handlers write-handlers buffer-size
-   {:keys [detect-old-files operation default-serializer] :as env}]
-  (let [key           (first  key-vec)
-        uuid-key      (uuid key)
-        file-name     (str folder "/" uuid-key ".ksv")
-        env           (assoc env :file-name file-name)
-        path          (Paths/get file-name (into-array String []))
-        file-exists?  (Files/exists path (into-array LinkOption []))
-        old-file-name (when detect-old-files
-                        (let [old-meta (str folder "/meta/" uuid-key)
-                              old (str folder "/"  uuid-key)
-                              old-binary (str folder "/B_"  uuid-key)]
-                          (or (@detect-old-files old-meta)
-                              (@detect-old-files old)
-                              (@detect-old-files old-binary))))
-        serializer    (get serializers default-serializer)]
-    (if (and old-file-name (not file-exists?))
-      (if (clojure.string/includes? old-file-name "meta")
-        (migrate-file-v2 folder env buffer-size old-file-name file-name serializer read-handlers write-handlers)
-        (migrate-file-v1 folder key env buffer-size old-file-name file-name serializer read-handlers write-handlers))
-      (if (or file-exists? (= :write-edn operation) (= :write-binary operation))
-        (let [standard-open-option (if file-exists?
-                                     (into-array StandardOpenOption [StandardOpenOption/READ
-                                                                     StandardOpenOption/WRITE])
-                                     (into-array StandardOpenOption [StandardOpenOption/WRITE
-                                                                     StandardOpenOption/CREATE]))
-              ac                   (AsynchronousFileChannel/open path standard-open-option)
-              ^FileLockImpl lock   (.get (.lock ac))]
-          (if file-exists?
-            (let [header-size 8
-                  bb          (ByteBuffer/allocate header-size)
-                  res-ch      (chan)]
-              (go-try-
-               (.read ac bb 0 header-size
-                      (completion-read-header-handler res-ch bb
-                                                      {:type :read-meta-size-error
-                                                       :key  key}))
-               (let [[serializer-id compressor-id meta-size] (<?- res-ch)
-                     serializer-key                          (byte->key serializer-id)
-                     serializer                              (get serializers serializer-key)
-                     compressor                              (byte->compressor compressor-id)
-                     old                                     (<?- (read-file ac serializer read-handlers
-                                                                             (assoc env :compressor compressor)
-                                                                             meta-size))]
-                 (if (or (= :write-edn operation) (= :write-binary operation))
-                   (<?- (update-file folder path serializer write-handlers buffer-size key-vec env old))
-                   old))
-               (finally
-                 (close! res-ch)
-                 (.clear bb)
-                 (.release ^FileLockImpl lock)
-                 (.close ac))))
-            (go-try-
-             (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
-             (finally
-               (.release ^FileLockImpl lock)
-               (.close ac)))))
-        (go nil)))))
-
-(defn- list-keys
-  "Return all Keys of the filestore."
-  [folder serializers read-handlers write-handlers buffer-size env]
-  (let [path       (Paths/get folder (into-array String []))
-        serializer (get serializers (:default-serializer env))
-        file-paths (vec (Files/newDirectoryStream path))]
-    (go-try-
-     (loop [list-keys  #{}
-            [path & file-paths] file-paths]
-       (if path
-         (cond
-           (ends-with? (.toString path) ".new")
-           (recur list-keys file-paths)
-
-           (ends-with? (.toString path) ".ksv")
-           (let [ac          (AsynchronousFileChannel/open
-                              path (into-array StandardOpenOption [StandardOpenOption/READ]))
-                 header-size 8
-                 bb          (ByteBuffer/allocate header-size)
-                 path-name   (.toString path)
-                 env         (update-in env [:msg :keys] (fn [_] path-name))
-                 res-ch      (chan)]
-             (recur
-              (try
-                (.read ac bb 0 Long/BYTES
-                       (completion-read-header-handler res-ch bb
-                                                       {:type :read-list-keys
-                                                        :path path-name}))
-                (let [[serializer-id compressor-id meta-size] (<?- res-ch)
-                      serializer-key                          (byte->key serializer-id)
-                      serializer                              (get serializers serializer-key)
-                      compressor                              (byte->compressor compressor-id)]
-                  (conj list-keys
-                        (<?- (read-file ac serializer read-handlers
-                                        ;; TODO why do we need to add the compressor?
-                                        (assoc env :compressor compressor)
-                                        meta-size))))
-                ;; it can be that the file has been deleted, ignore reading errors
-                (catch Exception
-                       list-keys)
-                (finally
-                  (.clear bb)
-                  (.close ac)
-                  (close! res-ch)))
-              file-paths))
-
-           :else ;; need migration
-           (let [file-name (-> path .toString)
-                 fn-l      (str folder "/" (-> path .getFileName .toString) ".ksv")
-                 env       (update-in env [:msg :keys] (fn [_] file-name))]
-             (cond
-               ;; ignore the data folder
-               (includes? file-name "data")
-               (recur list-keys file-paths)
-
-               (includes? file-name "meta")
-               (recur (into list-keys
-                            (loop [meta-list-keys #{}
-                                   [meta-path & meta-file-names]
-                                   (vec (Files/newDirectoryStream path))]
-                              (if meta-path
-                                (let [old-file-name (-> meta-path .toString)
-                                      file-name     (str folder "/" (-> meta-path .getFileName .toString) ".ksv")
-                                      env           (assoc-in env [:msg :keys] old-file-name)
-                                      env           (assoc env :operation :read-meta)]
-                                  (recur
-                                   (conj meta-list-keys
-                                         (<?- (migrate-file-v2 folder env buffer-size old-file-name file-name
-                                                               serializer read-handlers write-handlers)))
-                                   meta-file-names))
-                                meta-list-keys)))
-                      file-paths)
-
-               (includes? file-name "B_")
-               (recur
-                (conj list-keys
-                      {:file-name file-name
-                       :type      :stale-binary
-                       :msg       "Old binary file detected. Use bget insteat of keys for migration."})
-                file-paths)
-
-               :else
-               (recur
-                (conj list-keys (<?- (migrate-file-v1 folder fn-l env buffer-size file-name
-                                                      file-name serializer read-handlers write-handlers)))
-                file-paths))))
-         list-keys)))))
-
-(defrecord FileSystemStore [folder serializers default-serializer compressor encryptor
-                            read-handlers write-handlers buffer-size detect-old-version locks config]
-  PEDNAsyncKeyValueStore
-  (-get [this key]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :format    :data
-                   :version version
-                   :default-serializer default-serializer
-                   :detect-old-files detect-old-version
-                   :msg       {:type :read-edn-error
-                               :key  key}}))
-  (-get-meta [this key]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-meta
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :version version
-                   :msg       {:type :read-meta-error
-                               :key  key}}))
-
-  (-assoc-in [this key-vec meta-up val] (-update-in this key-vec meta-up (fn [_] val) []))
-
-  (-update-in [this key-vec meta-up up-fn args]
-    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :version version
-                   :default-serializer default-serializer
-                   :up-fn      up-fn
-                   :up-fn-args args
-                   :up-fn-meta meta-up
-                   :config     config
-                   :msg        {:type :write-edn-error
-                                :key  (first key-vec)}}))
-  (-dissoc [this key]
-    (delete-file key folder))
-  PBinaryAsyncKeyValueStore
-  (-bget [this key locked-cb]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :config    config
-                   :version version
-                   :locked-cb locked-cb
-                   :msg       {:type :read-binary-error
-                               :key  key}}))
-  (-bassoc [this key meta-up input]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :input      input
-                   :version version
-                   :up-fn-meta meta-up
-                   :config     config
-                   :msg        {:type :write-binary-error
-                                :key  key}}))
-  PKeyIterable
-  (-keys [this]
-    (list-keys folder serializers read-handlers write-handlers buffer-size
-               {:operation :read-meta
-                :default-serializer default-serializer
-                :detect-old-files detect-old-version
-                :version version
-                :compressor compressor
-                :encryptor encryptor
-                :config config
-                :msg {:type :read-all-keys-error}}))
-
-  LinearLayout
-  (-get-raw [this key]
-    (go
-      (slurp (str folder "/" (uuid key) ".ksv"))))
-  (-put-raw [this key blob]
-    (go
-      (throw (ex-info "Not implemented yet." {:type :not-implemented})))))
-
-(defn- check-and-create-folder
-  "Helper Function to Check if Folder is not writable"
-  [path]
-  (let [f         (io/file path)
-        test-file (io/file (str path "/" (java.util.UUID/randomUUID)))]
-    (when-not (.exists f)
-      (.mkdir f))
-    (when-not (.createNewFile test-file)
-      (throw (ex-info "Cannot write to folder." {:type   :not-writable
-                                                 :folder path})))
-    (.delete test-file)))
+       (.close ac-meta-file))))))
 
 (defn detect-old-file-schema [folder]
   (reduce
@@ -832,43 +1299,41 @@
     (go store)))
 
 (comment
-  ;TODO check error propagation
-                                        ;compressor => function , encrpto => function
 
-  ;=> ser then compressoion then encrpt
+  (require '[konserve.protocols :refer [-async-assoc-in -async-get -async-get-meta -async-keys -async-bget -async-bassoc
+                                        -sync-assoc-in -sync-get -sync-get-meta -sync-keys -sync-bget -sync-bassoc]])
 
-;=> TODO add compressor ns
-
-  ;TODO list-keys => old-files + test => for migration
-                                        ;TODO gc test => create own gc
-
-  ;TODO gc write in store => 5 => timestamp => Mark 3 => gc needs whitelist {keys}
-
- ;TODO gc => safe timestampe after 5 writes => make a 6 write after that
-
-;TODO gc make namespace
-
-;TODO lz4 compression => serializer compression make compression
-
-  #_(clojure :variables clojure-enable-linters 'clj-kondo)
-                                        ;in otspacemacs-additional-packages flycheck-clj-kondo hinzufuegen
-
-                                        ; :100,120s/"erse"/"ersete"/g => va
   (do
     (delete-store "/tmp/konserve")
     (def store (<!! (new-fs-store "/tmp/konserve"))))
 
-  (<!! (-assoc-in store ["bar"] (fn [e] {:foo "foooooooooooooooooooooooooooooooooooOOOOOooo"}) 1123123123123123123123123))
+  (<!! (-async-assoc-in store ["bar"] (fn [e] {:foo "foooooooooooooooooooooooooooooooooooOOOOOooo"}) 1123123123123123123123123))
 
-  (<!! (-get store "foo4"))
+  (-sync-get store "bar")
 
-  (<!! (-get-meta store "bar"))
+  (-sync-assoc-in store ["bar"] (fn [e] {:foo "foo"}) 42)
 
-  (<!! (-update-in store ["bar"] (fn [e] {:foo "foo"}) inc []))
+  (<!! (-async-get store "bar"))
 
-  (<!! (-keys store))
+  (<!! (-async-get-meta store "bar"))
 
-  (<!! (-get-version store "bar"))
+  (-sync-get-meta store "bar")
+
+  (<!! (-async-update-in store ["bar"] (fn [e] {:foo "foo"}) inc []))
+
+  (-sync-update-in store ["bar"] (fn [e] {:foo "foo"}) inc [])
+
+  (<!! (-async-keys store))
+
+  (-sync-keys store)
+
+
+  (<!! (-async-bassoc store "baz" (fn [e] {:foo "baz"}) (byte-array [1 2 3])))
+
+
+  (-sync-bassoc store "baz" (fn [e] {:foo "baz"}) (byte-array [1 2 3]))
+
+  (-sync-bget store "baz" (fn [input] (println input)))
 
   (defn reader-helper [start-byte stop-byte file-name]
     (let [path      (Paths/get file-name (into-array String []))

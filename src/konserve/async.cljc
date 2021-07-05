@@ -1,17 +1,26 @@
-(ns konserve.core
+(ns konserve.async
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [konserve.protocols :refer [-exists? -get-meta -get -assoc-in
-                                        -update-in -dissoc -bget -bassoc
-                                        -keys]]
+  (:require [konserve.protocols :refer [-async-exists? -async-get-meta -async-get -async-assoc-in
+                                        -async-update-in -async-dissoc -async-bget -async-bassoc
+                                        -async-keys]]
             [hasch.core :refer [uuid]]
             [taoensso.timbre :as timbre :refer [trace]]
+            [konserve.utils :refer [meta-update]]
             [clojure.core.async :refer [chan poll! put! <! go]])
-  #?(:cljs (:require-macros [konserve.core :refer [go-locked]])))
+  #?(:cljs (:require-macros [konserve.async :refer [go-locked]])))
 
 
 ;; TODO we keep one chan for each key in memory
 ;; as async ops seem to interfere with the atom state changes
 ;; and cause deadlock
+
+
+;; ACID
+
+;; atomic
+;; consistent
+;; isolated
+;; durable
 
 
 (defn get-lock [{:keys [locks] :as store} key]
@@ -38,7 +47,7 @@
   (trace "exists? on key " key)
   (go-locked
    store key
-   (<! (-exists? store key))))
+   (<! (-async-exists? store key))))
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
@@ -49,7 +58,7 @@
    (trace "get-in on key " key)
    (go-locked
     store key-vec
-    (let [a (<! (-get store (first key-vec)))]
+    (let [a (<! (-async-get store (first key-vec)))]
       (if (some? a)
         (clojure.core/get-in a (rest key-vec))
         not-found)))))
@@ -72,26 +81,10 @@
    (trace "get-meta on key " key)
    (go-locked
     store key
-    (let [a (<! (-get-meta store key))]
+    (let [a (<! (-async-get-meta store key))]
       (if (some? a)
         a
         not-found)))))
-
-(defn now []
-  #?(:clj (java.util.Date.)
-     :cljs (js/Date.)))
-
-(defn meta-update
-  "Meta Data has following 'edn' format
-  {:key 'The stored key'
-   :type 'The type of the stored value binary or edn'
-   ::timestamp Date object.}
-  Returns the meta value of the stored key-value tupel. Returns metadata if the key
-  value not exist, if it does it will update the timestamp to date now. "
-  [key type old]
-  (if (empty? old)
-    {:key key :type type ::timestamp (now)}
-    (clojure.core/assoc old ::timestamp (now))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
@@ -101,7 +94,7 @@
   (trace "update-in on key " key)
   (go-locked
    store (first key-vec)
-   (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn args))))
+   (<! (-async-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn args))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
@@ -118,7 +111,7 @@
   (trace "assoc-in on key " key)
   (go-locked
    store (first key-vec)
-   (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val))))
+   (<! (-async-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
@@ -133,7 +126,7 @@
   (trace "dissoc on key " key)
   (go-locked
    store key
-   (<! (-dissoc store key))))
+   (<! (-async-dissoc store key))))
 
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
@@ -142,17 +135,17 @@
   (trace "append on key " key)
   (go-locked
    store key
-   (let [head (<! (-get store key))
+   (let [head (<! (-async-get store key))
          [append-log? last-id first-id] head
          new-elem {:next nil
                    :elem elem}
          id (uuid)]
      (when (and head (not= append-log? :append-log))
        (throw (ex-info "This is not an append-log." {:key key})))
-     (<! (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) []))
+     (<! (-async-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) []))
      (when first-id
-       (<! (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) [])))
-     (<! (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) []))
+       (<! (-async-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) [])))
+     (<! (-async-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) []))
      [first-id id])))
 
 (defn log
@@ -196,7 +189,7 @@
   JavaScript. You need to properly close/dispose the object when you
   are done!
 
-  You have to do all work in a async thread of locked-cb, e.g.
+  You have to do all work in an async thread of locked-cb, e.g.
 
   (fn [{is :input-stream}]
     (async/thread
@@ -207,7 +200,7 @@
   (trace "bget on key " key)
   (go-locked
    store key
-   (<! (-bget store key locked-cb))))
+   (<! (-async-bget store key locked-cb))))
 
 (defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
@@ -216,11 +209,10 @@
   (trace "bassoc on key " key)
   (go-locked
    store key
-   (<! (-bassoc store key (partial meta-update key :binary) val))))
+   (<! (-async-bassoc store key (partial meta-update key :binary) val))))
 
-;rename list-meta 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
   ([store]
    (trace "fetching keys")
-   (-keys store)))
+   (-async-keys store)))
