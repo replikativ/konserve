@@ -36,9 +36,11 @@
 (defn lz4-compressor [serializer]
   (Lz4Compressor. serializer))
 
+;; TODO: what to do with the graalvm ref?
 (def byte->compressor
   {0 null-compressor
-   1 #?(:clj (try
+   1 #?(:clj lz4-compressor
+        #_(try
               ;; LZ4 requires native code that breaks the native-image executable atm.
                (if (org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode)
                  unsupported-compressor
