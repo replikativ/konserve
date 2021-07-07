@@ -66,10 +66,9 @@
                                    (fn [{:keys [input-stream]}]
                                      (go
                                        (put! res-ch (slurp input-stream))))))))
-            (is (=  "foo bar" (<!! res-ch)))))
-        )
-      ;; (delete-store folder)
-      #_(let [store (<!! (new-fs-store folder))]
+            (is (=  "foo bar" (<!! res-ch))))))
+      (delete-store folder)
+      (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (keys store))
                #{}))))))
 
