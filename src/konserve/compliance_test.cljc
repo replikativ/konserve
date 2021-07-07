@@ -60,7 +60,7 @@
             list-keys)))
 
        ;; TODO It is here the corruptor which causes a lot of problem.
-       (let [params (clojure.core/keys store)
+       #_(let [params (clojure.core/keys store)
              corruptor (fn [s k]
                          (if (= (type (k s)) clojure.lang.Atom)
                            (clojure.core/assoc-in s [k] (atom {}))
