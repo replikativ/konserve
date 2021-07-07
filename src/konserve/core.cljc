@@ -46,7 +46,7 @@
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
-   (trace "get-in on key " key)
+   (trace "get-in on key-vec " key-vec)
    (go-locked
     store key-vec
     (let [a (<! (-get store (first key-vec)))]
