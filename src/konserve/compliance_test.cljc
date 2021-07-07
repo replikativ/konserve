@@ -61,21 +61,21 @@
 
        ;; TODO It is here the corruptor which causes a lot of problem.
        #_(let [params (clojure.core/keys store)
-             corruptor (fn [s k]
-                         (if (= (type (k s)) clojure.lang.Atom)
-                           (clojure.core/assoc-in s [k] (atom {}))
-                           (clojure.core/assoc-in s [k] (UnknownType.))))
-             corrupt (reduce corruptor store params)]
-         (is (exception? (<!! (get corrupt :bad))))
-         (is (exception? (<!! (get-meta corrupt :bad))))
-         (is (exception? (<!! (assoc corrupt :bad 10))))
-         (is (exception? (<!! (dissoc corrupt :bad))))
-         (is (exception? (<!! (assoc-in corrupt [:bad :robot] 10))))
-         (is (exception? (<!! (update-in corrupt [:bad :robot] inc))))
-         (is (exception? (<!! (exists? corrupt :bad))))
-         (is (exception? (<!! (keys corrupt))))
-         (is (exception? (<!! (bget corrupt :bad (fn [_] nil)))))
-         (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10))))))))))
+               corruptor (fn [s k]
+                           (if (= (type (k s)) clojure.lang.Atom)
+                             (clojure.core/assoc-in s [k] (atom {}))
+                             (clojure.core/assoc-in s [k] (UnknownType.))))
+               corrupt (reduce corruptor store params)]
+           (is (exception? (<!! (get corrupt :bad))))
+           (is (exception? (<!! (get-meta corrupt :bad))))
+           (is (exception? (<!! (assoc corrupt :bad 10))))
+           (is (exception? (<!! (dissoc corrupt :bad))))
+           (is (exception? (<!! (assoc-in corrupt [:bad :robot] 10))))
+           (is (exception? (<!! (update-in corrupt [:bad :robot] inc))))
+           (is (exception? (<!! (exists? corrupt :bad))))
+           (is (exception? (<!! (keys corrupt))))
+           (is (exception? (<!! (bget corrupt :bad (fn [_] nil)))))
+           (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10))))))))))
 
 #?(:cljs (deftest compliance-test-cljs
            (testing "this is a test"
