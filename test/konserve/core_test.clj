@@ -1,7 +1,7 @@
 (ns konserve.core-test
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!!] :as async]
-            [konserve.async :as k]
+            [konserve.core :as k]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.memory :refer [new-mem-store]]))
 
@@ -22,7 +22,7 @@
                                   (conj acc elem))
                                 []))
              [{:bar 42} {:bar 43}]))
-      (let [{:keys [key type :konserve.core/timestamp]} (<!! (k/get-meta store :foo))]
+      (let [{:keys [key type :timestamp]} (<!! (k/get-meta store :foo))]
         (are [x y] (= x y)
           :foo           key
           :append-log    type

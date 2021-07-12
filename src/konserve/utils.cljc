@@ -6,7 +6,7 @@
 
 (defn now []
   #?(:clj (java.util.Date.)
-    :cljs (js/Date.)))
+     :cljs (js/Date.)))
 
 (defn meta-update
   "Metadata has following 'edn' format
@@ -20,3 +20,27 @@
     {:key key :type type :timestamp (now)}
     (clojure.core/assoc old :timestamp (now))))
 
+
+
+(defmacro async+sync
+  [sync? async->sync async-code]
+  (let [res
+        (if (true? sync?)
+          (if sync?
+            (clojure.walk/postwalk (fn [n]
+                                      (if-not (meta n)
+                                        (async->sync n n) ;; primitives have no metadata
+                                        (with-meta (async->sync n n)
+                                          (update (meta n) :tag (fn [t] (async->sync t t))))))
+                                   async-code)
+            async-code)
+          `(if ~sync?
+             ~(clojure.walk/postwalk (fn [n]
+                                       (if-not (meta n)
+                                         (async->sync n n) ;; primitives have no metadata
+                                         (with-meta (async->sync n n)
+                                           (update (meta n) :tag (fn [t] (async->sync t t))))))
+                                     async-code)
+             ~async-code))]
+    #_(println "expansion" res)
+    res))

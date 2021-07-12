@@ -20,6 +20,7 @@
                                PSyncKeyIterable
                                -serialize -deserialize]]
    [konserve.storage-layout :refer [LinearLayout]]
+   [konserve.utils :refer [async+sync]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :as async
     :refer [<!! <! >! chan go close! put!]]
@@ -33,28 +34,6 @@
     StandardOpenOption]
    [sun.nio.ch FileLockImpl]))
 
-(defmacro async+sync
-  [sync? async->sync code]
-  (let [res
-        (if (true? sync?)
-          (if sync?
-            code
-            (clojure.walk/postwalk (fn [n]
-                                      (if-not (meta n)
-                                        (async->sync n n) ;; primitives have no metadata
-                                        (with-meta (async->sync n n)
-                                          (update (meta n) :tag (fn [t] (async->sync t t))))))
-                                    code))
-          `(if ~sync?
-             ~code
-             ~(clojure.walk/postwalk (fn [n]
-                                       (if-not (meta n)
-                                         (async->sync n n) ;; primitives have no metadata
-                                         (with-meta (async->sync n n)
-                                           (update (meta n) :tag (fn [t] (async->sync t t))))))
-                                     code)))]
-    #_(println "expansion" res)
-    res))
 
 (defn- sync-folder
   "Helper Function to synchronize the folder of the filestore"
