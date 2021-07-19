@@ -6,19 +6,11 @@
    [konserve.encryptor :refer [encryptor->byte byte->encryptor null-encryptor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [includes? ends-with?]]
-   [konserve.protocols :refer [PAsyncEDNKeyValueStore
-                               -async-update-in
-                               ;;-get -get-meta -update-in -dissoc -assoc-in
-                               PAsyncBinaryKeyValueStore
-                               ;; -bget -bassoc
+   [konserve.protocols :refer [PEDNAsyncKeyValueStore
+                               -update-in
+                               PBinaryAsyncKeyValueStore
                                -serialize -deserialize
-                               PAsyncKeyIterable
-                               ;;-keys
-                               PSyncEDNKeyValueStore
-                               -sync-update-in
-                               PSyncBinaryKeyValueStore
-                               PSyncKeyIterable
-                               -serialize -deserialize]]
+                               PKeyIterable]]
    [konserve.storage-layout :refer [LinearLayout]]
    [konserve.utils :refer [async+sync]]
    [superv.async :refer [go-try- <?-]]
@@ -226,13 +218,13 @@
   "Write file into filesystem. It write first the meta-size, that is stored in (1Byte),
   the meta-data and the actual data."
   [folder path serializer write-handlers buffer-size [key & rkey]
-   {:keys [compressor encryptor version file-name up-fn up-fn-args
+   {:keys [compressor encryptor version file-name up-fn
            up-fn-meta config operation input sync?]} [old-meta old-value]]
   (let [meta                 (up-fn-meta old-meta)
         value                (when (= operation :write-edn)
                                (if-not (empty? rkey)
-                                 (apply update-in old-value rkey up-fn up-fn-args)
-                                 (apply up-fn old-value up-fn-args)))
+                                 (update-in old-value rkey up-fn)
+                                 (up-fn old-value)))
 
         path-new             (Paths/get (if (:in-place? config)
                                           file-name
@@ -734,22 +726,20 @@
 (defrecord FileSystemStore [folder serializers default-serializer compressor encryptor
                             read-handlers write-handlers buffer-size detect-old-version locks config]
 
-  ;; ======================================================================
-  ;; Asynchronous API
-
-  PAsyncEDNKeyValueStore
-  (-async-get [_ key]
+  PEDNAsyncKeyValueStore
+  (-get [_ key sync?]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size
                   {:operation :read-edn
                    :compressor compressor
                    :encryptor encryptor
                    :format    :data
                    :version version
+                   :sync? sync?
                    :default-serializer default-serializer
                    :detect-old-files detect-old-version
                    :msg       {:type :read-edn-error
                                :key  key}}))
-  (-async-get-meta [_ key]
+  (-get-meta [_ key sync?]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size
                   {:operation :read-meta
                    :compressor compressor
@@ -757,12 +747,13 @@
                    :detect-old-files detect-old-version
                    :default-serializer default-serializer
                    :version version
+                   :sync? sync?
                    :msg       {:type :read-meta-error
                                :key  key}}))
 
-  (-async-assoc-in [this key-vec meta-up val] (-async-update-in this key-vec meta-up (fn [_] val) []))
+  (-assoc-in [this key-vec meta-up val sync?] (-update-in this key-vec meta-up (fn [_] val) sync?))
 
-  (-async-update-in [_ key-vec meta-up up-fn args]
+  (-update-in [_ key-vec meta-up up-fn sync?]
     (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
                   {:operation  :write-edn
                    :compressor compressor
@@ -771,101 +762,16 @@
                    :version version
                    :default-serializer default-serializer
                    :up-fn      up-fn
-                   :up-fn-args args
                    :up-fn-meta meta-up
                    :config     config
+                   :sync? sync?
                    :msg        {:type :write-edn-error
                                 :key  (first key-vec)}}))
-  (-async-dissoc [_ key]
-    (delete-file key folder false))
-  PAsyncBinaryKeyValueStore
-  (-async-bget [_ key locked-cb]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :config    config
-                   :version version
-                   :locked-cb locked-cb
-                   :msg       {:type :read-binary-error
-                               :key  key}}))
-  (-async-bassoc [_ key meta-up input]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :input      input
-                   :version version
-                   :up-fn-meta meta-up
-                   :config     config
-                   :msg        {:type :write-binary-error
-                                :key  key}}))
-  PAsyncKeyIterable
-  (-async-keys [_]
-    (list-keys folder serializers read-handlers write-handlers buffer-size
-               {:operation :read-meta
-                :default-serializer default-serializer
-                :detect-old-files detect-old-version
-                :version version
-                :compressor compressor
-                :encryptor encryptor
-                :config config
-                :msg {:type :read-all-keys-error}}))
-
-  ;; ======================================================================
-  ;; Synchronous API
-
-  PSyncEDNKeyValueStore
-  (-sync-get [_ key]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :format    :data
-                   :version version
-                   :sync? true
-                   :default-serializer default-serializer
-                   :detect-old-files detect-old-version
-                   :msg       {:type :read-edn-error
-                               :key  key}}))
-  (-sync-get-meta [_ key]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-meta
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :version version
-                   :sync? true
-                   :msg       {:type :read-meta-error
-                               :key  key}}))
-
-  (-sync-assoc-in [this key-vec meta-up val] (-sync-update-in this key-vec meta-up (fn [_] val) []))
-
-  (-sync-update-in [_ key-vec meta-up up-fn args]
-    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :version version
-                   :default-serializer default-serializer
-                   :up-fn      up-fn
-                   :up-fn-args args
-                   :up-fn-meta meta-up
-                   :config     config
-                   :sync? true
-                   :msg        {:type :write-edn-error
-                                :key  (first key-vec)}}))
-  (-sync-dissoc [_ key]
+  (-dissoc [_ key sync?]
     (delete-file key folder true))
 
-  PSyncBinaryKeyValueStore
-  (-sync-bget [_ key locked-cb]
+  PBinaryAsyncKeyValueStore
+  (-bget [_ key locked-cb sync?]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size
                   {:operation :read-binary
                    :detect-old-files detect-old-version
@@ -874,11 +780,11 @@
                    :encryptor encryptor
                    :config    config
                    :version version
-                   :sync? true
+                   :sync? sync?
                    :locked-cb locked-cb
                    :msg       {:type :read-binary-error
                                :key  key}}))
-  (-sync-bassoc [_ key meta-up input]
+  (-bassoc [_ key meta-up input sync?]
     (io-operation [key] folder serializers read-handlers write-handlers buffer-size
                   {:operation  :write-binary
                    :detect-old-files detect-old-version
@@ -889,12 +795,12 @@
                    :version version
                    :up-fn-meta meta-up
                    :config     config
-                   :sync?      true
+                   :sync?      sync?
                    :msg        {:type :write-binary-error
                                 :key  key}}))
 
-  PSyncKeyIterable
-  (-sync-keys [_]
+  PKeyIterable
+  (-keys [_ sync?]
     (list-keys folder serializers read-handlers write-handlers buffer-size
                {:operation :read-meta
                 :default-serializer default-serializer
@@ -903,7 +809,7 @@
                 :compressor compressor
                 :encryptor encryptor
                 :config config
-                :sync? true
+                :sync? sync?
                 :msg {:type :read-all-keys-error}}))
 
   LinearLayout

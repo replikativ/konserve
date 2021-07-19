@@ -28,10 +28,10 @@
         (if (true? sync?)
           (if sync?
             (clojure.walk/postwalk (fn [n]
-                                      (if-not (meta n)
-                                        (async->sync n n) ;; primitives have no metadata
-                                        (with-meta (async->sync n n)
-                                          (update (meta n) :tag (fn [t] (async->sync t t))))))
+                                     (if-not (meta n)
+                                       (async->sync n n) ;; primitives have no metadata
+                                       (with-meta (async->sync n n)
+                                         (update (meta n) :tag (fn [t] (async->sync t t))))))
                                    async-code)
             async-code)
           `(if ~sync?
@@ -42,5 +42,4 @@
                                            (update (meta n) :tag (fn [t] (async->sync t t))))))
                                      async-code)
              ~async-code))]
-    #_(println "expansion" res)
     res))

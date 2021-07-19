@@ -85,7 +85,6 @@
   ([store key not-found]
    (get store key not-found false))
   ([store key not-found sync?]
-   (trace "get-in on key " key)
    (get-in store [key] not-found sync?)))
 
 (defn get-meta
