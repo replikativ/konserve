@@ -5,9 +5,11 @@
 (defn sweep! [store whitelist ts]
   (go-try-
    (<?- (reduce<?-
-         (fn [deleted-files {:keys [key konserve.core/timestamp] :as meta}]
+         (fn [deleted-files {:keys [key timestamp] :as meta}]
            (go-try-
-            (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime timestamp)))
+            (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime (or timestamp
+                                                                             ;; old name
+                                                                             (:konserve.core/timestamp meta)))))
               deleted-files
               (do
                 (<?- (k/dissoc store key))

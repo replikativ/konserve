@@ -35,7 +35,7 @@
        (<!! (update-in store [:baz :bar] inc))
        (is (= (<!! (get-in store [:baz :bar]))
               43))
-       (<!! (update-in store [:baz :bar] + 2 3))
+       (<!! (update-in store [:baz :bar] (fn [x] (+ x 2 3))))
        (is (= (<!! (get-in store [:baz :bar]))
               48))
        (<!! (dissoc store :foo))
@@ -52,10 +52,10 @@
               :type :edn}
              {:key :binbar
               :type :binary}}
-           (->> list-keys (map #(clojure.core/dissoc % :konserve.core/timestamp)) set)
+           (->> list-keys (map #(clojure.core/dissoc % :timestamp)) set)
            true
            (every?
-            (fn [{:keys [:konserve.core/timestamp]}]
+            (fn [{:keys [:timestamp]}]
               (= (type (java.util.Date.)) (type timestamp)))
             list-keys)))
 

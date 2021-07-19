@@ -22,7 +22,7 @@
                                   (conj acc elem))
                                 []))
              [{:bar 42} {:bar 43}]))
-      (let [{:keys [key type :konserve.core/timestamp]} (<!! (k/get-meta store :foo))]
+      (let [{:keys [key type :timestamp]} (<!! (k/get-meta store :foo))]
         (are [x y] (= x y)
           :foo           key
           :append-log    type

@@ -7,8 +7,9 @@
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
-            [konserve.core :refer [meta-update]]
-            [konserve.core :refer [go-locked]]
+            [konserve.core :refer [go-locked locked]]
+            [konserve.utils :refer [meta-update async+sync]]
+            [taoensso.timbre :as timbre :refer [trace]]
             [clojure.core.async :refer [chan poll! put! <! go]]))
 
 (defn ensure-cache
@@ -21,11 +22,17 @@
 
 (defn exists?
   "Checks whether value is in the store."
-  [store key]
-  (go-locked
-   store key
-   (or (cache/has? @(:cache store) key)
-       (<! (-exists? store key)))))
+  ([store key]
+   (exists? store key false))
+  ([store key sync?]
+   (trace "exists? on key " key)
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store key
+                (or (cache/has? @(:cache store) key)
+                    (<! (-exists? store key sync?)))))))
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
@@ -33,19 +40,23 @@
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
-   (go-locked
-    store (first key-vec)
-    (let [cache         (:cache store)
-          [fkey & rkey] key-vec]
-      (if-let [v (cache/lookup @cache fkey)]
-        (do
-          #_(prn "hitting cache")
-          (swap! cache cache/hit fkey)
-          (clojure.core/get-in v rkey))
-        (let [v (<! (-get store fkey))]
-          #_(prn "getting fkey" fkey)
-          (swap! cache cache/miss fkey v)
-          (clojure.core/get-in v rkey not-found)))))))
+   (get-in store key-vec not-found false))
+  ([store key-vec not-found sync?]
+   (trace "get-in on key " key)
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store (first key-vec)
+                (let [cache         (:cache store)
+                      [fkey & rkey] key-vec]
+                  (if-let [v (cache/lookup @cache fkey)]
+                    (do
+                      (swap! cache cache/hit fkey)
+                      (clojure.core/get-in v rkey))
+                    (let [v (<! (-get store fkey sync?))]
+                      (swap! cache cache/miss fkey v)
+                      (clojure.core/get-in v rkey not-found))))))))
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
@@ -53,52 +64,73 @@
   ([store key]
    (get store key nil))
   ([store key not-found]
-   (get-in store [key] not-found)))
+   (get store key not-found false))
+  ([store key not-found sync?]
+   (get-in store [key] not-found sync?)))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key-vec up-fn & args]
-  (go-locked
-   store (first key-vec)
-   (let [cache (:cache store)
-         [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn args))]
-     (swap! cache cache/evict (first key-vec))
-     [old new])))
+  ([store key-vec up-fn]
+   (update-in store key-vec up-fn false))
+  ([store key-vec up-fn sync?]
+   (trace "update-in on key " key)
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store (first key-vec)
+                (let [cache (:cache store)
+                      [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn sync?))]
+                  (swap! cache cache/evict (first key-vec))
+                  [old new])))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
-  [store key meta-up-fn fn & args]
-  (apply update-in store [key] meta-up-fn fn args))
+  ([store key fn]
+   (update store key fn))
+  ([store key fn sync?]
+   (update-in store [key] fn sync?)))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
-  [store key-vec val]
-  (go-locked
-   store (first key-vec)
-   (let [cache (:cache store)]
-     (swap! cache cache/evict (first key-vec))
-     (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val)))))
+  ([store key-vec val]
+   (assoc-in store key-vec val false))
+  ([store key-vec val sync?]
+   (trace "assoc-in on key " key)
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store (first key-vec)
+                (let [cache (:cache store)]
+                  (swap! cache cache/evict (first key-vec))
+                  (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val sync?)))))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
  the key-vec (nested maps and vectors) are newly created."
-  [store key val]
-  (assoc-in store [key] val))
+  ([store key val]
+   (assoc store key val false))
+  ([store key val sync?]
+   (trace "assoc on key " key)
+   (assoc-in store [key] val sync?)))
 
 (defn dissoc
   "Removes an entry from the store. "
-  [store key]
-  (go-locked
-   store key
-   (let [cache (:cache store)]
-     (swap! cache cache/evict key)
-     (<! (-dissoc store key)))))
-
-
-
-
+  ([store key]
+   (dissoc store key false))
+  ([store key sync?]
+   (trace "dissoc on key " key)
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store key
+                (let [cache (:cache store)]
+                  (swap! cache cache/evict key)
+                  (<! (-dissoc store key sync?)))))))
