@@ -22,6 +22,7 @@
       (let [c (chan)]
         (put! c :unlocked)
         (clojure.core/get (swap! locks (fn [old]
+                                         (trace "creating lock for: " key)
                                          (if (old key) old
                                              (clojure.core/assoc old key c))))
                           key))))
@@ -41,8 +42,10 @@
      (let [l# (get-lock ~store ~key)]
        (try
          (<! l#)
+         (trace "acquired go-lock for: " ~key)
          ~@code
          (finally
+           (trace "releasing go-lock for: " ~key)
            (put! l# :unlocked))))))
 
 
@@ -66,12 +69,12 @@
   ([store key-vec not-found]
    (get-in store key-vec not-found false))
   ([store key-vec not-found sync?]
-   (trace "get-in on key " key)
+   (trace "get-in on key " key-vec)
    (async+sync sync?
                {go-locked locked
                 <! do}
                (go-locked
-                store key-vec
+                store (first key-vec)
                 (let [a (<! (-get store (first key-vec) sync?))]
                   (if (some? a)
                     (clojure.core/get-in a (rest key-vec))
@@ -114,10 +117,12 @@
    (update-in store key-vec up-fn false))
   ([store key-vec up-fn sync?]
    (trace "update-in on key " key)
-   (async+sync sync? {}
+   (async+sync sync?
+               {go-locked locked
+                <! do}
                (go-locked
                 store (first key-vec)
-                (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn sync?)))))
+                (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn sync?))))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
@@ -171,12 +176,11 @@
    (append store key elem false))
   ([store key elem sync?]
    (trace "append on key " key)
-   (go-locked
-    sync?
-    store key
-    (async+sync sync?
-                {go do
-                 <! do}
+   (async+sync sync?
+               {go-locked locked
+                <! do}
+               (go-locked
+                store key
                 (let [head (<! (-get store key sync?))
                       [append-log? last-id first-id] head
                       new-elem {:next nil
@@ -200,13 +204,16 @@
                {go do
                 <! do}
                (go
+                 (println "loading head")
                  (let [head (<! (get store key sync?))
+                       _ (println "loaded head")
                        [append-log? last-id first-id] head]
                    (when (and head (not= append-log? :append-log))
                      (throw (ex-info "This is not an append-log." {:key key})))
                    (when first-id
                      (loop [{:keys [next elem]} (<! (get store first-id sync?))
                             hist []]
+                       (println "next: " next)
                        (if next
                          (recur (<! (get store next))
                                 (conj hist elem))
@@ -215,7 +222,7 @@
 (defn reduce-log
   "Loads the append log and applies reduce-fn over it."
   ([store key reduce-fn acc]
-   (reduce-log store key reduce-fn acc))
+   (reduce-log store key reduce-fn acc false))
   ([store key reduce-fn acc sync?]
    (trace "reduce-log on key " key)
    (async+sync sync?

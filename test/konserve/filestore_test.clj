@@ -3,18 +3,37 @@
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [<!! go chan put! close!] :as async]
             [konserve.core :refer :all]
-            [konserve.storage-layout :refer [-get-raw]]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [new-fs-store delete-store]]))
 
-(deftest filestore-test
-  (testing "Test the file store functionality."
+
+(deftest filestore-compliance-test
+  (let [folder "/tmp/konserve-fs-comp-test"
+        _      (delete-store folder)
+        store  (<!! (new-fs-store folder))]
+    (testing "Compliance test with default config."
+        (compliance-test store))))
+
+(deftest filestore-compliance-test-no-fsync
+  (let [folder "/tmp/konserve-fs-comp-test"
+        _      (delete-store folder)
+        store  (<!! (new-fs-store folder :config {:fsync? false}))]
+    (testing "Compliance test without fsync."
+      (compliance-test store))))
+
+(deftest filestore-compliance-test-no-file-lock
+  (let [folder "/tmp/konserve-fs-comp-test"
+        _      (delete-store folder)
+        store  (<!! (new-fs-store folder :config {:file-lock? false}))]
+    (testing "Compliance test without file locking."
+      (compliance-test store))))
+
+(deftest binary-polymorhism-test
+  (testing "Test storage of different binary input formats."
     (let [folder "/tmp/konserve-fs-test"
           _      (spit "/tmp/foo" (range 1 10))
           _      (delete-store folder)
           store  (<!! (new-fs-store folder))]
-      (testing "compliance test"
-        (compliance-test store))
       (testing "Binary"
         (testing "ByteArray"
           (let [res-ch (chan)]
@@ -71,16 +90,3 @@
       (let [store (<!! (new-fs-store folder))]
         (is (= (<!! (keys store))
                #{}))))))
-
-(deftest filestore-layout1-test
-  (testing "Test Layout 1."
-    (let [folder "/tmp/konserve-fs-layout1-test"
-          _      (delete-store folder)
-          store  (<!! (new-fs-store folder))]
-      (<!! (assoc-in store [:foo] 42))
-      (let [header (take 8 (map byte (<!! (-get-raw store :foo))))
-            [layout-id serializer-id compressor-id encryptor-id] header
-            [_ _ _ _ _ _ _ metadata-size] header]
-        (is (= [layout-id serializer-id compressor-id encryptor-id]
-               [1 1 1 0]))
-        (is (= metadata-size 78))))))
