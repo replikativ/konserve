@@ -52,14 +52,14 @@
 (defn exists?
   "Checks whether value is in the store."
   ([store key]
-   (exists? store key false))
-  ([store key sync?]
+   (exists? store key {:sync? false}))
+  ([store key opts]
    (trace "exists? on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked}
                (go-locked
                 store key
-                (-exists? store key sync?)))))
+                (-exists? store key opts)))))
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
@@ -67,15 +67,15 @@
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
-   (get-in store key-vec not-found false))
-  ([store key-vec not-found sync?]
+   (get-in store key-vec not-found {:sync? false}))
+  ([store key-vec not-found opts]
    (trace "get-in on key " key-vec)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store (first key-vec)
-                (let [a (<! (-get store (first key-vec) sync?))]
+                (let [a (<! (-get store (first key-vec) opts))]
                   (if (some? a)
                     (clojure.core/get-in a (rest key-vec))
                     not-found))))))
@@ -86,9 +86,9 @@
   ([store key]
    (get store key nil))
   ([store key not-found]
-   (get store key not-found false))
-  ([store key not-found sync?]
-   (get-in store [key] not-found sync?)))
+   (get store key not-found {:sync? false}))
+  ([store key not-found opts]
+   (get-in store [key] not-found opts)))
 
 (defn get-meta
   "Returns the value stored described by key. Returns nil if the key
@@ -96,15 +96,15 @@
   ([store key]
    (get-meta store key nil))
   ([store key not-found]
-   (get-meta store key not-found false))
-  ([store key not-found sync?]
+   (get-meta store key not-found {:sync? false}))
+  ([store key not-found opts]
    (trace "get-meta on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store key
-                (let [a (<! (-get-meta store key sync?))]
+                (let [a (<! (-get-meta store key opts))]
                   (if (some? a)
                     a
                     not-found))))))
@@ -114,129 +114,127 @@
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   ([store key-vec up-fn]
-   (update-in store key-vec up-fn false))
-  ([store key-vec up-fn sync?]
+   (update-in store key-vec up-fn {:sync? false}))
+  ([store key-vec up-fn opts]
    (trace "update-in on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store (first key-vec)
-                (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn sync?))))))
+                (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   ([store key fn]
-   (update store key fn false))
-  ([store key fn sync?]
+   (update store key fn {:sync? false}))
+  ([store key fn opts]
    (trace "update on key " key)
-   (update-in store [key] fn sync?)))
+   (update-in store [key] fn opts)))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
   the key-vec (nested maps and vectors) are newly created."
   ([store key-vec val]
-   (assoc-in store key-vec val false))
-  ([store key-vec val sync?]
+   (assoc-in store key-vec val {:sync? false}))
+  ([store key-vec val opts]
    (trace "assoc-in on key " key)
-   (async+sync sync?
-               {<! do}
+   (async+sync (:sync? opts)
+               {go-locked locked
+                <! do}
                (go-locked
                 store (first key-vec)
-                (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val sync?))))))
+                (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
  the key-vec (nested maps and vectors) are newly created."
   ([store key val]
-   (assoc store key val false))
-  ([store key val sync?]
+   (assoc store key val {:sync? false}))
+  ([store key val opts]
    (trace "assoc on key " key)
-   (assoc-in store [key] val sync?)))
+   (assoc-in store [key] val opts)))
 
 (defn dissoc
   "Removes an entry from the store. "
   ([store key]
-   (dissoc store key false))
-  ([store key sync?]
+   (dissoc store key {:sync? false}))
+  ([store key opts]
    (trace "dissoc on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store key
-                (<! (-dissoc store key sync?))))))
+                (<! (-dissoc store key opts))))))
 
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
   This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
   ([store key elem]
-   (append store key elem false))
-  ([store key elem sync?]
+   (append store key elem {:sync? false}))
+  ([store key elem opts]
    (trace "append on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store key
-                (let [head (<! (-get store key sync?))
+                (let [head (<! (-get store key opts))
                       [append-log? last-id first-id] head
                       new-elem {:next nil
                                 :elem elem}
                       id (uuid)]
                   (when (and head (not= append-log? :append-log))
                     (throw (ex-info "This is not an append-log." {:key key})))
-                  (<! (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) sync?))
+                  (<! (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) opts))
                   (when first-id
-                    (<! (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) sync?)))
-                  (<! (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) sync?))
+                    (<! (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) opts)))
+                  (<! (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) opts))
                   [first-id id])))))
 
 (defn log
   "Loads the whole append log stored at key."
   ([store key]
-   (log store key false))
-  ([store key sync?]
+   (log store key {:sync? false}))
+  ([store key opts]
    (trace "log on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go do
                 <! do}
                (go
-                 (println "loading head")
-                 (let [head (<! (get store key sync?))
-                       _ (println "loaded head")
+                 (let [head (<! (get store key nil opts))
                        [append-log? last-id first-id] head]
                    (when (and head (not= append-log? :append-log))
                      (throw (ex-info "This is not an append-log." {:key key})))
                    (when first-id
-                     (loop [{:keys [next elem]} (<! (get store first-id sync?))
+                     (loop [{:keys [next elem]} (<! (get store first-id nil opts))
                             hist []]
-                       (println "next: " next)
                        (if next
-                         (recur (<! (get store next))
+                         (recur (<! (get store next nil opts))
                                 (conj hist elem))
                          (conj hist elem)))))))))
 
 (defn reduce-log
   "Loads the append log and applies reduce-fn over it."
   ([store key reduce-fn acc]
-   (reduce-log store key reduce-fn acc false))
-  ([store key reduce-fn acc sync?]
+   (reduce-log store key reduce-fn acc {:sync? false}))
+  ([store key reduce-fn acc opts]
    (trace "reduce-log on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go do
                 <! do}
                (go
-                 (let [head (<! (get store key sync?))
+                 (let [head (<! (get store key nil opts))
                        [append-log? last-id first-id] head]
                    (when (and head (not= append-log? :append-log))
                      (throw (ex-info "This is not an append-log." {:key key})))
                    (if first-id
                      (loop [id first-id
                             acc acc]
-                       (let [{:keys [next elem]} (<! (get store id sync?))]
+                       (let [{:keys [next elem]} (<! (get store id nil opts))]
                          (if (and next (not= id last-id))
                            (recur next (reduce-fn acc elem))
                            (reduce-fn acc elem))))
@@ -255,34 +253,34 @@
       (io/copy is tmp-file)))
   "
   ([store key locked-cb]
-   (bget store key locked-cb false))
-  ([store key locked-cb sync?]
+   (bget store key locked-cb {:sync? false}))
+  ([store key locked-cb opts]
    (trace "bget on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store key
-                (<! (-bget store key locked-cb sync?))))))
+                (<! (-bget store key locked-cb opts))))))
 
 (defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
   JVM, Blob in JavaScript) under key in the store."
   ([store key val]
-   (bassoc store key val false))
-  ([store key val sync?]
+   (bassoc store key val {:sync? false}))
+  ([store key val opts]
    (trace "bassoc on key " key)
-   (async+sync sync?
+   (async+sync (:sync? opts)
                {go-locked locked
                 <! do}
                (go-locked
                 store key
-                (<! (-bassoc store key (partial meta-update key :binary) val sync?))))))
+                (<! (-bassoc store key (partial meta-update key :binary) val opts))))))
 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."
   ([store]
-   (keys store false))
-  ([store sync?]
+   (keys store {:sync? false}))
+  ([store opts]
    (trace "fetching keys")
-   (-keys store sync?)))
+   (-keys store opts)))

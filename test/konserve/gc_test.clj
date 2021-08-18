@@ -19,7 +19,7 @@
         (<!! (k/update-in store [:foo] name))
         (<!! (k/assoc-in store [:baz] {:bar 42}))
         (<!! (k/update-in store [:baz :bar] inc))
-        (<!! (k/update-in store [:baz :bar] + 2 3))
+        (<!! (k/update-in store [:baz :bar] #(+ % 2 3)))
         (<!! (k/bassoc store :binbar (byte-array (range 10))))
         (is (= #{:foo2 :foo3} (<!! (sweep! store whitelist ts))))
         ;it seems clock of threads are not sync.
@@ -39,7 +39,7 @@
         (<!! (k/update-in store [:foo] name))
         (<!! (k/assoc-in store [:baz] {:bar 42}))
         (<!! (k/update-in store [:baz :bar] inc))
-        (<!! (k/update-in store [:baz :bar] + 2 3))
+        (<!! (k/update-in store [:baz :bar] #(+ % 2 3)))
         (<!! (k/bassoc store :binbar (byte-array (range 10))))
         (is (= #{:foo2 :foo3} (<!! (sweep! store whitelist ts))))))))
 

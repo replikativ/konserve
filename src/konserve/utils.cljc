@@ -12,15 +12,13 @@
   "Metadata has following 'edn' format
   {:key 'The stored key'
    :type 'The type of the stored value binary or edn'
-   :timestamp Date timestamp in milliseconds.}
+   :last-write Date timestamp in milliseconds.}
   Returns the meta value of the stored key-value tupel. Returns metadata if the key
-  value not exist, if it does it will update the timestamp to date now. "
+  value not exist, if it does it will update the last-write to date now. "
   [key type old]
   (if (empty? old)
-    {:key key :type type :timestamp (now)}
-    (clojure.core/assoc old :timestamp (now))))
-
-
+    {:key key :type type :last-write (now)}
+    (clojure.core/assoc old :last-write (now))))
 
 (defmacro async+sync
   [sync? async->sync async-code]
@@ -43,3 +41,4 @@
                                      async-code)
              ~async-code))]
     res))
+

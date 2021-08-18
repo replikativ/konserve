@@ -472,11 +472,11 @@
               ac                   (if sync?
                                      (FileChannel/open path standard-open-option)
                                      (AsynchronousFileChannel/open path standard-open-option))
-              lock   (when (:lock-file? config)
-                       (trace "Acquiring file lock for: " (first key-vec) (str ac))
-                       (if sync?
-                         (.lock ac)
-                         (.get (.lock ac))))]
+              ^FileLockImpl lock   (when (:lock-file? config)
+                                     (trace "Acquiring file lock for: " (first key-vec) (str ac))
+                                     (if sync?
+                                       (.lock ac)
+                                       (.get (.lock ac))))]
           (if file-exists?
             (let [bb          (ByteBuffer/allocate header-size)]
               (if sync?
@@ -723,104 +723,111 @@
                             read-handlers write-handlers buffer-size detect-old-version locks config]
 
   PEDNAsyncKeyValueStore
-  (-get [_ key sync?]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :format    :data
-                   :version version
-                   :sync? sync?
-                   :config config
-                   :default-serializer default-serializer
-                   :detect-old-files detect-old-version
-                   :msg       {:type :read-edn-error
-                               :key  key}}))
-  (-get-meta [_ key sync?]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-meta
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :version version
-                   :sync? sync?
-                   :config config
-                   :msg       {:type :read-meta-error
-                               :key  key}}))
+  (-get [_ key opts]
+    (let [{:keys [sync?]} opts]
+      (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                    {:operation :read-edn
+                     :compressor compressor
+                     :encryptor encryptor
+                     :format    :data
+                     :version version
+                     :sync? sync?
+                     :config config
+                     :default-serializer default-serializer
+                     :detect-old-files detect-old-version
+                     :msg       {:type :read-edn-error
+                                 :key  key}})))
+  (-get-meta [_ key opts]
+    (let [{:keys [sync?]} opts]
+      (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                    {:operation :read-meta
+                     :compressor compressor
+                     :encryptor encryptor
+                     :detect-old-files detect-old-version
+                     :default-serializer default-serializer
+                     :version version
+                     :sync? sync?
+                     :config config
+                     :msg       {:type :read-meta-error
+                                 :key  key}})))
 
-  (-assoc-in [this key-vec meta-up val sync?] (-update-in this key-vec meta-up (fn [_] val) sync?))
+  ;; TODO implement without trying to read value first
+  (-assoc-in [this key-vec meta-up val opts] (-update-in this key-vec meta-up (fn [_] val) opts))
 
-  (-update-in [_ key-vec meta-up up-fn sync?]
-    (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-edn
-                   :compressor compressor
-                   :encryptor encryptor
-                   :detect-old-files detect-old-version
-                   :version version
-                   :default-serializer default-serializer
-                   :up-fn      up-fn
-                   :up-fn-meta meta-up
-                   :config     config
-                   :sync? sync?
-                   :msg        {:type :write-edn-error
-                                :key  (first key-vec)}}))
-  (-dissoc [_ key sync?]
-    (delete-file key folder sync?))
+  (-update-in [_ key-vec meta-up up-fn opts]
+    (let [{:keys [sync?]} opts]
+      (io-operation key-vec folder serializers read-handlers write-handlers buffer-size
+                    {:operation  :write-edn
+                     :compressor compressor
+                     :encryptor encryptor
+                     :detect-old-files detect-old-version
+                     :version version
+                     :default-serializer default-serializer
+                     :up-fn      up-fn
+                     :up-fn-meta meta-up
+                     :config     config
+                     :sync? sync?
+                     :msg        {:type :write-edn-error
+                                  :key  (first key-vec)}})))
+  (-dissoc [_ key opts]
+    (delete-file key folder (:sync? opts)))
 
   PBinaryAsyncKeyValueStore
-  (-bget [_ key locked-cb sync?]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation :read-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :config    config
-                   :version version
-                   :sync? sync?
-                   :locked-cb locked-cb
-                   :msg       {:type :read-binary-error
-                               :key  key}}))
-  (-bassoc [_ key meta-up input sync?]
-    (io-operation [key] folder serializers read-handlers write-handlers buffer-size
-                  {:operation  :write-binary
-                   :detect-old-files detect-old-version
-                   :default-serializer default-serializer
-                   :compressor compressor
-                   :encryptor encryptor
-                   :input      input
-                   :version version
-                   :up-fn-meta meta-up
-                   :config     config
-                   :sync?      sync?
-                   :msg        {:type :write-binary-error
-                                :key  key}}))
+  (-bget [_ key locked-cb opts]
+    (let [{:keys [sync?]} opts]
+      (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                    {:operation :read-binary
+                     :detect-old-files detect-old-version
+                     :default-serializer default-serializer
+                     :compressor compressor
+                     :encryptor encryptor
+                     :config    config
+                     :version version
+                     :sync? sync?
+                     :locked-cb locked-cb
+                     :msg       {:type :read-binary-error
+                                 :key  key}})))
+  (-bassoc [_ key meta-up input opts]
+    (let [{:keys [sync?]} opts]
+      (io-operation [key] folder serializers read-handlers write-handlers buffer-size
+                    {:operation  :write-binary
+                     :detect-old-files detect-old-version
+                     :default-serializer default-serializer
+                     :compressor compressor
+                     :encryptor encryptor
+                     :input      input
+                     :version version
+                     :up-fn-meta meta-up
+                     :config     config
+                     :sync?      sync?
+                     :msg        {:type :write-binary-error
+                                  :key  key}})))
 
   PKeyIterable
-  (-keys [_ sync?]
-    (list-keys folder serializers read-handlers write-handlers buffer-size
-               {:operation :read-meta
-                :default-serializer default-serializer
-                :detect-old-files detect-old-version
-                :version version
-                :compressor compressor
-                :encryptor encryptor
-                :config config
-                :sync? sync?
-                :msg {:type :read-all-keys-error}}))
+  (-keys [_ opts]
+    (let [{:keys [sync?]} opts]
+      (list-keys folder serializers read-handlers write-handlers buffer-size
+                 {:operation :read-meta
+                  :default-serializer default-serializer
+                  :detect-old-files detect-old-version
+                  :version version
+                  :compressor compressor
+                  :encryptor encryptor
+                  :config config
+                  :sync? sync?
+                  :msg {:type :read-all-keys-error}})))
 
   PLinearLayout
-  (-get-raw [_ key]
-    (go
-      (let [is (io/input-stream
-                (io/as-file (str folder "/" (uuid key) ".ksv")))
-            arr (byte-array (.available is))]
-        (.read is arr)
-        arr)))
-  (-put-raw [_ key blob]
-    (go
-      (throw (ex-info "Not implemented yet." {:type :not-implemented})))))
+  (-get-raw [_ key opts]
+    (let [{:keys [sync?]} opts
+          is (io/input-stream
+              (io/as-file (str folder "/" (uuid key) ".ksv")))
+          arr (byte-array (.available is))]
+      (.read is arr)
+      (if sync? arr (go arr))))
+  (-put-raw [_ key blob opts]
+    (let [err (ex-info "Not implemented yet." {:type :not-implemented})]
+      (if (:sync? opts) err (go err)))))
 
 (defn- check-and-create-folder
   "Helper Function to Check if Folder is not writable"
@@ -863,12 +870,12 @@
                                                     :path data-path
                                                     :exception e}))))))
              [meta old]    (if binary?
-                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                             [{:key key :type :binary :last-write (java.util.Date.)}
                               {:operation :write-binary
                                :input     (if input input (FileInputStream. old-file-name))
                                :msg       {:type :write-binary-error
                                            :key  key}}]
-                             [{:key nkey :type :edn :timestamp (java.util.Date.)}
+                             [{:key nkey :type :edn :last-write (java.util.Date.)}
                               {:operation :write-edn
                                :up-fn     (if up-fn (up-fn data) (fn [_] data))
                                :msg       {:type :write-edn-error
@@ -923,12 +930,12 @@
                              [[key] true]
                              (<?- res-ch-data))
              [meta old]    (if binary?
-                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                             [{:key key :type :binary :last-write (java.util.Date.)}
                               {:operation :write-binary
                                :input     (if input input (FileInputStream. old-file-name))
                                :msg       {:type :write-binary-error
                                            :key  key}}]
-                             [{:key nkey :type :edn :timestamp (java.util.Date.)}
+                             [{:key nkey :type :edn :last-write (java.util.Date.)}
                               {:operation :write-edn
                                :up-fn     (if up-fn (up-fn data) (fn [_] data))
                                :msg       {:type :write-edn-error
@@ -1021,12 +1028,12 @@
                                                                         :path data-path
                                                                         :exception e}))))))
               [meta old]   (if (= :binary format)
-                             [{:key key :type :binary :timestamp (java.util.Date.)}
+                             [{:key key :type :binary :last-write (java.util.Date.)}
                               {:operation :write-binary
                                :input     (if input input (FileInputStream. data-file-name))
                                :msg       {:type :write-binary-error
                                            :key  key}}]
-                             [{:key key :type :edn :timestamp (java.util.Date.)}
+                             [{:key key :type :edn :last-write (java.util.Date.)}
                               {:operation :write-edn
                                :up-fn     (if up-fn (up-fn data) (fn [_] data))
                                :msg       {:type :write-edn-error
@@ -1080,12 +1087,12 @@
                                                 :path data-path}))))
        (let [data         (when (= :edn format) (<?- res-ch-data))
              [meta old]   (if (= :binary format)
-                            [{:key key :type :binary :timestamp (java.util.Date.)}
+                            [{:key key :type :binary :last-write (java.util.Date.)}
                              {:operation :write-binary
                               :input     (if input input (FileInputStream. data-file-name))
                               :msg       {:type :write-binary-error
                                           :key  key}}]
-                            [{:key key :type :edn :timestamp (java.util.Date.)}
+                            [{:key key :type :edn :last-write (java.util.Date.)}
                              {:operation :write-edn
                               :up-fn     (if up-fn (up-fn data) (fn [_] data))
                               :msg       {:type :write-edn-error
@@ -1156,7 +1163,7 @@
    :config         config} "
   [path & {:keys [default-serializer serializers compressor encryptor
                   read-handlers write-handlers
-                  buffer-size config detect-old-file-schema?]
+                  buffer-size config detect-old-file-schema? opts]
            :or   {default-serializer :FressianSerializer
                   compressor         null-compressor
                   ;; lz4-compressor
@@ -1164,6 +1171,7 @@
                   read-handlers      (atom {})
                   write-handlers     (atom {})
                   buffer-size        (* 1024 1024)
+                  opts               {:sync? false}
                   config             {:fsync? true
                                       :in-place? false
                                       :lock-file? true}}}]
@@ -1183,11 +1191,13 @@
                                                   :write-handlers     write-handlers
                                                   :buffer-size        buffer-size
                                                   :locks              (atom {})
-                                                 :config             (merge {:fsync? true
-                                                                             :in-place? false
-                                                                             :lock-file? true}
-                                                                            config)})]
-    (go store)))
+                                                  :config             (merge {:fsync? true
+                                                                              :in-place? false
+                                                                              :lock-file? true}
+                                                                             config)})]
+    (if (:sync? opts)
+      store
+      (go store))))
 
 (comment
 
@@ -1197,7 +1207,7 @@
     (delete-store "/tmp/konserve")
     (def store (<!! (new-fs-store "/tmp/konserve"))))
 
-  (<!! (-assoc-in store ["bar"] (fn [e] {:foo "foooooooooooooooooooooooooooooooooooOOOOOooo"}) 1123123123123123123123123 false))
+  (<!! (-assoc-in store ["bar"] (fn [e] {:foo "OoO"}) 1123123123123123123123123 false))
 
   (-get store "bar" true)
 

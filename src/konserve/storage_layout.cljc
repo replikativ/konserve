@@ -36,13 +36,13 @@
 
 (defprotocol PLinearLayout
   ;; Location 1: [4-header-bytes 4-bytes-for-meta-size serialized-meta serialized-data]
-  (-get-raw [store key])
-  (-put-raw [store key blob]))
+  (-get-raw [store key opts])
+  (-put-raw [store key blob opts]))
 
 (defprotocol PSplitLayout
   ;; Location 1: [4-header-bytes serialized-meta]
   ;; Location 2: [4-header-bytes serialized-data]
-  (-get-raw-meta [store key])
-  (-put-raw-meta [store key blob])
-  (-get-raw-value [store key])
-  (-put-raw-value [store key blob]))
+  (-get-raw-meta [store key opts])
+  (-put-raw-meta [store key blob opts])
+  (-get-raw-value [store key opts])
+  (-put-raw-value [store key blob opts]))

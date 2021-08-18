@@ -12,12 +12,12 @@
         _      (delete-store folder)
         store  (<!! (new-fs-store folder))]
     (testing "Compliance test with default config."
-        (compliance-test store))))
+      (compliance-test store))))
 
 (deftest filestore-compliance-test-no-fsync
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (<!! (new-fs-store folder :config {:fsync? false}))]
+        store  (new-fs-store folder :opts {:sync? true} :config {:fsync? false})]
     (testing "Compliance test without fsync."
       (compliance-test store))))
 
