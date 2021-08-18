@@ -91,7 +91,7 @@
   "Create in memory store. Binaries are not properly locked yet and
   the read and write-handlers are dummy ones for compatibility."
   ([] (new-mem-store (atom {})))
-  ([init-atom] (new-mem-store init-atom false))
+  ([init-atom] (new-mem-store init-atom {:sync? false}))
   ([init-atom opts]
    (let [store
          (map->MemoryStore {:state init-atom
