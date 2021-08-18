@@ -29,7 +29,7 @@
   [header-bytes]
   #?(:clj
      (let [bb (ByteBuffer/allocate header-size)]
-       (.put bb header-bytes)
+       (.put bb ^bytes header-bytes)
        [(.get bb 0) (.get bb 1) (.get bb 2) (.get bb 3) (.getInt bb 4)])
      :cljs
      (throw (ex-info "Not supported yet." {}))))

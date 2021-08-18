@@ -246,9 +246,9 @@
                          (write-edn ac-new key serializer compressor encryptor write-handlers start-byte value sync?)))
                   (when (:fsync? config)
                     (trace "fsyncing for " key)
-                    (.force ac-new true)
+                    (.force ^AsynchronousFileChannel ac-new true)
                     (sync-folder folder))
-                  (.close ac-new)
+                  (.close ^AsynchronousFileChannel ac-new)
 
                   (when-not (:in-place? config)
                     (trace "moving file: " key)
@@ -256,7 +256,7 @@
                                 (into-array [StandardCopyOption/ATOMIC_MOVE])))
                   (if (= operation :write-edn) [old-value value] true)
                   (finally
-                    (.close ac-new))))))
+                    (.close ^AsynchronousFileChannel ac-new))))))
 
 (defn completion-read-handler
   "Callback function for read-file. It can return following data: binary/edn/meta.
@@ -309,7 +309,9 @@
 (defn- read-file
   "Read meta, edn and binary."
   [^Channel ac serializer read-handlers {:keys [compressor encryptor operation sync?] :as env} meta-size]
-  (let [file-size                         (.size ac)
+  (let [file-size                         (if sync?
+                                            (.size ^FileChannel ac)
+                                            (.size ^AsynchronousFileChannel ac))
         {:keys [^ByteBuffer bb start-byte stop-byte]}
         (cond
           (= operation :write-edn)
@@ -475,13 +477,13 @@
               ^FileLockImpl lock   (when (:lock-file? config)
                                      (trace "Acquiring file lock for: " (first key-vec) (str ac))
                                      (if sync?
-                                       (.lock ac)
-                                       (.get (.lock ac))))]
+                                       (.lock ^FileChannel ac)
+                                       (.get (.lock ^AsynchronousFileChannel ac))))]
           (if file-exists?
             (let [bb          (ByteBuffer/allocate header-size)]
               (if sync?
                 (try
-                  (.read ac bb) ;; different read invocation than AsynchronousFileChannel
+                  (.read ^FileChannel ac bb) ;; different read invocation than AsynchronousFileChannel
                   (let [arr                               (.array bb)
                         buff-meta                         (ByteBuffer/wrap arr 4 4)
                         meta-size                         (.getInt buff-meta)
@@ -501,11 +503,11 @@
                       (trace "Releasing file lock for " (first key-vec) (str ac))
                       (.release lock))
                     (.clear bb)
-                    (.close ac)))
+                    (.close ^FileChannel ac)))
 
                 (let [res-ch      (chan)]
                   (go-try-
-                   (.read ac bb 0 header-size
+                   (.read ^AsynchronousFileChannel ac bb 0 header-size
                           (completion-read-header-handler res-ch bb
                                                           {:type :read-meta-size-error
                                                            :key  key}))
@@ -526,7 +528,7 @@
                        (trace "Releasing file lock for " (first key-vec) (str ac))
                        (.release lock))
                      (.clear bb)
-                     (.close ac))))))
+                     (.close ^AsynchronousFileChannel ac))))))
             ;; TODO unify with async+sync?
             (if sync?
               (try
@@ -535,14 +537,14 @@
                   (when (:lock-file? config)
                     (trace "Releasing lock for " (first key-vec) (str ac))
                     (.release lock))
-                  (.close ac)))
+                  (.close ^FileChannel ac)))
               (go-try-
                (<?- (update-file folder path serializer write-handlers buffer-size key-vec env [nil nil]))
                (finally
                  (when (:lock-file? config)
                    (trace "Releasing lock for " (first key-vec) (str ac))
                    (.release lock))
-                 (.close ac))))))
+                 (.close ^AsynchronousFileChannel ac))))))
         (if sync? nil (go nil))))))
 
 (defn- list-keys
