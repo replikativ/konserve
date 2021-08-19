@@ -29,13 +29,13 @@
 
 (defmacro locked [store key & code]
   `(let [l# (get-lock ~store ~key)]
-    (try
+     (try
          ;; spin lock
-      (while (not (poll! l#))
-        (Thread/sleep (rand-int 20)))
-      ~@code
-      (finally
-        (put! l# :unlocked)))))
+       (while (not (poll! l#))
+         (Thread/sleep (rand-int 20)))
+       ~@code
+       (finally
+         (put! l# :unlocked)))))
 
 (defmacro go-locked [store key & code]
   `(go
@@ -47,7 +47,6 @@
          (finally
            (trace "releasing go-lock for: " ~key)
            (put! l# :unlocked))))))
-
 
 (defn exists?
   "Checks whether value is in the store."

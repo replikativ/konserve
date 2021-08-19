@@ -6,7 +6,6 @@
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [new-fs-store delete-store]]))
 
-
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)

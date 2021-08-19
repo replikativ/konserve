@@ -21,7 +21,6 @@
   (-keys [this opts]
     "Return a channel that will continuously yield keys in this store."))
 
-
 (defprotocol PStoreSerializer
   "Decouples serialization format from storage."
   (-serialize [this output-stream write-handlers val]

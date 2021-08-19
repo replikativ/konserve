@@ -9,7 +9,7 @@
            (go-try-
             (if (or (contains? whitelist key) (<= (.getTime ts) (.getTime (or last-write
                                                                              ;; old name
-                                                                             (:konserve.core/timestamp meta)))))
+                                                                              (:konserve.core/timestamp meta)))))
               deleted-files
               (do
                 (<?- (k/dissoc store key))
