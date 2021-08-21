@@ -118,26 +118,25 @@
              (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10)))))))))))
 
 #?(:cljs (deftest compliance-test-cljs
-           (testing "this is a test"
-             (async done
-                    (go
-                      (let [store (<! (new-mem-store))]
-                        (is (= (<! (get store :foo)) nil))
-                        (<!  (assoc store :foo :bar))
-                        (is (= :bar (<! (get store :foo))))
-                        (<! (assoc-in store [:foo] :bar2))
-                        (is (= :bar2 (<! (get store :foo))))
-                        (is (= :default
-                               (<! (get-in store [:fuu] :default))))
-                        (<! (update-in store [:foo] name))
-                        (is (= "bar2" (<! (get store :foo))))
-                        (<! (assoc-in store [:baz] {:bar 42}))
-                        (is (= (<! (get-in store [:baz :bar])) 42))
-                        (<! (update-in store [:baz :bar] inc))
-                        (is (= (<! (get-in store [:baz :bar])) 43))
-                        (<! (update-in store [:baz :bar] + 2 3))
-                        (is (= (<! (get-in store [:baz :bar])) 48))
-                        (<! (dissoc store :foo))
-                        (is (= (<! (get-in store [:foo])) nil))
-                        (done)))))))
+           (async done
+                  (go
+                    (let [store (<! (new-mem-store))]
+                      (is (= (<! (k/get store :foo)) nil))
+                      (<! (k/assoc store :foo :bar))
+                      (is (= :bar (<! (k/get store :foo))))
+                      (<! (k/assoc-in store [:foo] :bar2))
+                      (is (= :bar2 (<! (k/get store :foo))))
+                      (is (= :default
+                             (<! (k/get-in store [:fuu] :default))))
+                      (<! (k/update-in store [:foo] name))
+                      (is (= "bar2" (<! (k/get store :foo))))
+                      (<! (k/assoc-in store [:baz] {:bar 42}))
+                      (is (= (<! (k/get-in store [:baz :bar])) 42))
+                      (<! (k/update-in store [:baz :bar] inc))
+                      (is (= (<! (k/get-in store [:baz :bar])) 43))
+                      (<! (k/update-in store [:baz :bar] #(+ % 2 3)))
+                      (is (= (<! (k/get-in store [:baz :bar])) 48))
+                      (<! (k/dissoc store :foo))
+                      (is (= (<! (k/get-in store [:foo])) nil))
+                      (done))))))
 

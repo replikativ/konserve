@@ -4,11 +4,11 @@
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
-            [taoensso.timbre :as timbre :refer [trace]]
+            [taoensso.timbre :as timbre :refer [trace debug]]
             [konserve.utils :refer [meta-update #?(:clj async+sync)]]
             [clojure.core.async :refer [go chan poll! put! <!]])
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
-                            [konserve.core :refer [go-locked]])))
+                            [konserve.core :refer [go-locked locked]])))
 
 
 ;; ACID
