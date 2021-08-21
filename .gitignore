@@ -12,6 +12,8 @@ out
 .shadow-cljs
 .cpcache
 .calva
+/.lsp/sqlite.db
+.dir-locals.el
 node_modules
 public 
 

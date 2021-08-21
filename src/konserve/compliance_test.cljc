@@ -99,7 +99,6 @@
          (doseq [to-delete [:baz :binbar :foolog]]
            (<!! (k/dissoc store to-delete opts)))
 
-
         ;; TODO fix by adding spec to core and cache namespace
          #_(let [params (clojure.core/keys store)
                  corruptor (fn [s k]
