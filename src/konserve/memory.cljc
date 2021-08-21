@@ -13,7 +13,7 @@
       (async+sync sync?
                   {go do
                    <! do}
-                  (go  (if (@state key) true false)))))
+                  (go  (if (get @state key false) true false)))))
   (-get [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -51,7 +51,13 @@
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (swap! state dissoc key) nil))))
+                  (go
+                    (let [v (get @state key ::not-found)]
+                      (if (not= v ::not-found)
+                        (do
+                          (swap! state dissoc key)
+                          true)
+                        false))))))
   PBinaryAsyncKeyValueStore
   (-bget [_ key locked-cb opts]
     (let [{:keys [sync?]} opts]

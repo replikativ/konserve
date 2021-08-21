@@ -418,13 +418,16 @@
         path         (Paths/get fn (into-array String []))
         file-exists? (Files/exists path (into-array LinkOption []))]
     (if sync?
-      (try
-        (Files/delete path)
-        (catch Exception e
-          (throw (ex-info "Could not delete key."
-                          {:key key
-                           :folder folder
-                           :exeption e}))))
+      (if file-exists?
+        (try
+          (Files/delete path)
+          true
+          (catch Exception e
+            (throw (ex-info "Could not delete key."
+                            {:key key
+                             :folder folder
+                             :exeption e}))))
+        false)
       (let [res-ch       (chan)]
         (if file-exists?
           (try
@@ -437,7 +440,9 @@
                                      :exeption e})))
             (finally
               (close! res-ch)))
-          (close! res-ch))
+          (do
+            (put! res-ch false)
+            (close! res-ch)))
         res-ch))))
 
 (declare migrate-file-v1 migrate-file-v2)

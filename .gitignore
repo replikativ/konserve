@@ -12,7 +12,7 @@ out
 .shadow-cljs
 .cpcache
 .calva
-/.lsp/sqlite.db
+.lsp
 .dir-locals.el
 node_modules
 public 

@@ -2,12 +2,13 @@
   "Provides core functions, but with additional caching. Still subject to internal
   changes. Use this namespace only if you anticipate to be the only process
   accessing the store, otherwise you should implement your own caching strategy."
-  (:refer-clojure :exclude [assoc-in assoc exists? dissoc get get-in update-in update])
+  (:refer-clojure :exclude [assoc-in assoc exists? dissoc get get-in
+                            keys update-in update])
   (:require [konserve.protocols :refer [-exists? -get -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
-            [konserve.core :refer [go-locked locked]]
+            [konserve.core :refer [go-locked locked] :as core]
             [konserve.utils :refer [meta-update async+sync]]
             [taoensso.timbre :as timbre :refer [trace]]
             [clojure.core.async :refer [chan poll! put! <! go]]))
@@ -53,10 +54,14 @@
                   (if-let [v (cache/lookup @cache fkey)]
                     (do
                       (swap! cache cache/hit fkey)
-                      (clojure.core/get-in v rkey))
+                      (if (some? v)
+                        (clojure.core/get-in v rkey not-found)
+                        not-found))
                     (let [v (<! (-get store fkey opts))]
                       (swap! cache cache/miss fkey v)
-                      (clojure.core/get-in v rkey not-found))))))))
+                      (if (some? v)
+                        (clojure.core/get-in v rkey not-found)
+                        not-found))))))))
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
@@ -85,6 +90,7 @@
                 (let [cache (:cache store)
                       [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
                   (swap! cache cache/evict (first key-vec))
+                  (swap! cache cache/miss (first key-vec) new)
                   [old new])))))
 
 (defn update
@@ -109,9 +115,11 @@
                 <! do}
                (go-locked
                 store (first key-vec)
-                (let [cache (:cache store)]
+                (let [cache (:cache store)
+                      [old new] (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
                   (swap! cache cache/evict (first key-vec))
-                  (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts)))))))
+                  (swap! cache cache/miss (first key-vec) new)
+                  [old new])))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
@@ -136,3 +144,9 @@
                 (let [cache (:cache store)]
                   (swap! cache cache/evict key)
                   (<! (-dissoc store key opts)))))))
+
+;; alias core functions without caching for convenience
+
+(def bassoc core/bassoc)
+(def bget core/bget)
+(def keys core/keys)
