@@ -23,7 +23,7 @@
 (defmacro async+sync
   [sync? async->sync async-code]
   (let [res
-        (if (true? sync?)
+        (if (boolean? sync?)
           (if sync?
             (clojure.walk/postwalk (fn [n]
                                      (if-not (meta n)

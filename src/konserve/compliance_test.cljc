@@ -4,7 +4,7 @@
             [konserve.storage-layout :refer [PLinearLayout read-header header-size -get-raw]]
             #?(:cljs [cljs.test :refer [deftest is testing async]])
             #?(:clj [clojure.test :refer :all])
-            [konserve.utils :refer [async+sync]]
+            #?(:clj [konserve.utils :refer [async+sync]])
             [konserve.memory :refer [new-mem-store]]))
 
 (deftype UnknownType [])
@@ -101,8 +101,6 @@
 
 
         ;; TODO fix by adding spec to core and cache namespace
-
-
          #_(let [params (clojure.core/keys store)
                  corruptor (fn [s k]
                              (if (= (type (k s)) clojure.lang.Atom)
