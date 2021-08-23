@@ -156,9 +156,7 @@
 (defn- write-header
   "Write file-header"
   [ac-new key bytearray sync?]
-  (let [bos       (ByteArrayOutputStream.)
-        _         (.write bos (byte-array bytearray))
-        buffer    (ByteBuffer/wrap (.toByteArray bos))
+  (let [buffer    (ByteBuffer/wrap bytearray)
         result-ch (chan)]
     (async+sync sync?
                 {go-try- try
@@ -172,8 +170,7 @@
                  (<?- result-ch)
                  (finally
                    (close! result-ch)
-                   (.clear buffer)
-                   (.close bos))))))
+                   (.clear buffer))))))
 
 (defn- write-edn
   "Write Operation for edn. In the Filestore it would be for meta-data or data-value."
