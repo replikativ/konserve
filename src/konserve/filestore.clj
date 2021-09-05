@@ -166,11 +166,7 @@
         meta-size            (.size bos)
         _                    (.close bos)
         start-byte           (+ header-size meta-size)
-        serializer-id        (get serializer-class->byte (type serializer))
-        compressor-id        (get compressor->byte compressor)
-        encryptor-id         (get encryptor->byte encryptor)
-        byte-array           (create-header *default-storage-layout*
-                                            serializer-id compressor-id encryptor-id meta-size)]
+        byte-array           (create-header *default-storage-layout* serializer compressor encryptor meta-size)]
     (async+sync sync? *sync-translation*
                 (go-try-
                  (<?- (write-header ac-new key byte-array sync?))
@@ -323,33 +319,30 @@
 
 (defn completion-read-header-handler
   "Callback Function for io/operation. Return the Meta-size that are stored in the ByteBuffer."
-  [res-ch ^ByteBuffer bb msg]
+  [res-ch ^ByteBuffer bb msg serializers]
   (proxy [CompletionHandler] []
     (completed [res att]
-      (let [arr                               (.array bb)
-            [_ serializer-id compressor-id _ meta-size] (parse-header arr)]
-        (try
-          (if (nil? meta-size)
-            (close! res-ch)
-            (put! res-ch [serializer-id compressor-id meta-size]))
-          (catch Exception e
-            (put! res-ch (ex-info "Could not read key."
-                                  (assoc msg :exception e)))))))
+      (try
+        (put! res-ch (parse-header (.array bb) serializers))
+        (catch Exception e
+          (put! res-ch (ex-info "Could not read key."
+                                (assoc msg :exception e))))))
     (failed [t att]
       (put! res-ch (ex-info "Could not read key."
                             (assoc msg :exception t))))))
 
-(defn read-header [sync? ac]
-  (let [bb          (ByteBuffer/allocate header-size)]
+(defn read-header [sync? ac serializers]
+  (let [bb (ByteBuffer/allocate header-size)]
     (if sync?
-      (let [_ (.read ^FileChannel ac bb)
-            [_ serializer-id compressor-id _ meta-size]  (parse-header (.array bb))]
-        [serializer-id compressor-id meta-size])
+      (do
+        (.read ^FileChannel ac bb)
+        (parse-header (.array bb) serializers))
       (let [res-ch (chan)]
         (.read ^AsynchronousFileChannel ac bb 0 header-size
                (completion-read-header-handler res-ch bb
                                                {:type :read-meta-size-error
-                                                :key  key}))
+                                                :key  key}
+                                               serializers))
         res-ch))))
 
 (declare migrate-file-v1 migrate-file-v2)
@@ -393,10 +386,7 @@
           (async+sync sync? *sync-translation*
                       (go-try-
                        (let [old (if (and file-exists? (not overwrite?))
-                                   (let [[serializer-id compressor-id meta-size] (<?- (read-header sync? ac))
-                                         serializer-key                          (byte->key serializer-id)
-                                         serializer                              (get serializers serializer-key)
-                                         compressor                              (byte->compressor compressor-id)]
+                                   (let [[_ serializer compressor _ meta-size] (<?- (read-header sync? ac serializers))]
                                      (<?- (read-file ac serializer read-handlers
                                                      (assoc env :compressor compressor)
                                                      meta-size)))
@@ -437,10 +427,7 @@
                              res-ch      (chan)]
                          (recur
                           (try
-                            (let [[serializer-id compressor-id meta-size] (<?- (read-header sync? ac))
-                                  serializer-key                          (byte->key serializer-id)
-                                  serializer                              (get serializers serializer-key)
-                                  compressor                              (byte->compressor compressor-id)]
+                            (let [[_ serializer compressor _ meta-size] (<?- (read-header sync? ac serializers))]
                               (conj list-keys
                                     (<?- (read-file ac serializer read-handlers
                                                     ;; TODO why do we need to add the compressor?

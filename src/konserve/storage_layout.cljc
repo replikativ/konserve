@@ -2,7 +2,9 @@
   "One of these protocols must be implemented by each store to provide low level
   access depending on the low-level storage layout chosen. Stores can support
   multiple layouts."
-  (:require [konserve.serializers :refer [byte->key]])
+  (:require [konserve.serializers :refer [serializer-class->byte byte->key]]
+            [konserve.compressor :refer [compressor->byte byte->compressor]]
+            [konserve.encryptor :refer [encryptor->byte byte->encryptor]])
   #?(:clj (:import [java.nio ByteBuffer])))
 
 (def ^:const header-size 20)
@@ -17,7 +19,11 @@
   9th-20th Byte are spare"
   [storage-layout serializer compressor encryptor meta]
   #?(:clj
-     (let [env-array        (byte-array [storage-layout serializer compressor encryptor])
+     (let [serializer-id        (get serializer-class->byte (type serializer))
+           compressor-id        (get compressor->byte compressor)
+           encryptor-id         (get encryptor->byte encryptor)
+
+           env-array        (byte-array [storage-layout serializer-id compressor-id encryptor-id])
            return-buffer    (ByteBuffer/allocate header-size)
            _                (.put return-buffer env-array)
            _                (.putInt return-buffer 4 meta)
@@ -27,12 +33,23 @@
      :cljs (throw (ex-info "Not supported yet." {}))))
 
 (defn parse-header
-  "Inverse function to create-header."
-  [header-bytes]
+  "Inverse function to create-header. serializers are a map of serializer-id to
+  instance that are potentially initialized with custom handlers by the store
+  user. We assume compressors and encryptors to use system-wide standard configurations."
+  [header-bytes serializers]
   #?(:clj
-     (let [bb (ByteBuffer/allocate header-size)]
-       (.put bb ^bytes header-bytes)
-       [(.get bb 0) (.get bb 1) (.get bb 2) (.get bb 3) (.getInt bb 4)])
+     (let [bb (ByteBuffer/allocate header-size)
+           _ (.put bb ^bytes header-bytes)
+           storage-layout (.get bb 0)
+           serializer-id (.get bb 1)
+           compressor-id (.get bb 2)
+           encryptor-id (.get bb 3)
+           meta-size (.getInt bb 4)]
+       [storage-layout
+        (serializers (byte->key serializer-id))
+        (byte->compressor compressor-id)
+        (byte->encryptor encryptor-id)
+        meta-size])
      :cljs
      (throw (ex-info "Not supported yet." {}))))
 
