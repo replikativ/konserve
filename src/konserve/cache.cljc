@@ -87,7 +87,7 @@
                 (let [cache (:cache store)
                       key (first key-vec)
                       [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
-                  (when (cache/has? cache key)
+                  (when (cache/has? @cache key)
                     (swap! cache cache/evict key)
                     (swap! cache cache/miss key new))
                   [old new])))))
