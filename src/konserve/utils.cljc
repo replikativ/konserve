@@ -1,4 +1,5 @@
-(ns konserve.utils)
+(ns konserve.utils
+  (:require [clojure.walk]))
 
 (defn invert-map [m]
   (->> (map (fn [[k v]] [v k]) m)
@@ -22,7 +23,10 @@
 
 (defmacro async+sync
   [sync? async->sync async-code]
-  (let [res
+  (let [async->sync (if (symbol? async->sync)
+                      (resolve async->sync)
+                      async->sync)
+        res
         (if (boolean? sync?)
           (if sync?
             (clojure.walk/postwalk (fn [n]
@@ -42,3 +46,12 @@
              ~async-code))]
     res))
 
+(def ^:dynamic *default-sync-translation*
+  '{go do
+    <! do
+    go-try try
+    <? do
+    go-try- try
+    <!- do
+    <?- do
+    go-locked locked})

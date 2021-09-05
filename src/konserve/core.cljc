@@ -4,8 +4,8 @@
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
-            [taoensso.timbre :as timbre :refer [trace debug]]
-            [konserve.utils :refer [meta-update #?(:clj async+sync)]]
+            [taoensso.timbre :as timbre :refer [trace]]
+            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
             [clojure.core.async :refer [go chan poll! put! <!]])
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
                             [konserve.core :refer [go-locked locked]])))
@@ -74,10 +74,10 @@
   ([store key opts]
    (trace "exists? on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked}
+               *default-sync-translation*
                (go-locked
                 store key
-                (-exists? store key opts)))))
+                (<! (-exists? store key opts))))))
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
@@ -89,8 +89,7 @@
   ([store key-vec not-found opts]
    (trace "get-in on key " key-vec)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [a (<! (-get store (first key-vec) opts))]
@@ -118,8 +117,7 @@
   ([store key not-found opts]
    (trace "get-meta on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (let [a (<! (-get-meta store key opts))]
@@ -136,8 +134,7 @@
   ([store key-vec up-fn opts]
    (trace "update-in on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
@@ -160,8 +157,7 @@
   ([store key-vec val opts]
    (trace "assoc-in on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
@@ -182,8 +178,7 @@
   ([store key opts]
    (trace "dissoc on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (<! (-dissoc store key opts))))))
@@ -196,8 +191,7 @@
   ([store key elem opts]
    (trace "append on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (let [head (<! (-get store key opts))
@@ -220,8 +214,7 @@
   ([store key opts]
    (trace "log on key " key)
    (async+sync (:sync? opts)
-               {go do
-                <! do}
+               *default-sync-translation*
                (go
                  (let [head (<! (get store key nil opts))
                        [append-log? last-id first-id] head]
@@ -242,8 +235,7 @@
   ([store key reduce-fn acc opts]
    (trace "reduce-log on key " key)
    (async+sync (:sync? opts)
-               {go do
-                <! do}
+               *default-sync-translation*
                (go
                  (let [head (<! (get store key nil opts))
                        [append-log? last-id first-id] head]
@@ -275,8 +267,7 @@
   ([store key locked-cb opts]
    (trace "bget on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (<! (-bget store key locked-cb opts))))))
@@ -289,8 +280,7 @@
   ([store key val opts]
    (trace "bassoc on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (<! (-bassoc store key (partial meta-update key :binary) val opts))))))

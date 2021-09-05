@@ -9,7 +9,7 @@
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
             [konserve.core :refer [go-locked locked] :as core]
-            [konserve.utils :refer [meta-update async+sync]]
+            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [taoensso.timbre :as timbre :refer [trace]]
             [clojure.core.async :refer [chan poll! put! <! go]]))
 
@@ -24,15 +24,14 @@
 (defn exists?
   "Checks whether value is in the store."
   ([store key]
-   (exists? store key false))
+   (exists? store key {:sync? false}))
   ([store key opts]
    (trace "exists? on key " key opts)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
-                (or (cache/has? @(:cache store) key)
+                (or (not (nil? (cache/lookup @(:cache store) key)))
                     (<! (-exists? store key opts)))))))
 
 (defn get-in
@@ -45,23 +44,22 @@
   ([store key-vec not-found opts]
    (trace "get-in on key " key opts)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [cache         (:cache store)
-                      [fkey & rkey] key-vec]
+                      [fkey & rkey] key-vec
+                      extract (fn [v]
+                                (if (some? v)
+                                  (clojure.core/get-in v rkey not-found)
+                                  not-found))]
                   (if-let [v (cache/lookup @cache fkey)]
                     (do
                       (swap! cache cache/hit fkey)
-                      (if (some? v)
-                        (clojure.core/get-in v rkey not-found)
-                        not-found))
+                      (extract v))
                     (let [v (<! (-get store fkey opts))]
                       (swap! cache cache/miss fkey v)
-                      (if (some? v)
-                        (clojure.core/get-in v rkey not-found)
-                        not-found))))))))
+                      (extract v))))))))
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
@@ -83,14 +81,15 @@
   ([store key-vec up-fn opts]
    (trace "update-in on key " key opts)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
+                      key (first key-vec)
                       [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
-                  (swap! cache cache/evict (first key-vec))
-                  (swap! cache cache/miss (first key-vec) new)
+                  (when (cache/has? cache key)
+                    (swap! cache cache/evict key)
+                    (swap! cache cache/miss key new))
                   [old new])))))
 
 (defn update
@@ -111,8 +110,7 @@
   ([store key-vec val opts]
    (trace "assoc-in on key " key opts)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
@@ -137,8 +135,7 @@
   ([store key opts]
    (trace "dissoc on key " key)
    (async+sync (:sync? opts)
-               {go-locked locked
-                <! do}
+               *default-sync-translation*
                (go-locked
                 store key
                 (let [cache (:cache store)]
@@ -146,6 +143,10 @@
                   (<! (-dissoc store key opts)))))))
 
 ;; alias core functions without caching for convenience
+
+(def append core/append)
+(def log core/log)
+(def reduce-log core/reduce-log)
 
 (def bassoc core/bassoc)
 (def bget core/bget)

@@ -1,17 +1,22 @@
 (ns konserve.cache-test
   (:require [konserve.cache :as k]
             [konserve.filestore :as fstore]
-            [clojure.core.async :refer [<!! go]]
+            [clojure.core.async :refer [<!! go] :as async]
             [clojure.test :refer [deftest testing is are]]))
 
 (deftest cache-test
-  (let [test-store (<!! (fstore/new-fs-store "/tmp/cache-store"))
-        store (k/ensure-cache test-store)]
-    (doseq [opts [{:sync? false} {:sync? true}]
-            :let [<!! (if (:sync? opts) identity <!!)]]
+
+  (doseq [opts [{:sync? false} {:sync? true}]
+          :let [<!! (if (:sync? opts) identity <!!)]]
+    (let [_ (fstore/delete-store "/tmp/cache-store")
+          test-store (<!! (fstore/new-fs-store "/tmp/cache-store" :opts opts))
+          store (k/ensure-cache test-store)]
 
       (testing "Test the cache API."
-        (is (= (<!! (k/get store :foo nil opts)) nil)) (<!! (k/assoc store :foo :bar opts))
+        (is (= (<!! (k/get store :foo nil opts)) nil))
+        (is (false? (<!! (k/exists? store :foo opts))))
+        (<!! (k/assoc store :foo :bar opts))
+        (is (<!! (k/exists? store :foo)))
         (is (= (<!! (k/get store :foo nil opts))
                :bar))
         (<!! (k/assoc-in store [:foo] :bar2 opts))

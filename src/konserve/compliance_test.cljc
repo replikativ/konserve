@@ -1,7 +1,7 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :as async :refer [#?(:clj <!!) go chan <!]]
             [konserve.core :as k]
-            [konserve.storage-layout :refer [PLinearLayout read-header header-size -get-raw]]
+            [konserve.storage-layout :refer [PLinearLayout parse-header header-size -get-raw]]
             #?(:cljs [cljs.test :refer [deftest is testing async]])
             #?(:clj [clojure.test :refer :all])
             #?(:clj [konserve.utils :refer [async+sync]])
@@ -21,7 +21,7 @@
          (testing "Testing linear layout."
            (<!! (k/assoc-in store [:foo] 42 opts))
            (let [[layout-id serializer-id compressor-id encryptor-id metadata-size]
-                 (read-header (byte-array (take header-size (seq (<!! (-get-raw store :foo opts))))))]
+                 (parse-header (byte-array (take header-size (seq (<!! (-get-raw store :foo opts))))))]
              (is (= [layout-id serializer-id compressor-id encryptor-id]
                     [1 1 0 0]))
              (is (= metadata-size 53)))
@@ -48,7 +48,9 @@
 
        (testing "Test the core API."
          (is (= nil (<!! (k/get store :foo nil opts))))
+         (is (false? (<!! (k/exists? store :foo opts))))
          (<!! (k/assoc store :foo :bar opts))
+         (is (<!! (k/exists? store :foo opts)))
          (is (= :bar (<!! (k/get store :foo nil opts))))
          (<!! (k/assoc-in store [:foo] :bar2 opts))
          (is (= :bar2 (<!! (k/get store :foo nil opts))))
