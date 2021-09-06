@@ -4,11 +4,13 @@
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
-            [taoensso.timbre :as timbre :refer [trace]]
+            [taoensso.timbre :as timbre :refer [trace debug]]
             [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
-            [clojure.core.async :refer [go chan poll! put! <!]])
+            [superv.async :refer [go-try- <?-]]
+            [clojure.core.async :refer [chan put! poll!]])
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
                             [konserve.core :refer [go-locked locked]])))
+
 
 
 ;; ACID
@@ -57,15 +59,15 @@
          (put! l# :unlocked)))))
 
 (defmacro go-locked [store key & code]
-  `(go
-     (let [l# (get-lock ~store ~key)]
-       (try
-         (<! l#)
-         (trace "acquired go-lock for: " ~key)
-         ~@code
-         (finally
-           (trace "releasing go-lock for: " ~key)
-           (put! l# :unlocked))))))
+  `(go-try-
+    (let [l# (get-lock ~store ~key)]
+      (try
+        (<?- l#)
+        (trace "acquired go-lock for: " ~key)
+        ~@code
+        (finally
+          (trace "releasing go-lock for: " ~key)
+          (put! l# :unlocked))))))
 
 (defn exists?
   "Checks whether value is in the store."
@@ -77,7 +79,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<! (-exists? store key opts))))))
+                (<?- (-exists? store key opts))))))
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
@@ -92,7 +94,7 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (let [a (<! (-get store (first key-vec) opts))]
+                (let [a (<?- (-get store (first key-vec) opts))]
                   (if (some? a)
                     (clojure.core/get-in a (rest key-vec))
                     not-found))))))
@@ -120,7 +122,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (let [a (<! (-get-meta store key opts))]
+                (let [a (<?- (-get-meta store key opts))]
                   (if (some? a)
                     a
                     not-found))))))
@@ -137,7 +139,7 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
+                (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
@@ -160,7 +162,7 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
+                (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
@@ -181,7 +183,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<! (-dissoc store key opts))))))
+                (<?- (-dissoc store key opts))))))
 
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
@@ -194,17 +196,17 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (let [head (<! (-get store key opts))
+                (let [head (<?- (-get store key opts))
                       [append-log? last-id first-id] head
                       new-elem {:next nil
                                 :elem elem}
                       id (uuid)]
                   (when (and head (not= append-log? :append-log))
                     (throw (ex-info "This is not an append-log." {:key key})))
-                  (<! (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) opts))
+                  (<?- (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) opts))
                   (when first-id
-                    (<! (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) opts)))
-                  (<! (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) opts))
+                    (<?- (-update-in store [last-id :next] (partial meta-update key :append-log) (fn [_] id) opts)))
+                  (<?- (-update-in store [key] (partial meta-update key :append-log) (fn [_] [:append-log id (or first-id id)]) opts))
                   [first-id id])))))
 
 (defn log
@@ -215,18 +217,18 @@
    (trace "log on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go
-                 (let [head (<! (get store key nil opts))
-                       [append-log? last-id first-id] head]
-                   (when (and head (not= append-log? :append-log))
-                     (throw (ex-info "This is not an append-log." {:key key})))
-                   (when first-id
-                     (loop [{:keys [next elem]} (<! (get store first-id nil opts))
-                            hist []]
-                       (if next
-                         (recur (<! (get store next nil opts))
-                                (conj hist elem))
-                         (conj hist elem)))))))))
+               (go-try-
+                (let [head (<?- (get store key nil opts))
+                      [append-log? last-id first-id] head]
+                  (when (and head (not= append-log? :append-log))
+                    (throw (ex-info "This is not an append-log." {:key key})))
+                  (when first-id
+                    (loop [{:keys [next elem]} (<?- (get store first-id nil opts))
+                           hist []]
+                      (if next
+                        (recur (<?- (get store next nil opts))
+                               (conj hist elem))
+                        (conj hist elem)))))))))
 
 (defn reduce-log
   "Loads the append log and applies reduce-fn over it."
@@ -236,19 +238,19 @@
    (trace "reduce-log on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go
-                 (let [head (<! (get store key nil opts))
-                       [append-log? last-id first-id] head]
-                   (when (and head (not= append-log? :append-log))
-                     (throw (ex-info "This is not an append-log." {:key key})))
-                   (if first-id
-                     (loop [id first-id
-                            acc acc]
-                       (let [{:keys [next elem]} (<! (get store id nil opts))]
-                         (if (and next (not= id last-id))
-                           (recur next (reduce-fn acc elem))
-                           (reduce-fn acc elem))))
-                     acc))))))
+               (go-try-
+                (let [head (<?- (get store key nil opts))
+                      [append-log? last-id first-id] head]
+                  (when (and head (not= append-log? :append-log))
+                    (throw (ex-info "This is not an append-log." {:key key})))
+                  (if first-id
+                    (loop [id first-id
+                           acc acc]
+                      (let [{:keys [next elem]} (<?- (get store id nil opts))]
+                        (if (and next (not= id last-id))
+                          (recur next (reduce-fn acc elem))
+                          (reduce-fn acc elem))))
+                    acc))))))
 
 (defn bget
   "Calls locked-cb with a platform specific binary representation inside
@@ -270,7 +272,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<! (-bget store key locked-cb opts))))))
+                (<?- (-bget store key locked-cb opts))))))
 
 (defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
@@ -283,7 +285,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<! (-bassoc store key (partial meta-update key :binary) val opts))))))
+                (<?- (-bassoc store key (partial meta-update key :binary) val opts))))))
 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."

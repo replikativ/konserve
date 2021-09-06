@@ -75,7 +75,7 @@
         #{{:type :stale-binary,
            :msg
            "Old binary file detected. Use bget insteat of keys for migration."}}
-        (into #{} (map #(dissoc % :file-name) list-keys))))))
+        (into #{} (map #(dissoc % :store-key) list-keys))))))
 
 (deftest old-filestore-v2
   (testing "edn migration single call. migration via get."

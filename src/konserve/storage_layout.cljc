@@ -60,6 +60,27 @@
   (-get-raw [store key opts])
   (-put-raw [store key blob opts]))
 
+(defprotocol PLowlevelStore
+  (-create-object [this path env])
+  (-delete [this store-key env])
+  (-path [this store-key env])
+  (-exists [this path env])
+  (-copy [this from to env])
+  (-atomic-move [this from to env])
+  (-sync-store [this env])
+  (-keys [this path env]))
+
+(defprotocol PLowlevelObject
+  (-size [this env])
+  (-sync [this env])
+  (-close [this env])
+  (-get-lock [this env])
+  (-write [this buffer start-byte stop-byte msg env])
+  (-read [this start-byte stop-byte msg env]))
+
+(defprotocol PLowlevelLock
+  (-release [this env]))
+
 (def ^:const split-layout-id 1)
 
 (defprotocol PSplitLayout

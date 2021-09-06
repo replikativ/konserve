@@ -25,7 +25,7 @@
                  (parse-header (byte-array (take header-size (seq (<!! (-get-raw store :foo opts)))))
                                key->serializer)]
              #_(is (= [layout-id serializer-id compressor-id encryptor-id]
-                    [1 1 0 0]))
+                      [1 1 0 0]))
              (is (= metadata-size 53)))
            (<!! (k/dissoc store :foo opts))))
 

@@ -76,7 +76,7 @@
                                    (fn [{:keys [input-stream]}]
                                      (go
                                        (put! res-ch (slurp input-stream))))))))
-            (is (=  "foo bar" (<!! res-ch)))))
+            (is (= "foo bar" (<!! res-ch)))))
         (testing "Reader"
           (let [res-ch (chan)]
             (is (= true (<!! (bassoc store :reader (java.io.StringReader. "foo bar")))))
