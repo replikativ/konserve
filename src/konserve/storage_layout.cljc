@@ -74,14 +74,21 @@
   (-size [this env])
   (-sync [this env])
   (-close [this env])
-  (-get-lock [this env])
+  (-get-lock [this env]))
+
+(defprotocol PLowlevelLinearObject
   (-write [this buffer start-byte stop-byte msg env])
   (-read [this start-byte stop-byte msg env]))
+
+(defprotocol PLowlevelSplitObject
+  (-commit [this env])
+  (-write-meta [this buffer start-byte stop-byte msg env])
+  (-read-meta [this start-byte stop-byte msg env]))
 
 (defprotocol PLowlevelLock
   (-release [this env]))
 
-(def ^:const split-layout-id 1)
+(def ^:const split-layout-id 2)
 
 (defprotocol PSplitLayout
   ;; Location 1: [4-header-bytes serialized-meta]

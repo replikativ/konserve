@@ -115,8 +115,9 @@
                 store (first key-vec)
                 (let [cache (:cache store)
                       [old new] (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
-                  (swap! cache cache/evict (first key-vec))
-                  (swap! cache cache/miss (first key-vec) new)
+                  (when (cache/has? @cache key)
+                    (swap! cache cache/evict (first key-vec))
+                    (swap! cache cache/miss (first key-vec) new))
                   [old new])))))
 
 (defn assoc

@@ -15,9 +15,11 @@
                                     PLowlevelStore
                                     -atomic-move -copy -create-object -delete -exists
                                     -keys -path -sync-store
-                                    PLowlevelObject -close -get-lock -size -sync -read -write
+                                    PLowlevelObject -close -get-lock -size -sync
+                                    PLowlevelLinearObject -read -write
+                                    PLowlevelSplitObject -commit -read-meta -write-meta
                                     PLowlevelLock -release
-                                    linear-layout-id
+                                    linear-layout-id split-layout-id
                                     header-size
                                     parse-header create-header]]
    [konserve.nio-helpers :refer [blob->channel]]
@@ -64,7 +66,7 @@
 (defn- write-binary
   "Write binary object. InputStreams, ByteArrays, CharArray, Reader and Strings as
   inputs are supported."
-  [input ac buffer-size key start env]
+  [ac buffer-size key start input env]
   (let [{:keys [sync?]} env
         [bis read] (blob->channel input buffer-size)
         buffer     (ByteBuffer/allocate buffer-size)
@@ -85,39 +87,6 @@
                  (finally
                    (.close bis)
                    (.clear buffer))))))
-
-(defn- write-header
-  "Write file-header"
-  [ac-new key bytearray env]
-  (let [{:keys [sync?]} env
-        buffer    (ByteBuffer/wrap bytearray)]
-    (async+sync sync?
-                *sync-translation*
-                (go-try-
-                 (<?- (-write ac-new buffer 0 header-size
-                              {:type :write-edn-error
-                               :key  key}
-                              env))
-                 (finally
-                   (.clear buffer))))))
-
-(defn- write-edn
-  "Write Operation for edn. In the Filestore it would be for meta-data or data-value."
-  [ac-new key serializer compressor encryptor write-handlers start-byte value env]
-  (let [{:keys [sync?]} env
-        bos       (ByteArrayOutputStream.)
-        _         (-serialize (encryptor (compressor serializer)) bos write-handlers value)
-        stop-byte (.size bos)
-        buffer    (ByteBuffer/wrap (.toByteArray bos))]
-    (async+sync sync? *sync-translation*
-                (go-try-
-                 (<?- (-write ac-new buffer start-byte stop-byte
-                              {:type :write-edn-error
-                               :key  key}
-                              env))
-                 (finally
-                   (.clear buffer)
-                   (.close bos))))))
 
 (defrecord LowlevelFilestore [folder]
   PLowlevelStore
@@ -153,6 +122,7 @@
   (-sync [this env] (.force this true))
   (-close [this env] (.close this))
   (-get-lock [this env] (.get (.lock this)))
+  PLowlevelLinearObject
   (-write [c buffer start-byte stop-byte msg env]
     (let [ch (chan)]
       (.write c buffer start-byte stop-byte
@@ -185,6 +155,7 @@
   (-sync [this env] (.force this true))
   (-close [this env] (.close this))
   (-get-lock [this env] (.lock this))
+  PLowlevelLinearObject
   (-write [this buffer start-byte stop-byte msg env]
     (.write this buffer start-byte))
   (-read [this start-byte stop-byte msg env]
@@ -207,6 +178,12 @@
    {:keys [compressor encryptor store-key up-fn up-fn-meta
            config operation input sync? storage-layout] :as env} [old-meta old-value]]
   (let [store (LowlevelFilestore. folder)
+        to-array (fn [value]
+                   (let [bos (ByteArrayOutputStream.)]
+                     (try (-serialize (encryptor (compressor serializer))
+                                      bos write-handlers value)
+                          (.toByteArray bos)
+                          (finally (.close bos)))))
         meta                 (up-fn-meta old-meta)
         value                (when (= operation :write-edn)
                                (if-not (empty? rkey)
@@ -222,35 +199,82 @@
             ;; TODO make sync
             (-copy store path-new (str store-key ".backup") env))
         ac-new               (-create-object store path-new env)
-        bos                  (ByteArrayOutputStream.)
-        _                    (-serialize (encryptor (compressor serializer))
-                                         bos write-handlers meta)
-        meta-size            (.size bos)
-        _                    (.close bos)
-        start-byte           (+ header-size meta-size)
-        byte-array           (create-header storage-layout
-                                            serializer compressor encryptor meta-size)]
-    (async+sync sync? *sync-translation*
-                (go-try-
-                 (<?- (write-header ac-new key byte-array env))
-                 (<?- (write-edn ac-new key serializer compressor encryptor
-                                 write-handlers header-size meta env))
-                 (<?- (if (= operation :write-binary)
-                        (write-binary input ac-new buffer-size key start-byte env)
-                        (write-edn ac-new key serializer compressor encryptor
-                                   write-handlers start-byte value env)))
-                 (when (:fsync? config)
-                   (trace "fsyncing for " key)
-                   (-sync ac-new env)
-                   (-sync-store store env))
-                 (-close ac-new env)
+        meta-arr             (to-array meta)
+        meta-size            (count meta-arr)
+        meta-buffer          (ByteBuffer/wrap meta-arr)
+        header               (create-header storage-layout
+                                            serializer compressor encryptor meta-size)
+        header-buffer        (ByteBuffer/wrap header)]
+    (async+sync
+     sync? *sync-translation*
+     (go-try-
+      (cond (= storage-layout linear-layout-id)
+            (do
+              (<?- (-write ac-new header-buffer 0 header-size
+                           {:type :write-header-error
+                            :key  key
+                            :header header}
+                           env))
+              (<?- (-write ac-new meta-buffer
+                           header-size (+ header-size meta-size)
+                           {:type :write-meta-error :key  key :meta meta}
+                           env))
+              (if (= operation :write-binary)
+                (<?- (write-binary ac-new buffer-size key (+ header-size meta-size) input env))
+                (let [value-arr            (to-array value)
+                      value-buffer         (ByteBuffer/wrap value-arr)
+                      value-size           (count value-arr)]
+                  (try
+                    (<?- (-write ac-new value-buffer
+                                 (+ header-size meta-size)
+                                 (+ header-size meta-size value-size)
+                                 {:type :write-value-error :key key :value value}
+                                 env))
+                    (finally (.clear value-buffer))))))
+            (= storage-layout split-layout-id)
+            (do
+              (<?- (-write-meta ac-new header-buffer 0 header-size
+                                {:type :write-meta-header-error
+                                 :key  key
+                                 :header header}
+                                env))
+              (<?- (-write-meta ac-new meta-buffer
+                                header-size (+ header-size meta-size)
+                                {:type :write-meta-error :key  key :meta meta}
+                                env))
+              (<?- (-write ac-new header-buffer 0 header-size
+                           {:type :write-header-error
+                            :key  key
+                            :header header}
+                           env))
+              (if (= operation :write-binary)
+                (<?- (write-binary ac-new buffer-size key header-size input env))
+                (let [value-arr            (to-array value)
+                      value-buffer         (ByteBuffer/wrap value-arr)
+                      value-size           (count value-arr)]
+                  (try
+                    (<?- (-write ac-new value-buffer
+                                 header-size
+                                 (+ header-size value-size)
+                                 {:type :write-value-error :key key :value value}
+                                 env))
+                    (finally (.clear value-buffer)))))
+              (-commit ac-new env)))
 
-                 (when-not (:in-place? config)
-                   (trace "moving file: " key)
-                   (-atomic-move store path-new path env))
-                 (if (= operation :write-edn) [old-value value] true)
-                 (finally
-                   (-close ac-new env))))))
+      (when (:fsync? config)
+        (trace "syncing for " key)
+        (-sync ac-new env)
+        (-sync-store store env))
+      (-close ac-new env)
+
+      (when-not (:in-place? config)
+        (trace "moving file: " key)
+        (-atomic-move store path-new path env))
+      (if (= operation :write-edn) [old-value value] true)
+      (finally
+        (.clear meta-buffer)
+        (.clear header-buffer)
+        (-close ac-new env))))))
 
 (defn read-header [ac serializers env]
   (let [{:keys [sync?]} env]
@@ -264,19 +288,14 @@
 (defn- read-file
   "Read meta, edn and binary."
   [ac serializer read-handlers
-   {:keys [compressor encryptor sync? operation store-key locked-cb msg] :as env} meta-size]
+   {:keys [compressor encryptor sync? operation store-key locked-cb msg
+           storage-layout] :as env} meta-size]
   (let [size (-size ac env)
         {:keys [start-byte stop-byte]}
         (cond
           (= operation :write-edn)
           {:start-byte header-size
            :stop-byte  size}
-          (= operation :read-storage-layout)
-          {:start-byte 0
-           :stop-byte  1}
-          (= operation :read-serializer)
-          {:start-byte 3
-           :stop-byte  4}
           (or (= operation :read-meta)  (= operation :write-binary))
           {:start-byte header-size
            :stop-byte  (+ meta-size header-size)}
@@ -306,8 +325,6 @@
                                        value     (fn-read bais-value)
                                        _          (.close bais-value)]
                                    [meta value])
-          :read-storage-layout   (.readShort arr)
-          :read-serializer       (.readShort arr)
           :read-binary           (<?- (locked-cb {:input-stream (ByteArrayInputStream. arr)
                                                   :size         size
                                                   :store-key    store-key}))))))))
