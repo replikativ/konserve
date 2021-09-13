@@ -54,6 +54,7 @@
      (throw (ex-info "Not supported yet." {}))))
 
 (def ^:const linear-layout-id 1)
+(def ^:const split-layout-id 2)
 
 (defprotocol PLinearLayout
   ;; Location 1: [4-header-bytes 4-bytes-for-meta-size serialized-meta serialized-data]
@@ -61,6 +62,7 @@
   (-put-raw [store key blob opts]))
 
 (defprotocol PLowlevelStore
+  (-compatible-storage-layouts [this])
   (-create-object [this path env])
   (-delete [this store-key env])
   (-path [this store-key env])
@@ -74,26 +76,24 @@
   (-size [this env])
   (-sync [this env])
   (-close [this env])
-  (-get-lock [this env]))
+  (-get-lock [this env])
 
-(defprotocol PLowlevelLinearObject
-  (-write [this buffer start-byte stop-byte msg env])
-  (-read [this start-byte stop-byte msg env]))
+  (-read-header [this env])
+  (-read-meta [this meta-size env])
+  (-read-value [this meta-size env])
+  (-read-binary [this meta-size locked-cb env])
 
-(defprotocol PLowlevelSplitObject
-  (-commit [this env])
-  (-write-meta [this buffer start-byte stop-byte msg env])
-  (-read-meta [this start-byte stop-byte msg env]))
+  (-write-header [this header-arr env])
+  (-write-meta [this meta-arr env])
+  (-write-value [this value-arr meta-size env])
+  (-write-binary [this meta-size blob env]))
 
 (defprotocol PLowlevelLock
   (-release [this env]))
 
-(def ^:const split-layout-id 2)
+(extend-protocol PLowlevelLock
+  nil
+  (-release [this env]))
 
-(defprotocol PSplitLayout
-  ;; Location 1: [4-header-bytes serialized-meta]
-  ;; Location 2: [4-header-bytes serialized-data]
-  (-get-raw-meta [store key opts])
-  (-put-raw-meta [store key blob opts])
-  (-get-raw-value [store key opts])
-  (-put-raw-value [store key blob opts]))
+
+

@@ -74,7 +74,7 @@
       (are [x y] (= x y)
         #{{:type :stale-binary,
            :msg
-           "Old binary file detected. Use bget insteat of keys for migration."}}
+           "Old binary file detected. Use bget instead of keys for migration."}}
         (into #{} (map #(dissoc % :store-key) list-keys))))))
 
 (deftest old-filestore-v2
