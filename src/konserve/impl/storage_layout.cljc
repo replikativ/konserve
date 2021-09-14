@@ -53,47 +53,36 @@
      :cljs
      (throw (ex-info "Not supported yet." {}))))
 
-(def ^:const linear-layout-id 1)
-(def ^:const split-layout-id 2)
+(def ^:const default-layout-id 1)
 
-(defprotocol PLinearLayout
-  ;; Location 1: [4-header-bytes 4-bytes-for-meta-size serialized-meta serialized-data]
-  (-get-raw [store key opts])
-  (-put-raw [store key blob opts]))
+(defprotocol PBackingStore
+  "Backing store protocol for default implementation of the high-level konserve protocol."
+  (-create-blob [this store-key env] "Create a blob object to write a metadata and value into.")
+  (-delete [this path env] "Delete a blob object under path.")
+  (-path [this store-key env] "Create a store dependent absolute path object pointing to the store-key.")
+  (-exists [this path env] "Check whether blob exists under path")
+  (-copy [this from to env] "Copy a blob from one key to another.")
+  (-atomic-move [this from to env] "Atomically move (rename) a blob.")
+  (-create-store [this env] "Create the underlying store.")
+  (-sync-store [this env] "Synchronize the store. This is only needed if your store does not guarantee durability without this synchronisation command, e.g. fsync in the file system.")
+  (-delete-store [this env] "Delete the underlying store.")
+  (-keys [this path env] "List all the keys representing blobs in the store."))
 
-(defprotocol PLowlevelStore
-  (-compatible-storage-layouts [this])
-  (-create-object [this path env])
-  (-delete [this store-key env])
-  (-path [this store-key env])
-  (-exists [this path env])
-  (-copy [this from to env])
-  (-atomic-move [this from to env])
-  (-sync-store [this env])
-  (-keys [this path env]))
+(defprotocol PBackingBlob
+  "Blob object that is backing a stored value and its metadata."
+  (-sync [this env] "Synchronize this object and ensure it is stored. This is not necessary in many stores.")
+  (-close [this env] "Close the blob and ensure that pending data is send to the store.")
+  (-get-lock [this env] "Acquire a store specific lock on the blob. This is needed for access to the store from concurrent processes.")
 
-(defprotocol PLowlevelObject
-  (-size [this env])
-  (-sync [this env])
-  (-close [this env])
-  (-get-lock [this env])
+  (-read-header [this env] "Read header array.")
+  (-read-meta [this meta-size env] "Read metadata array.")
+  (-read-value [this meta-size env] "Read serialized edn value array.")
+  (-read-binary [this meta-size locked-cb env] "Read binary object and pass to locked-cb.")
 
-  (-read-header [this env])
-  (-read-meta [this meta-size env])
-  (-read-value [this meta-size env])
-  (-read-binary [this meta-size locked-cb env])
+  (-write-header [this header-arr env] "Write header array.")
+  (-write-meta [this meta-arr env] "Write metadata array.")
+  (-write-value [this value-arr meta-size env] "Write value array.")
+  (-write-binary [this meta-size blob env] "Write binary blob."))
 
-  (-write-header [this header-arr env])
-  (-write-meta [this meta-arr env])
-  (-write-value [this value-arr meta-size env])
-  (-write-binary [this meta-size blob env]))
-
-(defprotocol PLowlevelLock
-  (-release [this env]))
-
-(extend-protocol PLowlevelLock
-  nil
-  (-release [this env]))
-
-
-
+(defprotocol PBackingLock
+  (-release [this env] "Release this lock."))

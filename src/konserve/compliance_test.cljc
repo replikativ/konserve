@@ -1,7 +1,6 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :as async :refer [#?(:clj <!!) go chan <!]]
             [konserve.core :as k]
-            [konserve.storage-layout :refer [PLinearLayout parse-header header-size -get-raw]]
             #?(:cljs [cljs.test :refer [deftest is testing async]])
             #?(:clj [clojure.test :refer :all])
             #?(:clj [konserve.serializers :refer [key->serializer]])
@@ -17,17 +16,6 @@
    (defn compliance-test [store]
      (doseq [opts [{:sync? false} {:sync? true}]
              :let [<!! (if (:sync? opts) identity <!!)]]
-
-       (when (extends? PLinearLayout (type store))
-         (testing "Testing linear layout."
-           (<!! (k/assoc-in store [:foo] 42 opts))
-           (let [[layout-id serializer-id compressor-id encryptor-id metadata-size]
-                 (parse-header (byte-array (take header-size (seq (<!! (-get-raw store :foo opts)))))
-                               key->serializer)]
-             #_(is (= [layout-id serializer-id compressor-id encryptor-id]
-                      [1 1 0 0]))
-             (is (= metadata-size 53)))
-           (<!! (k/dissoc store :foo opts))))
 
        (testing "Testing the append store functionality."
          (<!! (k/append store :foolog {:bar 42} opts))
@@ -78,6 +66,7 @@
                                         true))
                       opts))
          (let  [list-keys (<!! (k/keys store opts))]
+           (prn list-keys)
            (are [x y] (= x y)
              #{{:key :baz
                 :type :edn}
