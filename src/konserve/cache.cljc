@@ -88,8 +88,8 @@
                       key (first key-vec)
                       [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
                   (when (cache/has? @cache key)
-                    (swap! cache cache/evict key)
                     (swap! cache cache/miss key new))
+                  (swap! cache cache/evict key)
                   [old new])))))
 
 (defn update
@@ -116,8 +116,8 @@
                 (let [cache (:cache store)
                       [old new] (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
                   (when (cache/has? @cache key)
-                    (swap! cache cache/evict (first key-vec))
                     (swap! cache cache/miss (first key-vec) new))
+                  (swap! cache cache/evict (first key-vec))
                   [old new])))))
 
 (defn assoc
