@@ -1,4 +1,4 @@
-(ns konserve.storage-layout
+(ns konserve.impl.storage-layout
   "One of these protocols must be implemented by each store to provide low level
   access depending on the low-level storage layout chosen. Stores can support
   multiple layouts."
