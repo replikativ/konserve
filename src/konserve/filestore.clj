@@ -95,24 +95,24 @@
   (-copy [this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                    (Files/copy ^Path from ^Path to
-                                (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING])))))
+                 (Files/copy ^Path from ^Path to
+                             (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING])))))
   (-atomic-move [this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                    (Files/move from to (into-array [StandardCopyOption/ATOMIC_MOVE])))))
+                 (Files/move from to (into-array [StandardCopyOption/ATOMIC_MOVE])))))
   (-create-store [this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                    (check-and-create-backing-store base))))
+                 (check-and-create-backing-store base))))
   (-sync-store [this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                    (sync-base base))))
+                 (sync-base base))))
   (-delete-store [this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                    (delete-store (:base env))))))
+                 (delete-store (:base env))))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
@@ -120,16 +120,16 @@
   (-close [this env] (go-try- (.close this)))
   (-get-lock [this env]
     (go-try-
-        (loop []
-          (if-let [l (try
-                       (.get (.lock this))
-                       (catch Exception e
-                         (trace "Failed to acquire lock: " e)
-                         nil))]
-            l
-            (do
-              (Thread/sleep (rand-int 20))
-              (recur))))))
+     (loop []
+       (if-let [l (try
+                    (.get (.lock this))
+                    (catch Exception e
+                      (trace "Failed to acquire lock: " e)
+                      nil))]
+         l
+         (do
+           (Thread/sleep (rand-int 20))
+           (recur))))))
   (-write-header [this header env]
     (let [{:keys [msg]} env
           ch (chan)
@@ -187,29 +187,29 @@
           start      (+ header-size meta-size)
           stop       (+ buffer-size start)]
       (go-try-
-          (loop [start-byte start
-                 stop-byte  stop]
-            (let [size   (read bis buffer)
-                  _      (.flip buffer)
-                  ch (chan)]
-              (when-not (= size -1)
-                (.write this buffer start-byte stop-byte
-                        (proxy [CompletionHandler] []
-                          (completed [res att]
-                            (close! ch))
-                          (failed [t att]
-                            (put! ch (ex-info "Could not write key file."
-                                              (assoc msg :exception t)))
-                            (close! ch))))
-                (<?- ch)
-                (.clear buffer)
-                (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
-        (catch Exception e
-          (trace "write-binary error: " e)
-          e)
-        (finally
-          (.close bis)
-          (.clear buffer)))))
+       (loop [start-byte start
+              stop-byte  stop]
+         (let [size   (read bis buffer)
+               _      (.flip buffer)
+               ch (chan)]
+           (when-not (= size -1)
+             (.write this buffer start-byte stop-byte
+                     (proxy [CompletionHandler] []
+                       (completed [res att]
+                         (close! ch))
+                       (failed [t att]
+                         (put! ch (ex-info "Could not write key file."
+                                           (assoc msg :exception t)))
+                         (close! ch))))
+             (<?- ch)
+             (.clear buffer)
+             (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
+       (catch Exception e
+         (trace "write-binary error: " e)
+         e)
+       (finally
+         (.close bis)
+         (.clear buffer)))))
   (-read-header [this env]
     (let [{:keys [msg]} env
           ch (chan)
@@ -217,11 +217,11 @@
       (try
         (.read this buffer 0 header-size
                (proxy [CompletionHandler] []
-                        (completed [res _]
-                          (put! ch (.array buffer)))
-                        (failed [t att]
-                          (put! ch (ex-info "Could not read key."
-                                            (assoc msg :exception t))))))
+                 (completed [res _]
+                   (put! ch (.array buffer)))
+                 (failed [t att]
+                   (put! ch (ex-info "Could not read key."
+                                     (assoc msg :exception t))))))
         (finally
           (.clear buffer)))
       ch))
@@ -232,11 +232,11 @@
       (try
         (.read this buffer header-size (+ header-size meta-size)
                (proxy [CompletionHandler] []
-                        (completed [res _]
-                          (put! ch (.array buffer)))
-                        (failed [t att]
-                          (put! ch (ex-info "Could not read key."
-                                            (assoc msg :exception t))))))
+                 (completed [res _]
+                   (put! ch (.array buffer)))
+                 (failed [t att]
+                   (put! ch (ex-info "Could not read key."
+                                     (assoc msg :exception t))))))
         (finally
           (.clear buffer)))
       ch))
@@ -266,29 +266,29 @@
           total-size (.size this)]
       ;; TODO use FileInputStream to not load the file in memory
       (go-try-
-          (<?-
-           (locked-cb {:input-stream (ByteArrayInputStream.
-                                      (<?-
-                                       (let [ch (chan)
-                                             buffer (ByteBuffer/allocate (- total-size
-                                                                            meta-size
-                                                                            header-size))]
-                                         (try
-                                           (.read this buffer (+ header-size meta-size)
-                                                  total-size
-                                                  (proxy [CompletionHandler] []
-                                                    (completed [res _]
-                                                      (put! ch (.array buffer)))
-                                                    (failed [t att]
-                                                      (put! ch (ex-info "Could not read key."
-                                                                        (assoc msg :exception t))))))
-                                           (finally
-                                             (.clear buffer)))
-                                         ch)))
-                       :size         total-size}))
-        (catch Exception e
-          (trace "read-binary error: " e)
-          e)))))
+       (<?-
+        (locked-cb {:input-stream (ByteArrayInputStream.
+                                   (<?-
+                                    (let [ch (chan)
+                                          buffer (ByteBuffer/allocate (- total-size
+                                                                         meta-size
+                                                                         header-size))]
+                                      (try
+                                        (.read this buffer (+ header-size meta-size)
+                                               total-size
+                                               (proxy [CompletionHandler] []
+                                                 (completed [res _]
+                                                   (put! ch (.array buffer)))
+                                                 (failed [t att]
+                                                   (put! ch (ex-info "Could not read key."
+                                                                     (assoc msg :exception t))))))
+                                        (finally
+                                          (.clear buffer)))
+                                      ch)))
+                    :size         total-size}))
+       (catch Exception e
+         (trace "read-binary error: " e)
+         e)))))
 
 (extend-type FileChannel
   PBackingBlob
@@ -387,6 +387,7 @@
 
 ;; ====================== Migration code ======================
 
+
 (defn- -read [this start-byte stop-byte msg env]
   (if (:sync? env)
     (let [buffer (ByteBuffer/allocate (- stop-byte start-byte))]
@@ -432,8 +433,8 @@
                                                     {:type :read-data-old-error
                                                      :path data-path}
                                                     env))
-                                            (ByteArrayInputStream.)
-                                            (-deserialize serializer read-handlers)))
+                                        (ByteArrayInputStream.)
+                                        (-deserialize serializer read-handlers)))
                        [meta old]    (if binary?
                                        [{:key key :type :binary :last-write (java.util.Date.)}
                                         {:operation :write-binary
@@ -501,109 +502,109 @@
     (async+sync
      sync? *sync-translation*
      (go-try-
-         (let [{:keys [format key]} (->> (<?- (-read ac-meta-file 0 size-meta
-                                                   {:type :read-meta-old-error
-                                                    :path meta-path}
-                                                   env))
-                                       (ByteArrayInputStream.)
-                                       (-deserialize serializer read-handlers))
-               data         (when (= :edn format)
-                              (->> (<?- (-read ac-data-file 0 (.size ac-data-file)
-                                             {:type :read-data-old-error
-                                              :path data-path}
-                                             env))
-                                 (ByteArrayInputStream.)
-                                 (-deserialize serializer read-handlers)))
-               [meta old]   (if (= :binary format)
-                              [{:key key :type :binary :last-write (java.util.Date.)}
-                               {:operation :write-binary
-                                :input     (if input input (FileInputStream. data-store-key))
-                                :msg       {:type :write-binary-error
-                                            :key  key}}]
-                              [{:key key :type :edn :last-write (java.util.Date.)}
-                               {:operation :write-edn
-                                :up-fn     (if up-fn (up-fn data) (fn [_] data))
-                                :msg       {:type :write-edn-error
-                                            :key  key}}])
-               env          (merge {:storage-layout    storage-layout
-                                    :compressor compressor
-                                    :encryptor  encryptor
-                                    :store-key  new-store-key
-                                    :buffer-size buffer-size
-                                    :base base
-                                    :key-vec [key]
-                                    :up-fn-meta (fn [_] meta)}
-                                   old)
-               return-value (fn [r]
-                              (Files/delete meta-path)
-                              (Files/delete data-path)
-                              (swap! detect-old-blobs disj old-store-key) r)]
-           (if (contains? #{:write-binary :write-edn} operation)
-             (<?- (update-blob (BackingFilestore. base) new-path serializer write-handlers  env [nil nil]))
-             (let [value (<?- (update-blob (BackingFilestore. base) new-path serializer write-handlers env [nil nil]))]
-               (if (= operation :read-meta)
-                 (return-value meta)
-                 (if (= operation :read-binary)
-                   (let [file-size  (.size ac-data-file)
-                         start-byte 0
-                         stop-byte  file-size
-                         res (<?- (-read ac-data-file start-byte stop-byte
-                                         {:type :migration-v2-binary-read-error
-                                          :key key}
-                                         (assoc env
-                                                :locked-cb locked-cb
-                                                :operation :read-binary)))]
-                     (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)}))
-                     (Files/delete meta-path)
-                     (Files/delete data-path))
-                   (return-value (second value)))))))
-       (finally
-         (<?- (-close ac-data-file env))
-         (<?- (-close ac-meta-file env)))))))
+      (let [{:keys [format key]} (->> (<?- (-read ac-meta-file 0 size-meta
+                                                  {:type :read-meta-old-error
+                                                   :path meta-path}
+                                                  env))
+                                      (ByteArrayInputStream.)
+                                      (-deserialize serializer read-handlers))
+            data         (when (= :edn format)
+                           (->> (<?- (-read ac-data-file 0 (.size ac-data-file)
+                                            {:type :read-data-old-error
+                                             :path data-path}
+                                            env))
+                                (ByteArrayInputStream.)
+                                (-deserialize serializer read-handlers)))
+            [meta old]   (if (= :binary format)
+                           [{:key key :type :binary :last-write (java.util.Date.)}
+                            {:operation :write-binary
+                             :input     (if input input (FileInputStream. data-store-key))
+                             :msg       {:type :write-binary-error
+                                         :key  key}}]
+                           [{:key key :type :edn :last-write (java.util.Date.)}
+                            {:operation :write-edn
+                             :up-fn     (if up-fn (up-fn data) (fn [_] data))
+                             :msg       {:type :write-edn-error
+                                         :key  key}}])
+            env          (merge {:storage-layout    storage-layout
+                                 :compressor compressor
+                                 :encryptor  encryptor
+                                 :store-key  new-store-key
+                                 :buffer-size buffer-size
+                                 :base base
+                                 :key-vec [key]
+                                 :up-fn-meta (fn [_] meta)}
+                                old)
+            return-value (fn [r]
+                           (Files/delete meta-path)
+                           (Files/delete data-path)
+                           (swap! detect-old-blobs disj old-store-key) r)]
+        (if (contains? #{:write-binary :write-edn} operation)
+          (<?- (update-blob (BackingFilestore. base) new-path serializer write-handlers  env [nil nil]))
+          (let [value (<?- (update-blob (BackingFilestore. base) new-path serializer write-handlers env [nil nil]))]
+            (if (= operation :read-meta)
+              (return-value meta)
+              (if (= operation :read-binary)
+                (let [file-size  (.size ac-data-file)
+                      start-byte 0
+                      stop-byte  file-size
+                      res (<?- (-read ac-data-file start-byte stop-byte
+                                      {:type :migration-v2-binary-read-error
+                                       :key key}
+                                      (assoc env
+                                             :locked-cb locked-cb
+                                             :operation :read-binary)))]
+                  (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)}))
+                  (Files/delete meta-path)
+                  (Files/delete data-path))
+                (return-value (second value)))))))
+      (finally
+        (<?- (-close ac-data-file env))
+        (<?- (-close ac-meta-file env)))))))
 
 (defn migrate-in-list-keys [backing path base env serializer read-handlers write-handlers
                             list-keys file-paths]
   (async+sync (:sync? env)
               *default-sync-translation*
               (go-try-
-                  (let [store-key (str path)
-                        fn-l      (str base "/" (-> path .getFileName .toString) ".ksv")
-                        env       (update-in env [:msg :keys] (fn [_] store-key))]
-                    (cond
+               (let [store-key (str path)
+                     fn-l      (str base "/" (-> path .getFileName .toString) ".ksv")
+                     env       (update-in env [:msg :keys] (fn [_] store-key))]
+                 (cond
                       ;; ignore the data base
-                      (includes? store-key "data")
-                      [list-keys file-paths]
+                   (includes? store-key "data")
+                   [list-keys file-paths]
 
-                      (includes? store-key "meta")
-                      [(into list-keys
-                             (loop [meta-list-keys #{}
-                                    [meta-path & meta-store-keys]
-                                    (<?- (-keys backing path env))]
-                               (if meta-path
-                                 (let [old-store-key (-> meta-path .toString)
-                                       store-key     (str base "/" (-> meta-path .getFileName .toString) ".ksv")
-                                       env           (assoc-in env [:msg :keys] old-store-key)
-                                       env           (assoc env :operation :read-meta)]
-                                   (recur
-                                    (conj meta-list-keys
-                                          (<?- (migrate-file-v2 env old-store-key store-key
-                                                                serializer read-handlers write-handlers)))
-                                    meta-store-keys))
-                                 meta-list-keys)))
-                       file-paths]
+                   (includes? store-key "meta")
+                   [(into list-keys
+                          (loop [meta-list-keys #{}
+                                 [meta-path & meta-store-keys]
+                                 (<?- (-keys backing path env))]
+                            (if meta-path
+                              (let [old-store-key (-> meta-path .toString)
+                                    store-key     (str base "/" (-> meta-path .getFileName .toString) ".ksv")
+                                    env           (assoc-in env [:msg :keys] old-store-key)
+                                    env           (assoc env :operation :read-meta)]
+                                (recur
+                                 (conj meta-list-keys
+                                       (<?- (migrate-file-v2 env old-store-key store-key
+                                                             serializer read-handlers write-handlers)))
+                                 meta-store-keys))
+                              meta-list-keys)))
+                    file-paths]
 
-                      (includes? store-key "B_")
-                      [(conj list-keys
-                             {:store-key store-key
-                              :type      :stale-binary
-                              :msg       "Old binary file detected. Use bget instead of keys for migration."})
-                       file-paths]
+                   (includes? store-key "B_")
+                   [(conj list-keys
+                          {:store-key store-key
+                           :type      :stale-binary
+                           :msg       "Old binary file detected. Use bget instead of keys for migration."})
+                    file-paths]
 
-                      :else
-                      [(conj list-keys
-                             (<?- (migrate-file-v1 env store-key
-                                                   store-key serializer read-handlers write-handlers)))
-                       file-paths])))))
+                   :else
+                   [(conj list-keys
+                          (<?- (migrate-file-v1 env store-key
+                                                store-key serializer read-handlers write-handlers)))
+                    file-paths])))))
 
 (defn migrate-in-io-operation [old-store-key store-key env serializer read-handlers write-handlers]
   (if (clojure.string/includes? old-store-key "meta")
@@ -652,11 +653,11 @@
            :as params}]
   ;; check config
   (let [detect-old-storage-layout (when detect-old-file-schema?
-                                      (atom (detect-old-file-schema path)))
-          _                  (when detect-old-file-schema?
-                               (when-not (empty? @detect-old-storage-layout)
-                                 (info (count @detect-old-storage-layout) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
-          backing            (BackingFilestore. path)]
+                                    (atom (detect-old-file-schema path)))
+        _                  (when detect-old-file-schema?
+                             (when-not (empty? @detect-old-storage-layout)
+                               (info (count @detect-old-storage-layout) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
+        backing            (BackingFilestore. path)]
     (new-default-store path backing detect-old-storage-layout
                        migrate-in-io-operation
                        migrate-in-list-keys
