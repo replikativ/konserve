@@ -24,8 +24,7 @@
    [taoensso.timbre :as timbre :refer [trace]])
   #?(:clj
      (:import
-      [java.io ByteArrayOutputStream ByteArrayInputStream]
-      [java.util Arrays])))
+      [java.io ByteArrayOutputStream ByteArrayInputStream])))
 
 (extend-protocol PBackingLock
   nil
@@ -63,7 +62,7 @@
                  ;; TODO make sync
               (<?- (-copy backing path-new (str store-key ".backup") env)))
           meta-arr             (to-array meta)
-          meta-size            (alength meta-arr)
+          meta-size            (count meta-arr)
           header               (create-header storage-layout
                                               serializer compressor encryptor meta-size)
           ac-new               (<?- (-create-blob backing path-new env))]

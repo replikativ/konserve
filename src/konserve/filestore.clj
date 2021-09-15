@@ -82,10 +82,10 @@
       (if sync? ac (go ac))))
   (-delete [this path env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/delete path))))
+                (go-try- (Files/delete ^Path path))))
   (-exists [this path env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/exists path (into-array LinkOption [])))))
+                (go-try- (Files/exists ^Path path (into-array LinkOption [])))))
   (-keys [this path env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try- (vec (Files/newDirectoryStream path)))))
@@ -100,7 +100,7 @@
   (-atomic-move [this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (Files/move from to (into-array [StandardCopyOption/ATOMIC_MOVE])))))
+                 (Files/move ^Path from ^Path to (into-array [StandardCopyOption/ATOMIC_MOVE])))))
   (-create-store [this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
