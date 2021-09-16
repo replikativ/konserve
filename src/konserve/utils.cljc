@@ -47,9 +47,7 @@
     res))
 
 (def ^:dynamic *default-sync-translation*
-  '{go do
-    <! do
-    go-try try
+  '{go-try try
     <? do
     go-try- try
     <!- do

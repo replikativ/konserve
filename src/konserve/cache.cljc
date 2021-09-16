@@ -11,7 +11,7 @@
             [konserve.core :refer [go-locked locked] :as core]
             [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [taoensso.timbre :as timbre :refer [trace]]
-            [clojure.core.async :refer [chan poll! put! <! go]]))
+            [superv.async :refer [<?-]]))
 
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32
@@ -32,7 +32,7 @@
                (go-locked
                 store key
                 (or (not (nil? (cache/lookup @(:cache store) key)))
-                    (<! (-exists? store key opts)))))))
+                    (<?- (-exists? store key opts)))))))
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
@@ -57,7 +57,7 @@
                     (do
                       (swap! cache cache/hit fkey)
                       (extract v))
-                    (let [v (<! (-get store fkey opts))]
+                    (let [v (<?- (-get store fkey opts))]
                       (swap! cache cache/miss fkey v)
                       (extract v))))))))
 
@@ -86,10 +86,11 @@
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old new] (<! (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
-                  (when (cache/has? @cache key)
-                    (swap! cache cache/miss key new))
+                      [old new] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                      had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
+                  (when had-key?
+                    (swap! cache cache/miss key new))
                   [old new])))))
 
 (defn update
@@ -114,10 +115,11 @@
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
-                      [old new] (<! (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
-                  (when (cache/has? @cache key)
-                    (swap! cache cache/miss (first key-vec) new))
+                      [old new] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
+                      had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict (first key-vec))
+                  (when had-key?
+                    (swap! cache cache/miss (first key-vec) new))
                   [old new])))))
 
 (defn assoc
@@ -141,7 +143,7 @@
                 store key
                 (let [cache (:cache store)]
                   (swap! cache cache/evict key)
-                  (<! (-dissoc store key opts)))))))
+                  (<?- (-dissoc store key opts)))))))
 
 ;; alias core functions without caching for convenience
 

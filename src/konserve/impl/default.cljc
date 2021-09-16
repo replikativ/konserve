@@ -21,6 +21,7 @@
                                          parse-header create-header]]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
+   [clojure.core.async :refer [<! timeout]]
    [taoensso.timbre :as timbre :refer [trace]])
   #?(:clj
      (:import
@@ -59,8 +60,7 @@
                                            env))
           _ (when (:in-place? config) ;; let's back things up before writing then
               (trace "backing up to blob: " (str store-key ".backup") " for key " key)
-                 ;; TODO make sync
-              (<?- (-copy backing path-new (str store-key ".backup") env)))
+              (<?- (-copy backing path-new (<?- (-path backing (str store-key ".backup") env)) env)))
           meta-arr             (to-array meta)
           meta-size            (count meta-arr)
           header               (create-header storage-layout
@@ -74,7 +74,7 @@
           (let [value-arr            (to-array value)]
             (<?- (-write-value ac-new value-arr meta-size env))))
 
-        (when (:fsync? config)
+        (when (:sync-blob? config)
           (trace "syncing for " key)
           (<?- (-sync ac-new env))
           (<?- (-sync-store backing env)))
@@ -94,7 +94,7 @@
                  (let [arr (<?- (-read-header ac env))]
                    (parse-header arr serializers))))))
 
-(defn- read-blob
+(defn read-blob
   "Read meta, edn and binary."
   [ac read-handlers serializers {:keys [sync? operation store-key locked-cb] :as env}]
   (async+sync
@@ -131,7 +131,7 @@
                                  [meta value])
         :read-binary           (<?- (-read-binary ac meta-size locked-cb env)))))))
 
-(defn- delete-blob
+(defn delete-blob
   "Remove/Delete key-value pair of backing store by given key. If success it will return true."
   [backing env]
   (async+sync
@@ -153,7 +153,33 @@
                              :exeption e}))))
         false)))))
 
-(defn- io-operation
+(def ^:const max-lock-attempts 100)
+
+(defn get-lock [this store-key env]
+  (async+sync
+   (:sync? env)
+   *default-sync-translation*
+   (go-try-
+    (loop [i 0]
+      (let [[l e] (try
+                    [(<?- (-get-lock this env)) nil]
+                    (catch Exception e
+                      (trace "Failed to acquire lock: " e)
+                      [nil e]))]
+        (if-not (nil? l)
+          l
+          (do
+            (if (:sync? env)
+              (Thread/sleep (rand-int 20))
+              (<! (timeout (rand-int 20))))
+            (if (> i max-lock-attempts)
+              (throw (ex-info (str "Failed to acquire lock after " i " iterations.")
+                              {:type :file-lock-acquisition-error
+                               :error e
+                               :store-key store-key}))
+              (recur (inc i))))))))))
+
+(defn io-operation
   "Read/Write blob. For better understanding use the flow-chart of Konserve."
   [{:keys [backing migrate-in-io-operation]} serializers read-handlers write-handlers
    {:keys [base key-vec detect-old-blobs operation default-serializer
@@ -181,7 +207,7 @@
           (let [ac (<?- (-create-blob backing path env))
                 lock   (when (:lock-blob? config)
                          (trace "Acquiring blob lock for: " (first key-vec) (str ac))
-                         (<?- (-get-lock ac env)))]
+                         (<?- (get-lock ac (first key-vec) env)))]
             (try
               (let [old (if (and store-key-exists? (not overwrite?))
                           (<?- (read-blob ac read-handlers serializers env))
@@ -196,7 +222,7 @@
                 (<?- (-close ac env)))))
           nil))))))
 
-(defn- list-keys
+(defn list-keys
   "Return all keys in the store."
   [{:keys [backing migrate-in-list-keys]}
    serializers read-handlers write-handlers {:keys [sync? config base] :as env}]
@@ -210,7 +236,8 @@
              [path & blob-paths] blob-paths]
         (if path
           (cond
-            (ends-with? (str path) ".new")
+            (or (ends-with? (str path) ".new")
+                (ends-with? (str path) ".backup"))
             (recur list-keys blob-paths)
 
             (ends-with? (str path) ".ksv")
@@ -417,7 +444,7 @@
            write-handlers     (atom {})
            buffer-size        (* 1024 1024)
            opts               {:sync? false}
-           config             {:fsync? true
+           config             {:sync-blob? true
                                :in-place? false
                                :lock-blob? true}}}]
   ;; check config
@@ -441,7 +468,7 @@
                                                    :write-handlers     write-handlers
                                                    :buffer-size        buffer-size
                                                    :locks              (atom {})
-                                                   :config             (merge {:fsync? true
+                                                   :config             (merge {:sync-blob? true
                                                                                :in-place? false
                                                                                :lock-blob? true}
                                                                               config)

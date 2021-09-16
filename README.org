@@ -64,8 +64,10 @@ ClojureScript and is quite efficient. Both implementations use the same on-disk
 format and can load the same store (but not concurrently). It also allows to
 access values as a normal file-system file, e.g. to open it with a native
 database like HDF5 in Java. You can decide not to fsync on every write by a
-configuration of ={:fsync false}=, if a potential but unlikely data loss is not
-critical for you (e.g. for a session store).
+configuration of ={:sync-blob? false}=, if a potential, but unlikely data loss
+is not critical for you (e.g. for a session store). Note that the database will
+not be corrupted in this case, you can just lose some write operations before
+the crash.
 
 *** IndexedDB
     :PROPERTIES:

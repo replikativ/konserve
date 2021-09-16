@@ -129,7 +129,7 @@
              :or   {read-handlers  (atom {})
                     write-handlers (atom {})
                     serializer     (ser/fressian-serializer)
-                    config         {:fsync true}}}]
+                    config         {:sync-blob true}}}]
     (let [_ (check-and-create-folder path)]
       (go (map->FileSystemNodejsStore {:folder         path
                                        :serializer     serializer
@@ -427,7 +427,7 @@
                  :or   {read-handlers  (atom {})
                         write-handlers (atom {})
                         serializer     (ser/fressian-serializer)
-                        config         {:fsync true}}}]
+                        config         {:sync-blob true}}}]
         (let [_ (check-and-create-folder path)
               _ (check-and-create-folder (str path "/meta"))
               _ (check-and-create-folder (str path "/data"))]

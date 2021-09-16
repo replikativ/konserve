@@ -16,14 +16,14 @@
 (deftest filestore-compliance-test-no-fsync
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (new-fs-store folder :opts {:sync? true} :config {:fsync? false})]
-    (testing "Compliance test without fsync."
+        store  (new-fs-store folder :opts {:sync? true} :config {:sync-blob? false})]
+    (testing "Compliance test without syncing."
       (compliance-test store))))
 
 (deftest filestore-compliance-test-no-file-lock
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (<!! (new-fs-store folder :config {:file-lock? false}))]
+        store  (<!! (new-fs-store folder :config {:lock-blob? false}))]
     (testing "Compliance test without file locking."
       (compliance-test store))))
 

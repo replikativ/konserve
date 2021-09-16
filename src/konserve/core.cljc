@@ -134,7 +134,7 @@
   ([store key-vec up-fn]
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
-   (trace "update-in on key " key)
+   (trace "update-in on key " key-vec)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked

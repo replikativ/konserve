@@ -1,17 +1,13 @@
 (ns konserve.filestore
   (:require
    [clojure.java.io :as io]
-   [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [null-compressor]]
    [konserve.encryptor :refer [null-encryptor]]
    [konserve.impl.default :refer [update-blob new-default-store]]
    [konserve.protocols :refer [-deserialize]]
    [clojure.string :refer [includes? ends-with?]]
    [konserve.impl.storage-layout :refer [PBackingStore
-                                         -atomic-move
-                                         -create-store -delete-store
-                                         -copy -create-blob -delete -exists
-                                         -keys -path -sync-store
+                                         -keys
                                          PBackingBlob -close -get-lock -sync
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
@@ -23,12 +19,11 @@
     :refer [go <!! chan close! put!]]
    [taoensso.timbre :as timbre :refer [info trace]])
   (:import
-   [java.io ByteArrayOutputStream ByteArrayInputStream FileInputStream]
+   [java.io ByteArrayInputStream FileInputStream]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption
-    StandardOpenOption CopyOption]
-   [java.util Arrays]
+    StandardOpenOption]
    [sun.nio.ch FileLockImpl]))
 
 (def ^:dynamic *sync-translation*
@@ -95,8 +90,13 @@
   (-copy [this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (Files/copy ^Path from ^Path to
-                             (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING])))))
+                   ;; TODO throws java.lang.ClassNotFoundException:
+                   ;; java.nio.file.Files {}
+                   ;; in native-image compilation
+                 #_(Files/copy ^Path from1 ^Path to1
+                               (into-array [StandardCopyOption/REPLACE_EXISTING]))
+                 ;; work-around with clojure.java.io for now:
+                 (io/copy (.toFile ^Path from) (.toFile ^Path to)))))
   (-atomic-move [this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
@@ -118,18 +118,7 @@
   PBackingBlob
   (-sync [this env] (go-try- (.force this true)))
   (-close [this env] (go-try- (.close this)))
-  (-get-lock [this env]
-    (go-try-
-     (loop []
-       (if-let [l (try
-                    (.get (.lock this))
-                    (catch Exception e
-                      (trace "Failed to acquire lock: " e)
-                      nil))]
-         l
-         (do
-           (Thread/sleep (rand-int 20))
-           (recur))))))
+  (-get-lock [this env] (go-try- (.get (.lock this))))
   (-write-header [this header env]
     (let [{:keys [msg]} env
           ch (chan)
@@ -294,17 +283,7 @@
   PBackingBlob
   (-sync [this env] (.force this true))
   (-close [this env] (.close this))
-  (-get-lock [this env]
-    (loop []
-      (if-let [l (try
-                   (.lock this)
-                   (catch Exception e
-                     (trace "Failed to acquire lock: " e)
-                     nil))]
-        l
-        (do
-          (Thread/sleep (rand-int 20))
-          (recur)))))
+  (-get-lock [this env] (.lock this))
   (-write-header [this header env]
     (let [buffer (ByteBuffer/wrap header)]
       (try
@@ -382,7 +361,9 @@
 (extend-type FileLockImpl
   PBackingLock
   (-release [this env]
-    (go-try- (.release this))))
+    (if (:sync? env)
+      (.release this)
+      (go-try- (.release this)))))
 
 
 ;; ====================== Migration code ======================
@@ -647,7 +628,7 @@
                   write-handlers     (atom {})
                   buffer-size        (* 1024 1024)
                   opts               {:sync? false}
-                  config             {:fsync? true
+                  config             {:sync-blob? true
                                       :in-place? false
                                       :lock-blob? true}}
            :as params}]
