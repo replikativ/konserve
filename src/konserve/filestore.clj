@@ -392,8 +392,8 @@
           (.clear buffer))))))
 
 (defn- migrate-file-v1
-  "Migration Function For Konserve Storage-Layout, who has old file-schema."
-  [{:keys [base key-vec storage-layout input up-fn detect-old-blobs
+  "Migration function for konserve version with old file-schema."
+  [{:keys [base key-vec version input up-fn detect-old-blobs
            compressor encryptor operation locked-cb buffer-size sync?]
     :as env}
    old-store-key new-store-key serializer read-handlers write-handlers]
@@ -427,7 +427,7 @@
                                          :up-fn     (if up-fn (up-fn data) (fn [_] data))
                                          :msg       {:type :write-edn-error
                                                      :key  key}}])
-                       env           (merge {:storage-layout    storage-layout
+                       env           (merge {:version    version
                                              :compressor compressor
                                              :encryptor  encryptor
                                              :store-key  new-store-key
@@ -463,9 +463,9 @@
                    (.close ^AsynchronousFileChannel ac-data-file))))))
 
 (defn- migrate-file-v2
-  "Migration Function For Konserve Storage-Layout, who has Meta and Data Bases.
+  "Migration Function For Konserve Version, who has Meta and Data Bases.
    Write old file into new Konserve directly."
-  [{:keys [base storage-layout input up-fn detect-old-blobs locked-cb operation compressor encryptor
+  [{:keys [base version input up-fn detect-old-blobs locked-cb operation compressor encryptor
            sync? buffer-size] :as env}
    old-store-key new-store-key serializer read-handlers write-handlers]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
@@ -507,7 +507,7 @@
                              :up-fn     (if up-fn (up-fn data) (fn [_] data))
                              :msg       {:type :write-edn-error
                                          :key  key}}])
-            env          (merge {:storage-layout    storage-layout
+            env          (merge {:version    version
                                  :compressor compressor
                                  :encryptor  encryptor
                                  :store-key  new-store-key
@@ -633,13 +633,13 @@
                                       :lock-blob? true}}
            :as params}]
   ;; check config
-  (let [detect-old-storage-layout (when detect-old-file-schema?
-                                    (atom (detect-old-file-schema path)))
+  (let [detect-old-version (when detect-old-file-schema?
+                             (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
-                             (when-not (empty? @detect-old-storage-layout)
-                               (info (count @detect-old-storage-layout) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
+                             (when-not (empty? @detect-old-version)
+                               (info (count @detect-old-version) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
         backing            (BackingFilestore. path)]
-    (new-default-store path backing detect-old-storage-layout
+    (new-default-store path backing detect-old-version
                        migrate-in-io-operation
                        migrate-in-list-keys
                        params)))

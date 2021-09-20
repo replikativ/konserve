@@ -17,13 +17,13 @@
      4th Byte = Encryptor Type
    5-8th Byte = Meta-Size
   9th-20th Byte are spare"
-  [storage-layout serializer compressor encryptor meta]
+  [version serializer compressor encryptor meta]
   #?(:clj
      (let [serializer-id        (get serializer-class->byte (type serializer))
            compressor-id        (get compressor->byte compressor)
            encryptor-id         (get encryptor->byte encryptor)
 
-           env-array        (byte-array [storage-layout serializer-id compressor-id encryptor-id])
+           env-array        (byte-array [version serializer-id compressor-id encryptor-id])
            return-buffer    (ByteBuffer/allocate header-size)
            _                (.put return-buffer env-array)
            _                (.putInt return-buffer 4 meta)
@@ -40,12 +40,17 @@
   #?(:clj
      (let [bb (ByteBuffer/allocate header-size)
            _ (.put bb ^bytes header-bytes)
-           storage-layout (.get bb 0)
+           version (.get bb 0)
+           _ (when-not (= version 1)
+               (throw (ex-info "Konserve version not supported."
+                               {:type :konserve-version-in-header-no-supported
+                                :header-version version
+                                :supported-versions #{1}})))
            serializer-id (.get bb 1)
            compressor-id (.get bb 2)
            encryptor-id (.get bb 3)
            meta-size (.getInt bb 4)]
-       [storage-layout
+       [version
         (serializers (byte->key serializer-id))
         (byte->compressor compressor-id)
         (byte->encryptor encryptor-id)
@@ -53,7 +58,7 @@
      :cljs
      (throw (ex-info "Not supported yet." {}))))
 
-(def ^:const default-layout-id 1)
+(def ^:const default-version 1)
 
 (defprotocol PBackingStore
   "Backing store protocol for default implementation of the high-level konserve protocol."

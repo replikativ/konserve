@@ -17,7 +17,7 @@
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
-                                         default-layout-id
+                                         default-version
                                          parse-header create-header]]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
@@ -37,7 +37,7 @@
   the meta-data and the actual data."
   [backing path serializer write-handlers
    {:keys [base key-vec compressor encryptor store-key up-fn up-fn-meta
-           config operation input sync? storage-layout] :as env} [old-meta old-value]]
+           config operation input sync? version] :as env} [old-meta old-value]]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -63,7 +63,7 @@
               (<?- (-copy backing path-new (<?- (-path backing (str store-key ".backup") env)) env)))
           meta-arr             (to-array meta)
           meta-size            (count meta-arr)
-          header               (create-header storage-layout
+          header               (create-header version
                                               serializer compressor encryptor meta-size)
           ac-new               (<?- (-create-blob backing path-new env))]
       (try
@@ -265,7 +265,7 @@
               (recur list-keys blob-paths)))
           list-keys))))))
 
-(defrecord DefaultStore [storage-layout-id base backing serializers default-serializer compressor encryptor
+(defrecord DefaultStore [version base backing serializers default-serializer compressor encryptor
                          read-handlers write-handlers buffer-size detected-old-blobs locks config
                          migrate-in-io-operation migrate-in-list-keys]
   PEDNAsyncKeyValueStore
@@ -302,7 +302,7 @@
                                   :compressor compressor
                                   :encryptor encryptor
                                   :format    :data
-                                  :storage-layout storage-layout-id
+                                  :version version
                                   :sync? sync?
                                   :buffer-size buffer-size
                                   :config config
@@ -322,7 +322,7 @@
                      :encryptor encryptor
                      :detect-old-blobs detected-old-blobs
                      :default-serializer default-serializer
-                     :storage-layout storage-layout-id
+                     :version version
                      :sync? sync?
                      :buffer-size buffer-size
                      :config config
@@ -338,7 +338,7 @@
                      :compressor compressor
                      :encryptor encryptor
                      :detect-old-blobs detected-old-blobs
-                     :storage-layout storage-layout-id
+                     :version version
                      :default-serializer default-serializer
                      :up-fn      (fn [_] val)
                      :up-fn-meta meta-up
@@ -358,7 +358,7 @@
                      :compressor compressor
                      :encryptor encryptor
                      :detect-old-blobs detected-old-blobs
-                     :storage-layout storage-layout-id
+                     :version version
                      :default-serializer default-serializer
                      :up-fn      up-fn
                      :up-fn-meta meta-up
@@ -375,7 +375,7 @@
                   :compressor compressor
                   :encryptor encryptor
                   :detect-old-blobs detected-old-blobs
-                  :storage-layout storage-layout-id
+                  :version version
                   :default-serializer default-serializer
                   :config     config
                   :sync?      (:sync? opts)
@@ -395,7 +395,7 @@
                      :compressor compressor
                      :encryptor encryptor
                      :config    config
-                     :storage-layout storage-layout-id
+                     :version version
                      :sync? sync?
                      :buffer-size buffer-size
                      :locked-cb locked-cb
@@ -412,7 +412,7 @@
                      :compressor compressor
                      :encryptor  encryptor
                      :input      input
-                     :storage-layout storage-layout-id
+                     :version version
                      :up-fn-meta meta-up
                      :config     config
                      :sync?      sync?
@@ -428,7 +428,7 @@
                   :base base
                   :default-serializer default-serializer
                   :detect-old-blobs detected-old-blobs
-                  :storage-layout storage-layout-id
+                  :version version
                   :compressor compressor
                   :encryptor encryptor
                   :config config
@@ -479,7 +479,7 @@
                                                    :backing            backing
                                                    :default-serializer default-serializer
                                                    :serializers        (merge key->serializer serializers)
-                                                   :storage-layout-id  default-layout-id
+                                                   :version  default-version
                                                    :compressor         compressor
                                                    :encryptor          encryptor
                                                    :read-handlers      read-handlers
