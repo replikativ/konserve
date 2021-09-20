@@ -191,6 +191,14 @@
    than using this macro. We are in general interest in extending the abilities
    of this cross-platform, cross-execution model meta-programming in the future.
 
+   In summary, a simple (starting) implementation can rely on konserve's
+   high-level locking (=-get-lock= can just return =nil=). It is reading values
+   selectively according to the protocol invoked and makes sure that the
+   combined write operation is atomic. In this case =:in-place?= mode is always
+   active and =atomic-move= can therefore be a no-op. Copying (for backups) with
+   =copy= is also not needed if the underlying store provides atomic writes.
+   =sync= is redundant in this case as well and can be a no-op.
+
    Finally, if the protocols do not work for your implementation, please reach
    out to us and we will try to fix extend them accordingly if possible. Having
    more backing store implementations is very much in our interest.
