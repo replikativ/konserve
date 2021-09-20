@@ -31,9 +31,9 @@
    :PROPERTIES:
    :CUSTOM_ID: h:041fdf32-f2b3-4e7b-90b4-910106ee5c08
    :END:
-   Advanced Clojure developers with the need to durably store data with a flexible
-   interface, e.g. users of [[https://github.com/replikativ/datahike][Datahike]] or [[https:/replikativ.io/][replikativ]] or developers who want to [[https://whilo.github.io/articles/16/unified-storage-io][retain
-   portability of their storage backend in general]].
+   Clojure developers with the need to durably store data with a flexible
+   interface, e.g. users of [[https://github.com/replikativ/datahike][Datahike]] or [[https:/replikativ.io/][replikativ]] or developers who want to
+   [[https://whilo.github.io/articles/16/unified-storage-io][retain portability of their storage backend in general]].
 
 ** Related work
    :PROPERTIES:
@@ -105,20 +105,21 @@
    :PROPERTIES:
    :CUSTOM_ID: h:96674cbe-3534-4627-a847-bc3075b60984
    :END:
-   Konserve internally uses metadata that is kept separate from the operations on
-   the values. This metadata is used to track the time when values are written for
-   example, a functionality that is needed by the concurrent garbage collector.
-   The metadata itself is an =edn= map. There are no size limitations of metadata
-   fixed in the protocol, if you cannot implement your backend without a size
-   limit then please document it. Metadata can also be used by third parties to
-   track important contextual information such as user access control rights, or,
-   maybe even edit histories, and therefore supporting at least a megabyte in size
-   would be a future proof size. If for some very unfortunate reason you have to
-   allocate a fixed size then for now at least 16 KiB should be supported. The
-   =get-meta= protocol reads only the metadata part of the respective key and
-   therefore should not load or fetch the actual value. This functionality is used
-   by the garbage collector and potentially other monitoring processes that
-   otherwise would read all data regularly.
+   Konserve internally uses metadata that is kept separate from the operations
+   on the values. This metadata is used to track the time when values are
+   written for example, a functionality that is needed by the concurrent garbage
+   collector. The metadata itself is an =edn= map. There are no size limitations
+   of metadata fixed in the protocol, if you cannot implement your backend
+   without a size limit then please document it. Metadata can also be used by
+   third parties to track important contextual information such as user access
+   control rights, or, maybe even edit histories, and therefore supporting at
+   least a megabyte in size would be a future proof size. If for some very
+   unfortunate reason you have to allocate a fixed size for each metadata
+   element then for now at least 16 KiB must be supported. The =get-meta=
+   protocol reads only the metadata part of the respective key and therefore
+   should not load or fetch the actual value. This functionality is used by the
+   garbage collector and potentially other monitoring processes that otherwise
+   would read all data regularly.
 
    1. 20 bytes for metadata size
    2. serialized metadata
@@ -129,31 +130,37 @@
    allows atomic transactions over both objects, e.g. using two columns in SQL
    database.
 
-* Protocols
+* Implementations 
   :PROPERTIES:
-  :CUSTOM_ID: h:e653a3e0-84e8-4885-ab53-3a3d8b414fc5
+  :CUSTOM_ID: h:f8ab0765-5082-40fa-8da4-fde091233b45
   :END:
-  The boundary between the user facing API's of konserve and the backends are
-  defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]] The protocols =PEDNAsyncKeyValueStore=,
-  =PBinaryAsyncKeyValueStore= and =PKeyIterable= are the protocols that need to be
-  implemented by each backend. Each protocol method is provided with a map of
-  options. One of these options is whether the code should be executed
-  synchronously or asynchronously. In the asynchronous case the implementation is
-  supposed to return a go channel (or throw an unsupported operation exception).
-  Only the operations =-update-in=, =-assoc-in=, =-dissoc= and =-bassoc= can
-  /mutate the state/ of the durable medium. They need to ensure that the tracked
-  metadata which can be accessed through `=get-meta=` is written consistently with
-  the value.
-
-** Semantics
+** User facing protocols
    :PROPERTIES:
-   :CUSTOM_ID: h:4b620c30-22b4-4040-853b-dd79d5f5cac2
+   :CUSTOM_ID: h:e653a3e0-84e8-4885-ab53-3a3d8b414fc5
    :END:
-   The semantics of each store is supposed to follow the memory semantics of the
-   corresponding Clojure functions =get-in=, =update=in= etc. The mapping can be
-   conveniently studied in the [[file:../src/konserve/memory.cljc][memory store]].
+   The boundary between the user facing API's of konserve and the backends are
+   defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]] The protocols =PEDNAsyncKeyValueStore=,
+   =PBinaryAsyncKeyValueStore= and =PKeyIterable= are the protocols that need to
+   be implemented by each backend. Each protocol method is provided with a map of
+   options. One of these options is whether the code should be executed
+   synchronously or asynchronously. In the asynchronous case the implementation
+   is supposed to return a go channel (or throw an unsupported operation
+   exception). Only the operations =-update-in=, =-assoc-in=, =-dissoc= and
+   =-bassoc= can /mutate the state/ of the durable medium. They need to ensure
+   that the tracked metadata which can be accessed through =get-meta= is written
+   consistently with the value. Fortunately you do not need to implement the
+   high-level protocols, but in most cases it should be sufficient to implement
+   our backing store protocols (see subsection bellow).
 
-** Backing store implementation
+*** Semantics
+    :PROPERTIES:
+    :CUSTOM_ID: h:4b620c30-22b4-4040-853b-dd79d5f5cac2
+    :END:
+    The semantics of each implementation is supposed to follow the memory
+    semantics of the corresponding Clojure functions =get-in=, =update-in= etc.
+    The mapping can be conveniently studied in the [[file:../src/konserve/memory.cljc][memory store]].
+
+** Backing store protocols
    :PROPERTIES:
    :CUSTOM_ID: h:3917749b-fc8b-4a4f-a515-ffe468a3de8a
    :END:
@@ -217,41 +224,41 @@
    out to us and we will try to fix extend them accordingly if possible. Having
    more backing store implementations is very much in our interest.
 
-* Error handling
-  :PROPERTIES:
-  :CUSTOM_ID: h:4da56b25-ed3b-432c-aff5-2a0b6143f4ac
-  :END:
-  All internal errors must be caught and returned as a throwable object on the
-  return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
-  in [[file:../src/konserve/utils.cljc][utils.cljc]]. In the future we plan to add the ability to also pass in an error
-  callback to directly call on errors.
+** Error handling
+   :PROPERTIES:
+   :CUSTOM_ID: h:4da56b25-ed3b-432c-aff5-2a0b6143f4ac
+   :END:
+   All internal errors must be caught and returned as a throwable object on the
+   return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
+   in [[file:../src/konserve/utils.cljc][utils.cljc]]. In the future we plan to add the ability to also pass in an error
+   callback to directly call on errors.
 
-* Blocking IO 
-  :PROPERTIES:
-  :CUSTOM_ID: h:ca2e0658-daaa-4166-bd50-013fcb253d57
-  :END:
-  Be aware that you must not use blocking IO operations in go-routines. The
-  easiest solution is to spawn threads with =clojure.core.async/thread=, but
-  ideally you should provide synchronous and asynchronous IO operations to provide
-  maximum scalability. In particular the usage of =<!!= and =>!!= is not allowed
-  since it will deadlock =core.async=.
+** Blocking IO
+   :PROPERTIES:
+   :CUSTOM_ID: h:ca2e0658-daaa-4166-bd50-013fcb253d57
+   :END:
+   Be aware that you must not use blocking IO operations in go-routines. The
+   easiest solution is to spawn threads with =clojure.core.async/thread=, but
+   ideally you should provide synchronous and asynchronous IO operations to provide
+   maximum scalability. In particular the usage of =<!!= and =>!!= is not allowed
+   since it will deadlock =core.async=.
 
-* Serializers
-  :PROPERTIES:
-  :CUSTOM_ID: h:8ac8b35c-9afd-4309-863a-5993b17841f7
-  :END:
-  Konserve provides the protocol =PStoreSerializer= with a =-serialize= and
-  =-deserialize= method. You need to use these methods to serialize the edn
-  values, as they are supposed to be configurable by the user. This protocol is
-  also used by the =encryptor= s and =compressor= s. The
-  serializer-compressor-encryptor combination is configurable and stored in the
-  header for each value such that store reconfiguration can happen without
-  downtime and migration. This also allows to bulk copy (or cache) values from
-  another store locally without changing their representation (you only pay the IO
-  cost upfront). The current store configuration will be used whenever they are
-  updated or overwritten though.
+** Serializers
+   :PROPERTIES:
+   :CUSTOM_ID: h:8ac8b35c-9afd-4309-863a-5993b17841f7
+   :END:
+   Konserve provides the protocol =PStoreSerializer= with a =-serialize= and
+   =-deserialize= method. You need to use these methods to serialize the edn
+   values, as they are supposed to be configurable by the user. This protocol is
+   also used by the =encryptor= s and =compressor= s. The
+   serializer-compressor-encryptor combination is configurable and stored in the
+   header for each value such that store reconfiguration can happen without
+   downtime and migration. This also allows to bulk copy (or cache) values from
+   another store locally without changing their representation (you only pay the IO
+   cost upfront). The current store configuration will be used whenever they are
+   updated or overwritten though.
 
-* Migration 
+* Migration
   :PROPERTIES:
   :CUSTOM_ID: h:6cd7020b-f14d-4feb-96b3-1db67c5cb7cb
   :END:
@@ -267,8 +274,9 @@
   4. They can break old library versions running on the same store.
 
   To determine the version of an old key we cannot read it since we do not know
-  its version... the version is therefore stored in the first byte of the header and
-  will allow you to read old values in case the binary layout of konserve changes.
+  its version... the version is therefore stored in the first byte of the header
+  and will allow you to read old values in case the binary layout of konserve or
+  your implementation has to change.
 
 * Tests 
   :PROPERTIES:
@@ -278,10 +286,10 @@
   compliant and are working on a low-level compliance test suite for the default
   store.
 
-* Open issues
+* Work in progress
   :PROPERTIES:
   :CUSTOM_ID: h:c884f0bf-2048-43fc-970b-b6f0a4957c8f
   :END:
-  - monitoring, e.g. of cache sizes, migration processes, performance ...?
+  - monitoring, e.g. of cache sizes, migration processes, performance ...
   - benchmarks
   - document test suite
