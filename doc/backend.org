@@ -175,35 +175,47 @@
    filestore into the [[file:../src/konserve/impl/storage_layout.cljc][storage-layout]] namespace.
 
    To implement a new backend you only need to provide these protocols and can
-   focus only on the binary interface of loading and storing values atomically
-   and safely. In particular a combined write operation of =-write-header=,
-   =-write-meta=, =-write-value= or =write-binary= must be visible either as a
-   whole or not at all. The =sync= and =sync-store= operations are optional in
-   case durability can be optionally enforced this way on the underlying store
-   (e.g. =fsync= for the filestore). Key objects for your store are created
-   through =-path= with a string =store-key= by the implementation (can be
-   identity, i.e. just the same string).
+   focus only on the interface of loading and storing byte array values
+   atomically and safely. In particular a combined write operation of
+   =-write-header=, =-write-meta=, =-write-value=/=write-binary= must be visible
+   either as a whole or not at all. Read operations must only fetch what is
+   needed. You should fetch the needed combination of =header=, =metadata=
+   and/or =value=/=binary= ahead-of-time (AOT) in one read by dispatching on the
+   contextual =:operation= in the provided =env= argument if you cannot cheaply
+   (locally) seek on the open underlying blob handle (such as an
+   =AsynchronousFileChannel= in the file store). Look at the =read-blob=
+   dispatch on operation in [[file:../src/konserve/impl/default.cljc][the default implementation]] to see which context maps
+   to which reads.
 
    You can acquire a lock (=PBackingLock=) with =-get-lock= to span a
-   transactional context over the low-level store. In case you cannot guarantee
-   transactional safety over the read and write operations on a blob you have to
-   declare that your store cannot be used from multiple processes/instances at
-   the same time and set =lock-blob?= to false. Locking is then automatically
-   provided by the user-facing API in the =core= namespace with the =go-locked=
-   macro.
+   /transactional/ context over the low-level store. In case you cannot
+   guarantee transactional safety over the read and write operations on a blob
+   you have to declare that your store cannot be used from /multiple writing/
+   processes/instances at the same time and set =lock-blob?= to false. Locking is
+   then automatically provided by the user-facing API in the =core= namespace
+   with the =go-locked= macro.
+   
+   The =sync= and =sync-store= operations are optional in case durability can be
+   optionally enforced this way on the underlying store (e.g. =fsync= for the
+   filestore). Key objects for your store are created through =-path= with a
+   string =store-key= by the implementation (can be identity, i.e. just the same
+   string).
 
    To provide unified code for both the synchronous and asynchronous variant of
    the code we provide the =async+sync= macro in the [[file:../src/konserve/utils.cljc][utils]] namespace. It expands
    both variants of the code and replaces the =core.async= operations =go= and
    =<!= (like async & await) with the synchronous =no-ops= (=do=). Feel free to
-   use it as well, but be aware that it is not yet a hygienic transformation. It
-   is also totally fine for implementations to duplicate code between
-   synchronous and asynchronous operations if this is easier to manage than
-   using the macro.
+   use it as well, but be aware that it is not yet a hygienic macro
+   transformation (you can get a conflict with it if you use the translated
+   `=go...=` and `=<..=` names as your variable names (which is unlikely, but
+   possible). It is also totally fine for implementations to duplicate code
+   between synchronous and asynchronous operations if this is easier to manage
+   than using this macro. We are in general interest in extending the abilities
+   of this cross-platform, cross-execution model meta-programming in the future.
 
-   If the protocols do not work for your implementation, please reach out to us
-   and we will try to fix extend them accordingly if possible.
-
+   Finally, if the protocols do not work for your implementation, please reach
+   out to us and we will try to fix extend them accordingly if possible. Having
+   more backing store implementations is very much in our interest.
 
 * Error handling
   :PROPERTIES:
@@ -213,7 +225,6 @@
   return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
   in [[file:../src/konserve/utils.cljc][utils.cljc]]. In the future we plan to add the ability to also pass in an error
   callback to directly call on errors.
-
 
 * Blocking IO 
   :PROPERTIES:
@@ -239,7 +250,6 @@
   another store locally without changing their representation (you only pay the IO
   cost upfront). The current store configuration will be used whenever they are
   updated or overwritten though.
-
 
 * Migration 
   :PROPERTIES:
