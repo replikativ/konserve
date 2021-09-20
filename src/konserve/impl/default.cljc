@@ -301,7 +301,7 @@
                                   :msg       {:type :read-edn-error
                                               :key  key}}))]
             (clojure.core/get-in a (rest key-vec)))
-            not-found)))))
+          not-found)))))
   (-get-meta [this key opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
