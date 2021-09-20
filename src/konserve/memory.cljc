@@ -14,12 +14,14 @@
                   {go do
                    <! do}
                   (go  (if (get @state key false) true false)))))
-  (-get [_ key opts]
+  (-get-in [_ key-vec not-found opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (second (get @state key))))))
+                  (go (if-let [a (second (get @state (first key-vec)))]
+                        (get-in a (rest key-vec) not-found)
+                        not-found)))))
   (-get-meta [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?

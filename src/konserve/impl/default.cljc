@@ -6,7 +6,7 @@
    [konserve.encryptor :refer [null-encryptor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [ends-with?]]
-   [konserve.protocols :refer [PEDNAsyncKeyValueStore
+   [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists?
                                PBinaryAsyncKeyValueStore
                                -serialize -deserialize
                                PKeyIterable]]
@@ -277,23 +277,31 @@
         (<?- (-exists backing
                       (<?- (-path backing path env))
                       env))))))
-  (-get [this key opts]
+  (-get-in [this key-vec not-found opts]
     (let [{:keys [sync?]} opts]
-      (io-operation this serializers read-handlers write-handlers
-                    {:key-vec [key]
-                     :base base
-                     :operation :read-edn
-                     :compressor compressor
-                     :encryptor encryptor
-                     :format    :data
-                     :storage-layout storage-layout-id
-                     :sync? sync?
-                     :buffer-size buffer-size
-                     :config config
-                     :default-serializer default-serializer
-                     :detect-old-blobs detected-old-blobs
-                     :msg       {:type :read-edn-error
-                                 :key  key}})))
+      (async+sync
+       sync?
+       *default-sync-translation*
+       (go-try-
+        (if (<?- (-exists? this (first key-vec) opts))
+          (let [a (<?-
+                   (io-operation this serializers read-handlers write-handlers
+                                 {:key-vec key-vec
+                                  :base base
+                                  :operation :read-edn
+                                  :compressor compressor
+                                  :encryptor encryptor
+                                  :format    :data
+                                  :storage-layout storage-layout-id
+                                  :sync? sync?
+                                  :buffer-size buffer-size
+                                  :config config
+                                  :default-serializer default-serializer
+                                  :detect-old-blobs detected-old-blobs
+                                  :msg       {:type :read-edn-error
+                                              :key  key}}))]
+            (clojure.core/get-in a (rest key-vec)))
+            not-found)))))
   (-get-meta [this key opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers

@@ -1,6 +1,6 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [konserve.protocols :refer [-exists? -get-meta -get -assoc-in
+  (:require [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
             [hasch.core :refer [uuid]]
@@ -94,10 +94,7 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (let [a (<?- (-get store (first key-vec) opts))]
-                  (if (some? a)
-                    (clojure.core/get-in a (rest key-vec))
-                    not-found))))))
+                (<?- (-get-in store key-vec not-found opts))))))
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
@@ -196,7 +193,7 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (let [head (<?- (-get store key opts))
+                (let [head (<?- (-get-in store [key] nil opts))
                       [append-log? last-id first-id] head
                       new-elem {:next nil
                                 :elem elem}

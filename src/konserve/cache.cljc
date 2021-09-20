@@ -4,14 +4,14 @@
   accessing the store, otherwise you should implement your own caching strategy."
   (:refer-clojure :exclude [assoc-in assoc exists? dissoc get get-in
                             keys update-in update])
-  (:require [konserve.protocols :refer [-exists? -get -assoc-in
+  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
             [konserve.core :refer [go-locked locked] :as core]
             [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [taoensso.timbre :as timbre :refer [trace]]
-            [superv.async :refer [<?-]]))
+            [superv.async :refer [go-try- <?-]]))
 
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32
@@ -20,6 +20,20 @@
    (ensure-cache store (atom (cache/lru-cache-factory {} :threshold 32))))
   ([store cache]
    (clojure.core/assoc store :cache cache)))
+
+(defn- read-through [store key opts]
+  (async+sync
+   (:sync? opts)
+   *default-sync-translation*
+   (go-try-
+    (let [cache         (:cache store)]
+      (if (cache/has? @cache key)
+        (let [v (cache/lookup @cache key)]
+          (swap! cache cache/hit key)
+          v)
+        (let [v (<?- (-get-in store [key] ::missing opts))]
+          (swap! cache cache/miss key v)
+          v))))))
 
 (defn exists?
   "Checks whether value is in the store."
@@ -31,8 +45,8 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (or (not (nil? (cache/lookup @(:cache store) key)))
-                    (<?- (-exists? store key opts)))))))
+                (let [v (<?- (read-through store key opts))]
+                  (not= v ::missing))))))
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
@@ -47,19 +61,11 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (let [cache         (:cache store)
-                      [fkey & rkey] key-vec
-                      extract (fn [v]
-                                (if (some? v)
-                                  (clojure.core/get-in v rkey not-found)
-                                  not-found))]
-                  (if-let [v (cache/lookup @cache fkey)]
-                    (do
-                      (swap! cache cache/hit fkey)
-                      (extract v))
-                    (let [v (<?- (-get store fkey opts))]
-                      (swap! cache cache/miss fkey v)
-                      (extract v))))))))
+                (let [[fkey & rkey] key-vec
+                      v (<?- (read-through store fkey opts))]
+                  (if (not= v ::missing)
+                    (clojure.core/get-in v rkey not-found)
+                    not-found))))))
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key

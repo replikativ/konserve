@@ -5,7 +5,7 @@
   "Allows to access a store similar to hash-map in EDN."
   (-exists? [this key opts] "Checks whether value is in the store.")
   (-get-meta [this key opts] "Fetch only metadata for the key.")
-  (-get [this key opts] "Returns the value stored described by key or nil if the path is not resolvable.")
+  (-get-in [this key-vec not-found opts] "Returns the value stored described by key or nil if the path is not resolvable.")
   (-update-in [this key-vec meta-up-fn up-fn opts]
     "Updates a position described by key-vec by applying up-fn and storing the result atomically. Returns a vector [old new] of the previous value and the result of applying up-fn (the newly stored value).")
   (-assoc-in [this key-vec meta-up-fn val opts])
