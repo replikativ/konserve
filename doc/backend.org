@@ -101,35 +101,6 @@
     =blob-sync='ing for instance, in which case a few write operations can be lost
     on a crash.
 
-** Metadata
-   :PROPERTIES:
-   :CUSTOM_ID: h:96674cbe-3534-4627-a847-bc3075b60984
-   :END:
-   Konserve internally uses metadata that is kept separate from the operations
-   on the values. This metadata is used to track the time when values are
-   written for example, a functionality that is needed by the concurrent garbage
-   collector. The metadata itself is an =edn= map. There are no size limitations
-   of metadata fixed in the protocol, if you cannot implement your backend
-   without a size limit then please document it. Metadata can also be used by
-   third parties to track important contextual information such as user access
-   control rights, or, maybe even edit histories, and therefore supporting at
-   least a megabyte in size would be a future proof size. If for some very
-   unfortunate reason you have to allocate a fixed size for each metadata
-   element then for now at least 16 KiB must be supported. The =get-meta=
-   protocol reads only the metadata part of the respective key and therefore
-   should not load or fetch the actual value. This functionality is used by the
-   garbage collector and potentially other monitoring processes that otherwise
-   would read all data regularly.
-
-   1. 20 bytes for metadata size
-   2. serialized metadata
-   3. serialized or binary value
-
-   Storing the metadata size is necessary to allow to read only the metadata (and
-   also to skip it). You can store the metadata also separately if your store
-   allows atomic transactions over both objects, e.g. using two columns in SQL
-   database.
-
 * Implementations 
   :PROPERTIES:
   :CUSTOM_ID: h:f8ab0765-5082-40fa-8da4-fde091233b45
@@ -257,6 +228,36 @@
    another store locally without changing their representation (you only pay the IO
    cost upfront). The current store configuration will be used whenever they are
    updated or overwritten though.
+
+** Metadata
+   :PROPERTIES:
+   :CUSTOM_ID: h:96674cbe-3534-4627-a847-bc3075b60984
+   :END:
+   Konserve internally uses metadata that is kept separate from the operations
+   on the values. This metadata is used to track the time when values are
+   written for example, a functionality that is needed by the concurrent garbage
+   collector. The metadata itself is an =edn= map. There are no size limitations
+   of metadata fixed in the protocol, if you cannot implement your backend
+   without a size limit then please document it. Metadata can also be used by
+   third parties to track important contextual information such as user access
+   control rights, or, maybe even edit histories, and therefore supporting at
+   least a megabyte in size would be future proof. If for some very unfortunate
+   reason you have to allocate a fixed size for each metadata element then for
+   now at least 16 KiB must be supported. The =get-meta= protocol reads only the
+   metadata part of the respective key and therefore should not load or fetch
+   the actual value. This functionality is used by the garbage collector and
+   potentially other monitoring processes that otherwise would read all data
+   regularly.
+
+   1. 20 bytes for metadata size
+   2. serialized metadata
+   3. serialized or binary value
+
+   Storing the metadata size is necessary to allow to read only the metadata or
+   value (and also to skip it) in stores that have to use one big blog and seek
+   in it (such as the filestore). You can store the metadata also separately if
+   your store allows atomic transactions over both objects, e.g. using two
+   columns in a SQL database.
 
 * Migration
   :PROPERTIES:
