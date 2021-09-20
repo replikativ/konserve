@@ -273,10 +273,20 @@
     (async+sync
      (:sync? env) *default-sync-translation*
      (go-try-
-      (let [path (str base "/" (uuid key) ".ksv")]
-        (<?- (-exists backing
-                      (<?- (-path backing path env))
-                      env))))))
+      (let [uuid-key (uuid key)
+            path (str base "/" uuid-key ".ksv")]
+        (or
+         ;; filestore specific patch to detect existing old values
+         (when detected-old-blobs
+           (let [old-meta (str base "/meta/" uuid-key)
+                 old (str base "/"  uuid-key)
+                 old-binary (str base "/B_"  uuid-key)]
+             (or (@detected-old-blobs old-meta)
+                 (@detected-old-blobs old)
+                 (@detected-old-blobs old-binary))))
+         (<?- (-exists backing
+                       (<?- (-path backing path env))
+                       env)))))))
   (-get-in [this key-vec not-found opts]
     (let [{:keys [sync?]} opts]
       (async+sync
