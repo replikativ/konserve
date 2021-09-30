@@ -33,8 +33,8 @@
     (if (:sync? env) nil (go-try- nil))))
 
 (defn update-blob
-  "Write file into file system. It write first the meta-size, that is stored in (1Byte),
-  the meta-data and the actual data."
+  "This function writes first the meta-size, then the meta-data and then the
+  actual updated data into the underlying backing store."
   [backing path serializer write-handlers
    {:keys [base key-vec compressor encryptor store-key up-fn up-fn-meta
            config operation input sync? version] :as env} [old-meta old-value]]
@@ -95,7 +95,7 @@
                    (parse-header arr serializers))))))
 
 (defn read-blob
-  "Read meta, edn and binary."
+  "Read meta, edn or binary from blob."
   [ac read-handlers serializers {:keys [sync? operation store-key locked-cb] :as env}]
   (async+sync
    sync? *default-sync-translation*
@@ -180,7 +180,7 @@
               (recur (inc i))))))))))
 
 (defn io-operation
-  "Read/Write blob. For better understanding use the flow-chart of Konserve."
+  "Read/Write blob. For better understanding use the flow-chart of konserve."
   [{:keys [backing migrate-in-io-operation]} serializers read-handlers write-handlers
    {:keys [base key-vec detect-old-blobs operation default-serializer
            sync? overwrite? config] :as env}]
@@ -437,17 +437,8 @@
                   :msg {:type :read-all-keys-error}}))))
 
 (defn new-default-store
-  "Create general store in given path.
-  Optional serializer, read-handerls, write-handlers, buffer-size and config (for fsync) can be changed.
-  Defaults are
-  {:base         path
-   :serializer     fressian-serializer
-   :read-handlers  empty
-   :write-handlers empty
-   :buffer-size    1 MB
-   :config         config} "
-  [base
-   backing
+  "Create general store in given base path of backing store."
+  [base backing
    old-files
    migrate-in-io-operation
    migrate-in-list-keys

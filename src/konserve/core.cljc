@@ -31,18 +31,6 @@
                                              (clojure.core/assoc old key c))))
                           key))))
 
-(defmacro locked [store key & code]
-  `(let [l# (get-lock ~store ~key)]
-     (try
-         ;; spin lock
-       (while (not (poll! l#))
-         (Thread/sleep (rand-int 20)))
-       (trace "acquired spin lock for " ~key)
-       ~@code
-       (finally
-         (trace "releasing spin lock for " ~key)
-         (put! l# :unlocked)))))
-
 (defn wait [lock]
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (rand-int 20)))

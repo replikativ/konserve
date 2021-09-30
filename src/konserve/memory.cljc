@@ -25,8 +25,7 @@
   (-get-meta [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
-                  {go do
-                   <! do}
+                  {go do}
                   (go (first (get @state key))))))
   (-update-in [_ key-vec meta-up-fn up-fn opts]
     (let [{:keys [sync?]} opts]
