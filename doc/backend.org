@@ -110,8 +110,8 @@
    :CUSTOM_ID: h:e653a3e0-84e8-4885-ab53-3a3d8b414fc5
    :END:
    The boundary between the user facing API's of konserve and the backends are
-   defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]] The protocols =PEDNAsyncKeyValueStore=,
-   =PBinaryAsyncKeyValueStore= and =PKeyIterable= are the protocols that need to
+   defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]] The protocols =PEDNKeyValueStore=,
+   =PBinaryKeyValueStore= and =PKeyIterable= are the protocols that need to
    be implemented by each backend. Each protocol method is provided with a map of
    options. One of these options is whether the code should be executed
    synchronously or asynchronously. In the asynchronous case the implementation

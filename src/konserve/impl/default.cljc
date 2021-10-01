@@ -6,8 +6,8 @@
    [konserve.encryptor :refer [null-encryptor]]
    [hasch.core :refer [uuid]]
    [clojure.string :refer [ends-with?]]
-   [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists?
-                               PBinaryAsyncKeyValueStore
+   [konserve.protocols :refer [PEDNKeyValueStore -exists?
+                               PBinaryKeyValueStore
                                -serialize -deserialize
                                PKeyIterable]]
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
@@ -268,7 +268,7 @@
 (defrecord DefaultStore [version base backing serializers default-serializer compressor encryptor
                          read-handlers write-handlers buffer-size detected-old-blobs locks config
                          migrate-in-io-operation migrate-in-list-keys]
-  PEDNAsyncKeyValueStore
+  PEDNKeyValueStore
   (-exists? [_ key env]
     (async+sync
      (:sync? env) *default-sync-translation*
@@ -383,7 +383,7 @@
                   :msg        {:type :deletion-error
                                :key  key}}))
 
-  PBinaryAsyncKeyValueStore
+  PBinaryKeyValueStore
   (-bget [this key locked-cb opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers

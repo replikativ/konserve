@@ -1,13 +1,13 @@
 (ns konserve.memory
   "Address globally aggregated immutable key-value store(s)."
-  (:require [konserve.protocols :refer [PEDNAsyncKeyValueStore -update-in
-                                        PBinaryAsyncKeyValueStore PKeyIterable]]
+  (:require [konserve.protocols :refer [PEDNKeyValueStore -update-in
+                                        PBinaryKeyValueStore PKeyIterable]]
             #?(:clj [konserve.utils :refer [async+sync]])
             [clojure.core.async :as async :refer [go <!]])
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]])))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
-  PEDNAsyncKeyValueStore
+  PEDNKeyValueStore
   (-exists? [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -59,7 +59,7 @@
                           (swap! state dissoc key)
                           true)
                         false))))))
-  PBinaryAsyncKeyValueStore
+  PBinaryKeyValueStore
   (-bget [_ key locked-cb opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?

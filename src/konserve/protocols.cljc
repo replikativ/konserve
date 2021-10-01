@@ -1,7 +1,7 @@
 (ns konserve.protocols
   #?(:cljs (:refer-clojure :exclude [-dissoc])))
 
-(defprotocol PEDNAsyncKeyValueStore
+(defprotocol PEDNKeyValueStore
   "Allows to access a store similar to hash-map in EDN."
   (-exists? [this key opts] "Checks whether value is in the store.")
   (-get-meta [this key opts] "Fetch only metadata for the key.")
@@ -11,7 +11,7 @@
   (-assoc-in [this key-vec meta-up-fn val opts])
   (-dissoc [this key opts]))
 
-(defprotocol PBinaryAsyncKeyValueStore
+(defprotocol PBinaryKeyValueStore
   "Allows binary data byte array storage."
   (-bget [this key locked-cb opts] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
   (-bassoc [this key meta-up-fn val opts] "Copies given value (InputStream, Reader, File, byte[] or String on JVM, Blob in JavaScript) under key in the store."))

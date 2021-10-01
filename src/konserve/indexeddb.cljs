@@ -1,15 +1,14 @@
 (ns konserve.indexeddb
   (:require [incognito.edn :refer [read-string-safe]]
-            [konserve.core :as k]
             [konserve.serializers :as ser]
-            [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get -update-in -assoc-in -get-meta
-                                        PBinaryAsyncKeyValueStore -bget -bassoc
+            [konserve.protocols :refer [PEDNKeyValueStore -exists? -get -update-in -assoc-in -get-meta
+                                        PBinaryKeyValueStore -bget -bassoc
                                         PStoreSerializer -serialize -deserialize]]
             [cljs.core.async :as async :refer (take! <! >! put! close! chan poll!)])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
 (defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers locks version]
-  PEDNAsyncKeyValueStore
+  PEDNKeyValueStore
   (-exists? [this key]
     (let [res       (chan)
           tx        (.transaction db #js [store-name])
@@ -131,7 +130,7 @@
               (close! res)))
       res))
 
-  PBinaryAsyncKeyValueStore
+  PBinaryKeyValueStore
   (-bget [this key lock-cb]
     (let [res       (chan)
           tx        (.transaction db #js [store-name])
