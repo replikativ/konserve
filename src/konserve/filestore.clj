@@ -83,7 +83,11 @@
                 (go-try- (Files/exists ^Path path (into-array LinkOption [])))))
   (-keys [this path env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (vec (Files/newDirectoryStream path)))))
+                (go-try-
+                    (let [ds (Files/newDirectoryStream path)
+                          res (vec ds)]
+                      (.close ds)
+                      res))))
   (-path [this store-key env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try- (Paths/get ^String store-key (into-array String [])))))
