@@ -97,7 +97,7 @@
     yields a value, i.e. everything needs to be transmitted to the backend. This
     guarantee depends on the guarantees of the backend and you are supposed clearly
     document this for your users. It is a good idea to provide configuration options
-    for the backend if you see fit. The default store provides a flip to turn of
+    for the backend if you see fit. The default store provides a flip to turn off
     =blob-sync='ing for instance, in which case a few write operations can be lost
     on a crash.
 
@@ -176,8 +176,10 @@
    The =sync= and =sync-store= operations are optional in case durability can be
    optionally enforced this way on the underlying store (e.g. =fsync= for the
    filestore). Key objects for your store are created through =-path= with a
-   string =store-key= by the implementation (can be identity, i.e. just the same
-   string).
+   string representation for the key (=store-key=). This is what will be passed
+   to your read and write functions. In the simplest case you can just use the
+   string itself if your implementation does not require the construction of a
+   custom path.
 
    To provide unified code for both the synchronous and asynchronous variant of
    the code we provide the =async+sync= macro in the [[file:../src/konserve/utils.cljc][utils]] namespace. It expands
