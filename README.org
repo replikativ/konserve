@@ -13,24 +13,25 @@
 
 [[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
 
-A simple document store protocol defined with [[https://github.com/clojure/core.async][core.async]] semantics to allow
-Clojuresque collection operations on associative key-value stores, both from
-Clojure and ClojureScript for different backends. Data is generally serialized
-with [[https://github.com/edn-format/edn][edn]] semantics or, if supported, as native binary blobs and can be accessed
-similar to =clojure.core= functions =get-in=,=assoc-in= and =update-in=.
-=update-in= especially allows to run functions atomically and returns old and
-new value. Each operation is run atomically and must be consistent (in fact
-ACID), but further consistency is not supported (Riak, CouchDB and many scalable
-solutions don't have transactions over keys for that reason). This is meant to
-be a building block for more sophisticated storage solutions (Datomic also
-builds on kv-stores). An append-log for fast writes is also implemented.
+A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
+semantics to allow Clojuresque collection operations on associative key-value
+stores, both from Clojure and ClojureScript for different backends. Data is
+generally serialized with [[https://github.com/edn-format/edn][edn]] semantics or, if supported, as native binary blobs
+and can be accessed similarly to =clojure.core= functions =get-in=, =assoc-in=
+and =update-in=. =update-in= especially allows to run functions atomically and
+returns old and new value. Each operation is run atomically and must be
+consistent (in fact ACID), but further consistency is not supported (Riak,
+CouchDB and many scalable solutions don't have transactions over keys for that
+reason). This is meant to be a building block for more sophisticated storage
+solutions (Datomic also builds on kv-stores). A simple append-log for fast
+write operations is also implemented.
 
 ** Features
    :PROPERTIES:
    :CUSTOM_ID: h:115591f9-90d2-4c25-8499-6f53a8ae4bc6
    :END:
 
-- /cross-platform/ between Clojure and ClojureScript (including node.js)
+- /cross-platform/ between Clojure and ClojureScript
 - /lowest-common denominator interface/ for an associative datastructure
   with =edn= semantics
 - /thread-safety with atomicity over key operations/
@@ -64,8 +65,10 @@ ClojureScript and is quite efficient. Both implementations use the same on-disk
 format and can load the same store (but not concurrently). It also allows to
 access values as a normal file-system file, e.g. to open it with a native
 database like HDF5 in Java. You can decide not to fsync on every write by a
-configuration of ={:fsync false}=, if a potential but unlikely data loss is not
-critical for you (e.g. for a session store).
+configuration of ={:sync-blob? false}=, if a potential, but unlikely data loss
+is not critical for you (e.g. for a session store). Note that the database will
+not be corrupted in this case, you can just lose some write operations before
+the crash.
 
 *** IndexedDB
     :PROPERTIES:
@@ -83,6 +86,9 @@ they are stored in separate locations and cannot clash.
     :PROPERTIES:
     :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
     :END:
+
+These are partially outdated and not actively maintained by us, but should not
+be hard to pick up.
 
 - LevelDB:
   [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
@@ -185,38 +191,66 @@ You can read and write custom records according to
 Add to your leiningen dependencies:
 [[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
-From a Clojure REPL run: 
+From a Clojure REPL run the following functions for the core.async variants of
+the code. 
 #+BEGIN_SRC clojure 
   (ns test-db
     (:require [konserve.filestore :refer [new-fs-store]]
               [konserve.core :as k]
-              [clojure.core.async :as async :refer [<!!]]))
+              [clojure.core.async :as async :refer [go <!]]))
 
-  ;; Note: We use the thread blocking operations <!! here only to synchronize
-  ;; with the REPL. <!! is blocking IO and does not compose well with async
-  ;; contexts, so prefer composing your application with go and <! instead.
+  (go
+    (def store (<! (new-fs-store "/tmp/store")))
 
-  (def store (<!! (new-fs-store "/tmp/store")))
+    (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+    (<! (k/get-in store ["foo"]))
+    (<! (k/exists? store "foo"))
 
-  (<!! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-  (<!! (k/get-in store ["foo"]))
-  (<!! (k/exists? store "foo"))
+    (<! (k/assoc-in store [:bar] 42))
+    (<! (k/update-in store [:bar] inc))
+    (<! (k/get-in store [:bar]))
+    (<! (k/dissoc store :bar))
 
-  (<!! (k/assoc-in store [:bar] 42))
-  (<!! (k/update-in store [:bar] inc))
-  (<!! (k/get-in store [:bar]))
-  (<!! (k/dissoc store :bar))
+    (<! (k/append store :error-log {:type :horrible}))
+    (<! (k/log store :error-log))
 
-  (<!! (k/append store :error-log {:type :horrible}))
-  (<!! (k/log store :error-log))
+    (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+      (time (<! (k/bassoc store "banana" ba))))
+
+    (<! (k/bget store "banana"
+                (fn [{is :input-stream}]
+                  (go (your-read-does-all-work-here is))))))
+#+END_SRC
+
+And the following synchronous code if you are not using core.async in your scope: 
+#+BEGIN_SRC clojure 
+  (ns test-db
+    (:require [konserve.filestore :refer [new-fs-store]]
+              [konserve.core :as k]))
+
+  (def store (new-fs-store "/tmp/store" {:sync? true}))
+
+  (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
+  (k/get-in store ["foo"] nil {:sync? true})
+  (k/exists? store "foo" {:sync? true})
+
+  (k/assoc-in store [:bar] 42 {:sync? true})
+  (k/update-in store [:bar] inc {:sync? true})
+  (k/get-in store [:bar] nil {:sync? true})
+  (k/dissoc store :bar {:sync? true})
+
+  (k/append store :error-log {:type :horrible} {:sync? true})
+  (k/log store :error-log {:sync? true})
 
   (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (<!! (k/bassoc store "banana" ba))))
+    (time (k/bassoc store "banana" ba {:sync? true})))
 
-  (<!! (k/bget store "banana"
-              (fn [{is :input-stream}]
-                (go (your-read-does-all-work-here is)))))
+  (k/bget store "banana"
+          (fn [{is :input-stream}]
+            (your-read-does-all-work-here is))
+          {:sync? true})
 #+END_SRC
+
 
 In a ClojureScript REPL you can evaluate the expressions from the REPL
 each wrapped in a go-block.
@@ -327,6 +361,14 @@ namespace:
    :PROPERTIES:
    :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
    :END:
+
+  
+*** 1.0.0-alpha1 
+    :PROPERTIES:
+    :CUSTOM_ID: h:433a14fe-229b-4944-8beb-fd268917705c
+    :END:
+    - implement dual async+sync code expansion
+    - generalize filestore logic to ease backend development
 
 *** 0.6.0-alpha1
     :PROPERTIES:

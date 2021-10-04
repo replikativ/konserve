@@ -1,234 +1,306 @@
 #+TITLE: Backend implementation guide
-* Motivation
+* Introduction
   :PROPERTIES:
   :CUSTOM_ID: h:82cb52f5-af8a-45f7-afed-22c0bd94a213
   :END:
   
-Konserve provides a minimalistic user interface that can be understood as a
-[[https://www.youtube.com/watch?v=hnROywmy_HI&list=PLetHPRQvX4a-c3KDRTxxwGRmEMutL8Apf&index=4][lense]] into key-value stores. It's main purpose is portability to as many
-backends as possible. This document is describing how to implement such
-backends. Feel free to ignore parts of this document to get something running
-quickly, but be aware that we can only support backends that adhere to this
-document.
+  Konserve provides a minimalistic user interface that can be understood as a
+  [[https://www.youtube.com/watch?v=hnROywmy_HI&list=PLetHPRQvX4a-c3KDRTxxwGRmEMutL8Apf&index=4][lense]] into key-value stores. It's main purpose is portability to as many
+  backends as possible. This document is describing how to implement them. Feel
+  free to ignore parts of this document to get something running quickly, but be
+  aware that we can only support backends that adhere to this document.
 
-* Preconditions
-  :PROPERTIES:
-  :CUSTOM_ID: h:c9e81de1-064f-4953-a321-48584bebe100
-  :END:
-  - understanding of the backend store you want to integrate
-  - basic understanding of [[https://github.com/clojure/core.async][core.async]]
+  This document assumes the following context:
 
+** Necessary preconditions
+   :PROPERTIES:
+   :CUSTOM_ID: h:c9e81de1-064f-4953-a321-48584bebe100
+   :END:
+   - understanding of the backend store you want to integrate
+   - basic understanding of [[https://github.com/clojure/core.async][core.async]]
+
+** Provided postconditions
+   :PROPERTIES:
+   :CUSTOM_ID: h:47c887a4-7a87-4b9e-a7f4-e5ad432fd450
+   :END:
+   - understanding of the protocols
+   - understanding of how to do error handling
+   - understanding of how to handle migrations
     
-* Postconditions
-  :PROPERTIES:
-  :CUSTOM_ID: h:47c887a4-7a87-4b9e-a7f4-e5ad432fd450
-  :END:
-  - understanding of the protocols
-  - understanding of how to do error handling
-  - understanding of how to handle migrations
-
-    
-* Target audience
-  :PROPERTIES:
-  :CUSTOM_ID: h:041fdf32-f2b3-4e7b-90b4-910106ee5c08
-  :END:
-  
-Advanced Clojure developers with the need to durably store data with a flexible
-interface, e.g. users of [[https://github.com/replikativ/datahike][Datahike]] or [[https:/replikativ.io/][replikativ]] or developers who want to [[https://whilo.github.io/articles/16/unified-storage-io][retain
-portability of their storage backend in general]].
+** Target audience
+   :PROPERTIES:
+   :CUSTOM_ID: h:041fdf32-f2b3-4e7b-90b4-910106ee5c08
+   :END:
+   Clojure developers with the need to durably store data with a flexible
+   interface, e.g. users of [[https://github.com/replikativ/datahike][Datahike]] or [[https:/replikativ.io/][replikativ]] or developers who want to
+   [[https://whilo.github.io/articles/16/unified-storage-io][retain portability of their storage backend in general]].
 
 ** Related work
    :PROPERTIES:
    :CUSTOM_ID: h:df77b6cc-65cc-4c43-a5a1-be5d98ffa072
    :END:
-   
-[[https://datomic.com][Datomic]] is providing a set of storage backends for its persistent indices. There
-are also [[https://github.com/maxogden/abstract-blob-store][libraries]] for JavaScript that provide a similar interface, but without
-the lense-like interface and practically all libraries are not cross-platform
-between JVM and JavaScript.
-   
-* Protocols 
+   [[https://datomic.com][Datomic]] is providing a set of storage backends for its persistent indices. There
+   are also [[https://github.com/maxogden/abstract-blob-store][libraries]] for JavaScript that provide a similar interface, but without
+   the lense-like interface and to our knowledge all other libraries are not
+   cross-platform between JVM and JavaScript.
+
+* Memory model
   :PROPERTIES:
-  :CUSTOM_ID: h:e653a3e0-84e8-4885-ab53-3a3d8b414fc5
+  :CUSTOM_ID: h:ad0f4a4d-8581-4c21-94bf-a3c736aa4c1b
   :END:
+  Konserve tracks contextual information in a binary header that is sufficient to
+  determine how to access a value, it carries the version of the header format,
+  the serialization context and the size of the metadata.
   
-The boundary between the user facing API's of konserve and the backends are
-defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]]. The protocols =PEDNAsyncKeyValueStore=,
-=PBinaryAsyncKeyValueStore= and =PKeyIterable= are the protocols that need to be
-implemented by each backend. Each protocol method implementation has to return a
-go channel. Only the operations =-update-in=, =-assoc-in=, =-dissoc= and
-=-bassoc= can /mutate the state/ of the durable medium.
-
-
-** Metadata  
-   :PROPERTIES:
-   :CUSTOM_ID: h:96674cbe-3534-4627-a847-bc3075b60984
-   :END:
-
- Konserve internally uses metadata that is kept separate from the operations on
- the values. This metadata is used to track the time when values are mutated for
- example, a functionality that is needed by the concurrent garbage collector.
- The metadata itself is an =edn= map. There are no size limitations of metadata
- fixed in the protocol, if you cannot implement your backend without a size
- limit then please document it. Metadata can also be used by third parties to
- track important contextual information such as user access control rights or
- maybe even edit histories and therefore supporting at least a megabyte in size
- might be a future proof limitation. The =get-meta= protocol reads only the
- metadata part of the respective key and therefore should not fetch the value.
- It is used by the garbage collector and potentially other monitoring processes
- that otherwise would read all data regularly.
- 
-=TODO= document schema.
- 
 ** ACID
    :PROPERTIES:
    :CUSTOM_ID: h:e8add7fe-33dc-4bba-a1a3-3895c19ad844
    :END:
-
-Konserve is providing [[https://en.wikipedia.org/wiki/ACID][ACID]] guarantees for each key to its users. 
+   Konserve is providing [[https://en.wikipedia.org/wiki/ACID][ACID]] guarantees for each key-value pair stored in it. 
 
 *** Atomicity
     :PROPERTIES:
     :CUSTOM_ID: h:4311c3a1-2287-40ac-bcde-a97affbe2a3b
     :END:
-Your write operation should either completely succeed or fail. Typically this
-is provided by the underlying store, but you might need to first write a new
-value and then do an atomic swap, as is done in the filestore with an atomic
-file renaming. The metadata update and the value update need to be updated in
-the same atomic transaction.
+    Your write operation must either completely succeed or fail and cleanly reset
+    on *any* error condition. In other words the store must never be corrupted by
+    partial write operations! Typically this is provided by the underlying store,
+    but you might need to first write a new value and then do an atomic swap, as is
+    done in the filestore with an atomic file renaming. The metadata update and the
+    value update need to be updated in the same atomic transaction.
  
 *** Consistency
     :PROPERTIES:
     :CUSTOM_ID: h:88a73805-5229-439e-94a7-a4bc8628db80
     :END:
-The underlying store should provide consistent views on the data. This is
-typically not a property you have to worry about, but it is a good idea to point
-your users to the consistency guarantees provided. A reasonable backend should
-at least provide [[https://en.wikipedia.org/wiki/Isolation_(database_systems)#Read_committed][read-committed]] semantics.
+    The underlying store should provide consistent views on the data. This is
+    typically not a property you have to worry about, but it is a good idea to point
+    your users to the consistency guarantees provided by the underlying store. A
+    reasonable backend must at least provide [[https://en.wikipedia.org/wiki/Isolation_(database_systems)#Read_committed][read-committed]] semantics.
 
 *** Isolation
     :PROPERTIES:
     :CUSTOM_ID: h:764ea3ba-0d29-4118-82ef-6ed2a1916484
     :END:
-You are guaranteed by the [[file:../src/konserve/core.cljc#L36][go-locked]] macro to have no concurrent state mutations
-on individual keys. This locking mechanism only holds inside a memory context of
-a JVM. If you expect multiple JVM processes to operate on one backend you have
-to make sure that crashing processes do not leave broken values. Usually this is
-provided by the underlying distributed storage.
+    You are guaranteed by the [[file:../src/konserve/core.cljc#L36][go-locked]] macro to have no concurrent state mutations
+    on individual keys. This locking mechanism only holds inside a memory context of
+    the current process. If you expect e.g. multiple JVM processes/machines to
+    operate on one backend you have to make sure that write operations are properly
+    locked between them. Often this can be provided by the underlying distributed
+    storage. 
 
 *** Durability
     :PROPERTIES:
     :CUSTOM_ID: h:b6a7799b-7bb7-41d7-8473-f33469b4fda4
     :END:
-You must have written all data when the go channel you return yields a value,
-i.e. everything needs to be transmitted to the backend. This guarantee depends
-on the guarantees of the backend and you must clearly document this for your
-users. It is a good idea to provide configuration options for the backend if
-you see fit. The filestore provides a flip to turn of =fsync='ing for instance.
+    You must have written all data when the go channel or synchronous function
+    yields a value, i.e. everything needs to be transmitted to the backend. This
+    guarantee depends on the guarantees of the backend and you are supposed clearly
+    document this for your users. It is a good idea to provide configuration options
+    for the backend if you see fit. The default store provides a flip to turn off
+    =blob-sync='ing for instance, in which case a few write operations can be lost
+    on a crash.
 
+* Implementations 
+  :PROPERTIES:
+  :CUSTOM_ID: h:f8ab0765-5082-40fa-8da4-fde091233b45
+  :END:
+** User facing protocols
+   :PROPERTIES:
+   :CUSTOM_ID: h:e653a3e0-84e8-4885-ab53-3a3d8b414fc5
+   :END:
+   The boundary between the user facing API's of konserve and the backends are
+   defined in [[file:../src/konserve/protocols.cljc][protocols.cljc]] The protocols =PEDNKeyValueStore=,
+   =PBinaryKeyValueStore= and =PKeyIterable= are the protocols that need to
+   be implemented by each backend. Each protocol method is provided with a map of
+   options. One of these options is whether the code should be executed
+   synchronously or asynchronously. In the asynchronous case the implementation
+   is supposed to return a go channel (or throw an unsupported operation
+   exception). Only the operations =-update-in=, =-assoc-in=, =-dissoc= and
+   =-bassoc= can /mutate the state/ of the durable medium. They need to ensure
+   that the tracked metadata which can be accessed through =get-meta= is written
+   consistently with the value. Fortunately you do not need to implement the
+   high-level protocols, but in most cases it should be sufficient to implement
+   our backing store protocols (see subsection bellow).
+
+*** Semantics
+    :PROPERTIES:
+    :CUSTOM_ID: h:4b620c30-22b4-4040-853b-dd79d5f5cac2
+    :END:
+    The semantics of each implementation is supposed to follow the memory
+    semantics of the corresponding Clojure functions =get-in=, =update-in= etc.
+    The mapping can be conveniently studied in the [[file:../src/konserve/memory.cljc][memory store]].
+
+** Backing store protocols
+   :PROPERTIES:
+   :CUSTOM_ID: h:3917749b-fc8b-4a4f-a515-ffe468a3de8a
+   :END:
+   [[file:./figures/state_machine.png]]
+
+   The figure illustrates the different paths that are taken by read or update
+   operations. =io-operation=, =read-blob= and =update-blob= are functions in
+   the [[file:../src/konserve/impl/default.cljc][default store]] namespace while each phase dispatches internally on a
+   context describing the top-level io operation, e.g. whether reading or
+   writing is necessary. This explicit contextual environment is not strictly
+   necessary, but reduces duplication of code. The default store uses
+   =core.async= for its asynchronous implementation internally.
+
+   While the user facing protocols capture the intent and provide the biggest
+   freedom of an implementation, almost all implementations follow the same
+   pattern and share the logic between header handling, serialization, locking
+   (see figure above). For this reason we have abstracted the low-level
+   interfaces =PBackingStore=, =PBackingBlob= and =PBackingLock= from the
+   filestore into the [[file:../src/konserve/impl/storage_layout.cljc][storage-layout]] namespace.
+
+   To implement a new backend you only need to provide these protocols and can
+   focus only on the interface of loading and storing byte array values
+   atomically and safely. In particular a combined write operation of
+   =-write-header=, =-write-meta=, =-write-value=/=write-binary= must be visible
+   either as a whole or not at all. Read operations must only fetch what is
+   needed. You should fetch the needed combination of =header=, =metadata=
+   and/or =value=/=binary= ahead-of-time (AOT) in one read by dispatching on the
+   contextual =:operation= in the provided =env= argument if you cannot cheaply
+   (locally) seek on the open underlying blob handle (such as an
+   =AsynchronousFileChannel= in the file store). Look at the =read-blob=
+   dispatch on operation in [[file:../src/konserve/impl/default.cljc][the default implementation]] to see which context maps
+   to which reads.
+
+   You can acquire a lock (=PBackingLock=) with =-get-lock= to span a
+   /transactional/ context over the low-level store. In case you cannot
+   guarantee transactional safety over the read and write operations on a blob
+   you have to declare that your store cannot be used from /multiple writing/
+   processes/instances at the same time and set =lock-blob?= to false. Locking is
+   then automatically provided by the user-facing API in the =core= namespace
+   with the =go-locked= macro.
+   
+   The =sync= and =sync-store= operations are optional in case durability can be
+   optionally enforced this way on the underlying store (e.g. =fsync= for the
+   filestore). Key objects for your store are created through =-path= with a
+   string representation for the key (=store-key=). This is what will be passed
+   to your read and write functions. In the simplest case you can just use the
+   string itself if your implementation does not require the construction of a
+   custom path.
+
+   To provide unified code for both the synchronous and asynchronous variant of
+   the code we provide the =async+sync= macro in the [[file:../src/konserve/utils.cljc][utils]] namespace. It expands
+   both variants of the code and replaces the =core.async= operations =go= and
+   =<!= (like async & await) with the synchronous =no-ops= (=do=). Feel free to
+   use it as well, but be aware that it is not yet a hygienic macro
+   transformation (you can get a conflict with it if you use the translated
+   `=go...=` and `=<..=` names as your variable names (which is unlikely, but
+   possible). It is also totally fine for implementations to duplicate code
+   between synchronous and asynchronous operations if this is easier to manage
+   than using this macro. We are in general interest in extending the abilities
+   of this cross-platform, cross-execution model meta-programming in the future.
+
+   In summary, a simple (starting) implementation can rely on konserve's
+   high-level locking (=-get-lock= can just return =nil=). It is reading values
+   selectively according to the protocol invoked and makes sure that the
+   combined write operation is atomic. In this case =:in-place?= mode is always
+   active and =atomic-move= can therefore be a no-op. Copying (for backups) with
+   =copy= is also not needed if the underlying store provides atomic writes.
+   =sync= is redundant in this case as well and can be a no-op.
+
+   Finally, if the protocols do not work for your implementation, please reach
+   out to us and we will try to fix extend them accordingly if possible. Having
+   more backing store implementations is very much in our interest.
 
 ** Error handling
    :PROPERTIES:
    :CUSTOM_ID: h:4da56b25-ed3b-432c-aff5-2a0b6143f4ac
    :END:
-   
-All internal errors must be caught and returned as a throwable object on the
-return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
-in [[file:../src/konserve/utils.cljc][utils.cljc]].
+   All internal errors must be caught and returned as a throwable object on the
+   return channel following [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][this simple pattern]]. We provide similar helper macros
+   in [[file:../src/konserve/utils.cljc][utils.cljc]]. In the future we plan to add the ability to also pass in an error
+   callback to directly call on errors.
 
+** Blocking IO
+   :PROPERTIES:
+   :CUSTOM_ID: h:ca2e0658-daaa-4166-bd50-013fcb253d57
+   :END:
+   Be aware that you must not use blocking IO operations in go-routines. The
+   easiest solution is to spawn threads with =clojure.core.async/thread=, but
+   ideally you should provide synchronous and asynchronous IO operations to provide
+   maximum scalability. In particular the usage of =<!!= and =>!!= is not allowed
+   since it will deadlock =core.async=.
 
-* Blocking IO 
-  :PROPERTIES:
-  :CUSTOM_ID: h:ca2e0658-daaa-4166-bd50-013fcb253d57
-  :END:
-  
-Be aware that you must not use blocking IO operations in go-routines. The
-easiest solution is to spawn threads with =clojure.core.async/thread=, but
-ideally you should use asynchronous IO operations to provide maximum
-scalability.
+** Serializers
+   :PROPERTIES:
+   :CUSTOM_ID: h:8ac8b35c-9afd-4309-863a-5993b17841f7
+   :END:
+   Konserve provides the protocol =PStoreSerializer= with a =-serialize= and
+   =-deserialize= method. You need to use these methods to serialize the edn
+   values, as they are supposed to be configurable by the user. This protocol is
+   also used by the =encryptor= s and =compressor= s. The
+   serializer-compressor-encryptor combination is configurable and stored in the
+   header for each value such that store reconfiguration can happen without
+   downtime and migration. This also allows to bulk copy (or cache) values from
+   another store locally without changing their representation (you only pay the IO
+   cost upfront). The current store configuration will be used whenever they are
+   updated or overwritten though.
 
+** Metadata
+   :PROPERTIES:
+   :CUSTOM_ID: h:96674cbe-3534-4627-a847-bc3075b60984
+   :END:
+   Konserve internally uses metadata that is kept separate from the operations
+   on the values. This metadata is used to track the time when values are
+   written for example, a functionality that is needed by the concurrent garbage
+   collector. The metadata itself is an =edn= map. There are no size limitations
+   of metadata fixed in the protocol, if you cannot implement your backend
+   without a size limit then please document it. Metadata can also be used by
+   third parties to track important contextual information such as user access
+   control rights, or, maybe even edit histories, and therefore supporting at
+   least a megabyte in size would be future proof. If for some very unfortunate
+   reason you have to allocate a fixed size for each metadata element then for
+   now at least 16 KiB must be supported. The =get-meta= protocol reads only the
+   metadata part of the respective key and therefore should not load or fetch
+   the actual value. This functionality is used by the garbage collector and
+   potentially other monitoring processes that otherwise would read all data
+   regularly.
 
-* Serializers
-  :PROPERTIES:
-  :CUSTOM_ID: h:8ac8b35c-9afd-4309-863a-5993b17841f7
-  :END:
-  
-Konserve provides the protocol =PStoreSerializer= with a =-serialize= and
-=-deserialize= method. You need to use these methods to serialize the edn
-values, as they are supposed to be configurable by the user. 
+   1. 20 bytes for metadata size
+   2. serialized metadata
+   3. serialized or binary value
 
+   Storing the metadata size is necessary to allow to read only the metadata or
+   value (and also to skip it) in stores that have to use one big blog and seek
+   in it (such as the filestore). You can store the metadata also separately if
+   your store allows atomic transactions over both objects, e.g. using two
+   columns in a SQL database.
 
-* Migration 
+* Migration
   :PROPERTIES:
   :CUSTOM_ID: h:6cd7020b-f14d-4feb-96b3-1db67c5cb7cb
   :END:
-  
-Sometimes the chosen internal representation of a store turns out to be
-insufficient as it was for the addition of metadata support as described in this
-document. In this unfortunate situation a migration of the existing durable data
-becomes necessary. Migrations have the following requirements:
+  Sometimes the chosen internal representation of a store turns out to be
+  insufficient as it was for the addition of metadata support as described in this
+  document. In this unfortunate situation a migration of the existing durable data
+  becomes necessary. Migrations have the following requirements:
 
-1. They must not lose data, including on concurrent garbage collection.
-2. They should work without user intervention.
-3. They should work incrementally, upgrade each key on access, allowing version
-   upgrades in production.
-4. They can break old library versions running on the same store.
+  1. They must not lose data, including on concurrent garbage collection.
+  2. They should work without user intervention.
+  3. They should work incrementally, upgrade each key on access, allowing version
+     upgrades in production.
+  4. They can break old library versions running on the same store.
 
-
-To determine the version of an old key we cannot read it since we do not know
-its version... Therefore a dedicated inspection function is needed to determine
-the version of the stored format. You can decide to store the version explicitly
-if you think this is beneficial.
-
-=TODO= Given the version and the current version of the code base we provide a
-function determining the upgrade path.
-
-You then need to provide an upgrade function between subsequent versions and can
-apply those along the path provided. The migration will be automatically
-triggered on reads.
-
-
-* Example filestore
-  :PROPERTIES:
-  :CUSTOM_ID: h:396555c3-d339-4061-9e52-ce6eda636b34
-  :END:
-   
-[[file:./figures/state_machine.png]]
-
-The figure illustrates the different paths that are taken by read or update
-operations. =io-operation=, =read-file= and =update-file= are functions in the
-[[file:../src/konserve/filestore.clj][filestore]] namespace while each phase dispatches internally on a context
-describing the top-level io operation, e.g. whether reading or writing is
-necessary. This explicit contextual environment is not strictly necessary, but
-reduces duplication of code. The filestore uses =core.async= internally, but you
-can also use callback APIs and just put the value on a channel in the end, e.g.
-through promises. Please take care to return all errors though.
-
-The filestore uses the following memory layout:
-
-1. 8 bytes for metadata size
-2. serialized metadata
-3. serialized or binary value
-
-Storing the metadata size is necessary to allow to read only the metadata (and
-also to skip it). You can store the metadata also separately if your store allows
-atomic transactions over both objects, e.g. using two columns in SQL database.
- 
+  To determine the version of an old key we cannot read it since we do not know
+  its version... the version is therefore stored in the first byte of the header
+  and will allow you to read old values in case the binary layout of konserve or
+  your implementation has to change.
 
 * Tests 
   :PROPERTIES:
   :CUSTOM_ID: h:00075680-3ce6-4329-94eb-32ec8ff9174f
   :END:
-  
-=TODO= We provide a standard test suite that your store has to satisfy to be
-compliant.
+  =TODO= We provide a =compliance-test= suite that your store has to satisfy to be
+  compliant and are working on a low-level compliance test suite for the default
+  store.
 
-* Open issues
+* Work in progress
   :PROPERTIES:
   :CUSTOM_ID: h:c884f0bf-2048-43fc-970b-b6f0a4957c8f
   :END:
-  - find a better visual language if possible
-  - integrate logging
-  - monitoring, e.g. of cache sizes, migration processes, performance ...?
+  - monitoring, e.g. of cache sizes, migration processes, performance ...
+  - benchmarks
   - document test suite
-  - generalize core.async macros and move to [[https://github.com/replikativ/superv.async/][superv.async]]

@@ -24,4 +24,6 @@
            :deploy {:extra-deps {deps-deploy/deps-deploy {:mvn/version "0.0.9"}}
                     :main-opts ["-m" "deps-deploy.deps-deploy" "deploy" "replikativ-konserve.jar"]}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
-                    :main-opts ["-m" "cljfmt.main" "check"]}}}
+                    :main-opts ["-m" "cljfmt.main" "check"]}
+           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
+                  :main-opts ["-m" "cljfmt.main" "fix"]}}}

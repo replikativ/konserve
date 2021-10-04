@@ -38,7 +38,7 @@
           {:key 4, :type :edn}
           {:key 5, :type :edn}
           {:key 8, :type :edn}}
-        (into #{} (map #(dissoc % :konserve.core/timestamp) list-keys-new)))))
+        (into #{} (map #(dissoc % :last-write) list-keys-new)))))
   (testing "binary migration single calls"
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v1-3")
           store     (<!! (old-store/new-fs-store-v1 "/tmp/konserve-fs-migration-test-v1-3"))
@@ -63,7 +63,7 @@
           {:key 4, :type :binary}
           {:key 5, :type :binary}
           {:key 8, :type :binary}}
-        (into #{} (map #(dissoc % :konserve.core/timestamp) list-keys)))))
+        (into #{} (map #(dissoc % :last-write) list-keys)))))
   (testing "binary migration list-keys"
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v1-4")
           store     (<!! (old-store/new-fs-store-v1 "/tmp/konserve-fs-migration-test-v1-4"))
@@ -74,8 +74,8 @@
       (are [x y] (= x y)
         #{{:type :stale-binary,
            :msg
-           "Old binary file detected. Use bget insteat of keys for migration."}}
-        (into #{} (map #(dissoc % :file-name) list-keys))))))
+           "Old binary file detected. Use bget instead of keys for migration."}}
+        (into #{} (map #(dissoc % :store-key) list-keys))))))
 
 (deftest old-filestore-v2
   (testing "edn migration single call. migration via get."
@@ -129,7 +129,7 @@
           {:key 4, :type :edn}
           {:key 5, :type :edn}
           {:key 8, :type :edn}}
-        (into #{} (map #(dissoc % :konserve.core/timestamp) list-keys-new)))))
+        (into #{} (map #(dissoc % :last-write) list-keys-new)))))
   (testing "binary migration single calls"
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2-3")
           store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2-3"))
@@ -154,7 +154,7 @@
           {:key 4, :type :binary}
           {:key 5, :type :binary}
           {:key 8, :type :binary}}
-        (into #{} (map #(dissoc % :konserve.core/timestamp) list-keys)))))
+        (into #{} (map #(dissoc % :last-write) list-keys)))))
   (testing "binary migration list-keys"
     (let [_         (delete-store "/tmp/konserve-fs-migration-test-v2-4")
           store     (<!! (old-store/new-fs-store "/tmp/konserve-fs-migration-test-v2-4"))
@@ -173,4 +173,4 @@
           {:key 4, :type :binary}
           {:key 5, :type :binary}
           {:key 8, :type :binary}}
-        (into #{} (map #(dissoc % :konserve.core/timestamp) list-keys))))))
+        (into #{} (map #(dissoc % :last-write) list-keys))))))

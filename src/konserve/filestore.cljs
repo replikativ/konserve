@@ -6,8 +6,8 @@
    [incognito.edn :refer [read-string-safe]]
    [konserve.serializers :as ser]
    [fress.api :as fress]
-   [konserve.protocols :refer [PEDNAsyncKeyValueStore -exists? -get -get-meta -update-in -assoc-in -dissoc
-                               PBinaryAsyncKeyValueStore -bget -bassoc
+   [konserve.protocols :refer [PEDNKeyValueStore -exists? -get -get-meta -update-in -assoc-in -dissoc
+                               PBinaryKeyValueStore -bget -bassoc
                                PStoreSerializer -serialize -deserialize]]
    [cljs.core.async :as async :refer (take! <! >! put! take! close! chan poll!)]
    [cljs.tools.reader.impl.inspect :as i])
@@ -112,14 +112,14 @@
         (go (<! (update-file))))))
 
   (defrecord FileSystemNodejsStore [folder serializer read-handlers write-handlers locks config]
-    PEDNAsyncKeyValueStore
+    PEDNKeyValueStore
     (-exists? [this key])
     (-get [this key-vec])
     (-get-meta [this key-vec])
     (-assoc-in [this key-vec meta-up val] (-update-in this key-vec (fn [_] val)))
     (-update-in [this key-vec meta-up up-fn up-fn-args])
     (-dissoc [this key] (delete-entry folder key))
-    PBinaryAsyncKeyValueStore
+    PBinaryKeyValueStore
     (-bget [this key locked-cb])
     (-bassoc [this key meta-up input]))
 
@@ -129,7 +129,7 @@
              :or   {read-handlers  (atom {})
                     write-handlers (atom {})
                     serializer     (ser/fressian-serializer)
-                    config         {:fsync true}}}]
+                    config         {:sync-blob true}}}]
     (let [_ (check-and-create-folder path)]
       (go (map->FileSystemNodejsStore {:folder         path
                                        :serializer     serializer
@@ -427,7 +427,7 @@
                  :or   {read-handlers  (atom {})
                         write-handlers (atom {})
                         serializer     (ser/fressian-serializer)
-                        config         {:fsync true}}}]
+                        config         {:sync-blob true}}}]
         (let [_ (check-and-create-folder path)
               _ (check-and-create-folder (str path "/meta"))
               _ (check-and-create-folder (str path "/data"))]
