@@ -8,10 +8,12 @@
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
-            [konserve.core :refer [go-locked locked] :as core]
-            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
+            [konserve.core :refer [#?(:clj go-locked) #?(:clj locked)] :as core]
+            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
             [taoensso.timbre :as timbre :refer [trace]]
-            [superv.async :refer [go-try- <?-]]))
+            [superv.async :refer [go-try- <?-]])
+  #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
+                            [konserve.core :refer [go-locked locked]])))
 
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32
