@@ -197,29 +197,24 @@ the code.
   (ns test-db
     (:require [konserve.filestore :refer [new-fs-store]]
               [konserve.core :as k]
-              [clojure.core.async :as async :refer [go <!]]))
+              [clojure.core.async :refer [<!]]))
 
-  (go
-    (def store (<! (new-fs-store "/tmp/store")))
+  (def store (<! (new-fs-store "/tmp/store")))
 
-    (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-    (<! (k/get-in store ["foo"]))
-    (<! (k/exists? store "foo"))
+  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+  (<! (k/get-in store ["foo"]))
+  (<! (k/exists? store "foo"))
 
-    (<! (k/assoc-in store [:bar] 42))
-    (<! (k/update-in store [:bar] inc))
-    (<! (k/get-in store [:bar]))
-    (<! (k/dissoc store :bar))
+  (<! (k/assoc-in store [:bar] 42))
+  (<! (k/update-in store [:bar] inc))
+  (<! (k/get-in store [:bar]))
+  (<! (k/dissoc store :bar))
 
-    (<! (k/append store :error-log {:type :horrible}))
-    (<! (k/log store :error-log))
+  (<! (k/append store :error-log {:type :horrible}))
+  (<! (k/log store :error-log))
 
-    (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-      (time (<! (k/bassoc store "banana" ba))))
-
-    (<! (k/bget store "banana"
-                (fn [{is :input-stream}]
-                  (go (your-read-does-all-work-here is))))))
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+    (time (<! (k/bassoc store "banana" ba))))
 #+END_SRC
 
 And the following synchronous code if you are not using core.async in your scope: 
@@ -228,7 +223,7 @@ And the following synchronous code if you are not using core.async in your scope
     (:require [konserve.filestore :refer [new-fs-store]]
               [konserve.core :as k]))
 
-  (def store (new-fs-store "/tmp/store" {:sync? true}))
+  (def store (new-fs-store "/tmp/store" :opts {:sync? true}))
 
   (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
   (k/get-in store ["foo"] nil {:sync? true})
