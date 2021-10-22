@@ -12,7 +12,7 @@
                                PKeyIterable]]
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
                                          -copy -create-blob -delete -exists
-                                         -keys -path -sync-store
+                                         -keys -sync-store
                                          -close -get-lock -sync
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
@@ -32,16 +32,28 @@
   (-release [this env]
     (if (:sync? env) nil (go-try- nil))))
 
+(defn key->store-key [key]
+  (str (uuid key) ".ksv"))
+
+(defn store-key->uuid-key [store-key]
+  (cond
+    (.endsWith store-key ".ksv") (subs store-key 0 (- (.length store-key) 4))
+    (.endsWith store-key ".ksv.new") (subs store-key 0 (- (.length store-key) 8))
+    (.endsWith store-key ".ksv.backup") (subs store-key 0 (- (.length store-key) 11))
+    :else (throw (ex-info (str "Invalid konserve store key: " store-key)
+                          {:key store-key}))))
+
 (defn update-blob
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."
-  [backing path serializer write-handlers
+  [backing store-key serializer write-handlers
    {:keys [base key-vec compressor encryptor store-key up-fn up-fn-meta
            config operation input sync? version] :as env} [old-meta old-value]]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [[key & rkey] key-vec
+          store-key (key->store-key key)
           to-array (fn [value]
                      (let [bos (ByteArrayOutputStream.)]
                        (try (-serialize (encryptor (compressor serializer))
@@ -53,19 +65,18 @@
                                  (if-not (empty? rkey)
                                    (update-in old-value rkey up-fn)
                                    (up-fn old-value)))
-
-          path-new             (<?- (-path backing (if (:in-place? config)
-                                                     store-key
-                                                     (str store-key ".new"))
-                                           env))
+          new-store-key (if (:in-place? config)
+                                 store-key
+                                 (str store-key ".new"))
+          backup-store-key (str store-key ".backup")
           _ (when (:in-place? config) ;; let's back things up before writing then
-              (trace "backing up to blob: " (str store-key ".backup") " for key " key)
-              (<?- (-copy backing path-new (<?- (-path backing (str store-key ".backup") env)) env)))
+              (trace "backing up to blob: " backup-store-key " for key " key)
+              (<?- (-copy backing store-key backup-store-key env)))
           meta-arr             (to-array meta)
           meta-size            (count meta-arr)
           header               (create-header version
                                               serializer compressor encryptor meta-size)
-          ac-new               (<?- (-create-blob backing path-new env))]
+          ac-new               (<?- (-create-blob backing new-store-key env))]
       (try
         (<?- (-write-header ac-new header env))
         (<?- (-write-meta ac-new meta-arr env))
@@ -82,7 +93,7 @@
 
         (when-not (:in-place? config)
           (trace "moving blob: " key)
-          (<?- (-atomic-move backing path-new path env)))
+          (<?- (-atomic-move backing new-store-key store-key env)))
         (if (= operation :write-edn) [old-value value] true)
         (finally
           (<?- (-close ac-new env))))))))
@@ -139,12 +150,11 @@
    (go-try-
     (let [{:keys [key-vec base]} env
           key          (first key-vec)
-          store-key    (str base "/" (uuid key) ".ksv")
-          path         (<?- (-path backing store-key env))
-          blob-exists? (<?- (-exists backing path env))]
+          store-key    (key->store-key key)
+          blob-exists? (<?- (-exists backing store-key env))]
       (if blob-exists?
         (try
-          (<?- (-delete backing path env))
+          (<?- (-delete backing store-key env))
           true
           (catch Exception e
             (throw (ex-info "Could not delete key."
@@ -189,11 +199,10 @@
    (go-try-
     (let [key           (first  key-vec)
           uuid-key      (uuid key)
-          store-key     (str base "/" uuid-key ".ksv")
+          store-key     (key->store-key key)
           env           (assoc env :store-key store-key)
-          path          (<?- (-path backing store-key env))
-          store-key-exists?  (<?- (-exists backing path env))
-          old-store-key (when detect-old-blobs
+          store-key-exists?  (<?- (-exists backing store-key env))
+          old-path (when detect-old-blobs
                           (let [old-meta (str base "/meta/" uuid-key)
                                 old (str base "/"  uuid-key)
                                 old-binary (str base "/B_"  uuid-key)]
@@ -201,10 +210,10 @@
                                 (@detect-old-blobs old)
                                 (@detect-old-blobs old-binary))))
           serializer    (get serializers default-serializer)]
-      (if (and old-store-key (not store-key-exists?))
-        (<?- (migrate-in-io-operation old-store-key store-key env serializer read-handlers write-handlers))
+      (if (and old-path (not store-key-exists?))
+        (<?- (migrate-in-io-operation old-path store-key env serializer read-handlers write-handlers))
         (if (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
-          (let [ac (<?- (-create-blob backing path env))
+          (let [ac (<?- (-create-blob backing store-key env))
                 lock   (when (:lock-blob? config)
                          (trace "Acquiring blob lock for: " (first key-vec) (str ac))
                          (<?- (get-lock ac (first key-vec) env)))]
@@ -213,7 +222,7 @@
                           (<?- (read-blob ac read-handlers serializers env))
                           [nil nil])]
                 (if (or (= :write-edn operation) (= :write-binary operation))
-                  (<?- (update-blob backing path serializer write-handlers env old))
+                  (<?- (update-blob backing store-key serializer write-handlers env old))
                   old))
               (finally
                 (when (:lock-blob? config)
@@ -229,23 +238,21 @@
   (async+sync
    sync? *default-sync-translation*
    (go-try-
-    (let [path (<?- (-path backing base env))
-          serializer (get serializers (:default-serializer env))
-          blob-paths (<?- (-keys backing path env))]
+    (let [serializer (get serializers (:default-serializer env))
+          store-keys (<?- (-keys backing env))]
       (loop [list-keys  #{}
-             [path & blob-paths] blob-paths]
-        (if path
+             [store-key & store-keys] store-keys]
+        (if store-key
           (cond
-            (or (ends-with? (str path) ".new")
-                (ends-with? (str path) ".backup"))
-            (recur list-keys blob-paths)
+            (or (ends-with? store-key ".new")
+                (ends-with? store-key".backup"))
+            (recur list-keys store-keys)
 
-            (ends-with? (str path) ".ksv")
-            (let [ac          (<?- (-create-blob backing path env))
-                  path-name   (str path)
-                  env         (update-in env [:msg :keys] (fn [_] path-name))
+            (ends-with? store-key ".ksv")
+            (let [ac          (<?- (-create-blob backing store-key env))
+                  env         (update-in env [:msg :keys] (fn [_] store-key))
                   lock   (when (and (:in-place? config) (:lock-blob? config))
-                           (trace "Acquiring blob lock for: " path-name (str ac))
+                           (trace "Acquiring blob lock for: " store-key (str ac))
                            (<?- (-get-lock ac env)))]
               (recur
                (try
@@ -256,13 +263,15 @@
                  (finally
                    (<?- (-release lock env))
                    (<?- (-close ac env))))
-               blob-paths))
+               store-keys))
 
             :else ;; need migration
-            (let [[list-keys blob-paths]
-                  (<?- (migrate-in-list-keys backing path base env serializer read-handlers write-handlers
-                                             list-keys blob-paths))]
-              (recur list-keys blob-paths)))
+            (let [[list-keys store-keys]
+                  (<?- (migrate-in-list-keys backing store-key base env serializer read-handlers write-handlers
+                                             list-keys store-keys))]
+              (println "lk" list-keys)
+              (println "sk " store-keys)
+              (recur list-keys store-keys)))
           list-keys))))))
 
 (defrecord DefaultStore [version base backing serializers default-serializer compressor encryptor
@@ -274,7 +283,7 @@
      (:sync? env) *default-sync-translation*
      (go-try-
       (let [uuid-key (uuid key)
-            path (str base "/" uuid-key ".ksv")]
+            store-key (key->store-key key)]
         (or
          ;; filestore specific patch to detect existing old values
          (when detected-old-blobs
@@ -284,9 +293,7 @@
              (or (@detected-old-blobs old-meta)
                  (@detected-old-blobs old)
                  (@detected-old-blobs old-binary))))
-         (<?- (-exists backing
-                       (<?- (-path backing path env))
-                       env)))))))
+         (<?- (-exists backing store-key env)))))))
   (-get-in [this key-vec not-found opts]
     (let [{:keys [sync?]} opts]
       (async+sync
@@ -437,7 +444,7 @@
                   :msg {:type :read-all-keys-error}}))))
 
 (defn new-default-store
-  "Create general store in given base path of backing store."
+  "Create general store in given base of backing store."
   [base backing
    old-files
    migrate-in-io-operation

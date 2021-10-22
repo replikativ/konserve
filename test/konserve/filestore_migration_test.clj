@@ -26,6 +26,7 @@
           list-old-store (<!! (old-store/list-keys store))
           new-store      (<!! (new-fs-store "/tmp/konserve-fs-migration-test-v1-2" :detect-old-file-schema? true))
           list-keys-new  (<!! (keys new-store))]
+      (println "new keys" list-keys-new)
       (are [x y] (= x y)
         #{[4] [7] [6] [9] [3] [8] [0] [5] [2] [1]} list-old-store
         #{{:key 0, :type :edn}
