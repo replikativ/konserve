@@ -9,7 +9,7 @@
   (doseq [opts [{:sync? false} {:sync? true}]
           :let [<!! (if (:sync? opts) identity <!!)]]
     (let [_ (fstore/delete-store "/tmp/cache-store")
-          test-store (<!! (fstore/new-fs-store "/tmp/cache-store" :opts opts))
+          test-store (<!! (fstore/connect-fs-store "/tmp/cache-store" :opts opts))
           store (k/ensure-cache test-store)]
 
       (testing "Test the cache API."

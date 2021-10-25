@@ -3,7 +3,7 @@
    [clojure.java.io :as io]
    [konserve.compressor :refer [null-compressor]]
    [konserve.encryptor :refer [null-encryptor]]
-   [konserve.impl.default :refer [update-blob new-default-store key->store-key store-key->uuid-key]]
+   [konserve.impl.default :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.protocols :refer [-deserialize]]
    [clojure.string :refer [includes? ends-with?]]
    [konserve.impl.storage-layout :refer [PBackingStore
@@ -18,13 +18,13 @@
    [clojure.core.async :refer [go <!! chan close! put!]]
    [taoensso.timbre :refer [info trace]])
   (:import
-    [java.io ByteArrayInputStream FileInputStream]
-    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
-    [java.nio ByteBuffer]
-    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption
-                   StandardOpenOption]
-    [sun.nio.ch FileLockImpl]
-    (java.util Date UUID)))
+   [java.io ByteArrayInputStream FileInputStream]
+   [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
+   [java.nio ByteBuffer]
+   [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption
+    StandardOpenOption]
+   [sun.nio.ch FileLockImpl]
+   (java.util Date UUID)))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -64,14 +64,31 @@
         e))))
 
 (defn list-files [directory]
+  "Lists all files on the first level of a directory."
   (let [root (Paths/get directory (into-array String []))
         ds (Files/newDirectoryStream root)
         files (mapv (fn [^Path path]
-                     (println "pr" (str (.relativize root path)))
-                     (str (.relativize root path))) ds)]
+                      (println "pr" (str (.relativize root path)))
+                      (str (.relativize root path))) ds)]
     (println directory "files " files)
     (.close ds)
     files))
+
+(defn count-konserve-keys [dir]
+  "Counts konserve files in the directory."
+  (reduce (fn [c path] (if (.endsWith path ".ksv") (inc c) c))
+          0
+          (list-files dir)))
+
+(defn store-exists?
+  "Checks if path exists."
+  [base]
+  (let [f (io/file base)]
+    (if (.exists f)
+      (do (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
+          true)
+      (do (info "Store directory at " (str base) " does not exist.")
+          false))))
 
 (declare migrate-old-files migrate migrate-file-v2 migrate-file-v1)
 
@@ -88,10 +105,10 @@
                              (FileChannel/open path standard-open-option)
                              (AsynchronousFileChannel/open path standard-open-option))]
       (if sync? ac (go ac))))
-  (-delete [_this store-key env]
+  (-delete-blob [_this store-key env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try- (Files/delete (Paths/get base (into-array String [store-key]))))))
-  (-exists [_this store-key env]
+  (-blob-exists? [_this store-key env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try- (Files/exists (Paths/get base (into-array String [store-key])) (into-array LinkOption [])))))
 
@@ -137,21 +154,25 @@
   (-atomic-move [_this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                  (Files/move (Paths/get base (into-array String [from]))
-                              (Paths/get base (into-array String [to]))
-                              (into-array [StandardCopyOption/ATOMIC_MOVE])))))
+                 (Files/move (Paths/get base (into-array String [from]))
+                             (Paths/get base (into-array String [to]))
+                             (into-array [StandardCopyOption/ATOMIC_MOVE])))))
   (-create-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
                  (check-and-create-backing-store base))))
-  (-sync-store [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (sync-base base))))
   (-delete-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (delete-store (:base env))))))
+                 (delete-store (:base env)))))
+  (-store-exists? [_this env]
+    (async+sync (:sync? env) *default-sync-translation*
+                (go-try-
+                 (store-exists? (:base env)))))
+  (-sync-store [_this env]
+    (async+sync (:sync? env) *default-sync-translation*
+                (go-try-
+                 (sync-base base)))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
@@ -537,122 +558,120 @@
         size-meta            (.size ac-meta-file)]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-      (let [{:keys [format key]} (->> (<?- (-read ac-meta-file 0 size-meta
-                                                  {:type :read-meta-old-error
-                                                   :path meta-path}
-                                                  env))
-                                      (ByteArrayInputStream.)
-                                      (-deserialize serializer read-handlers))
-            store-key (key->store-key key)
-            data         (when (= :edn format)
-                           (->> (<?- (-read ac-data-file 0 (.size ac-data-file)
-                                            {:type :read-data-old-error
-                                             :path data-path}
-                                            env))
-                                (ByteArrayInputStream.)
-                                (-deserialize serializer read-handlers)))
-            [meta old]   (if (= :binary format)
-                           [{:key key :type :binary :last-write (Date.)}
-                            {:operation :write-binary
-                             :input     (if input input (FileInputStream. data-store-key))
-                             :msg       {:type :write-binary-error
-                                         :key  key}}]
-                           [{:key key :type :edn :last-write (Date.)}
-                            {:operation :write-edn
-                             :up-fn     (if up-fn (up-fn data) (fn [_] data))
-                             :msg       {:type :write-edn-error
-                                         :key  key}}])
-            env          (merge {:version    version
-                                 :compressor compressor
-                                 :encryptor  encryptor
-                                 :buffer-size buffer-size
-                                 :base base
-                                 :store-key  store-key
-                                 :key-vec [key]
-                                 :up-fn-meta (fn [_] meta)}
-                                old)
-            return-value (fn [r]
-                           (Files/delete meta-path)
-                           (Files/delete data-path)
-                           (swap! detected-old-blobs disj old-path) r)]
-        (if (contains? #{:write-binary :write-edn} operation)
-          (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))
-          (let [value (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))]
-            (if (= operation :read-meta)
-              (return-value meta)
-              (if (= operation :read-binary)
-                (let [file-size (.size ac-data-file)
-                      start-byte 0
-                      stop-byte  file-size
-                      res (<?- (-read ac-data-file start-byte stop-byte
-                                      {:type :migration-v2-binary-read-error
-                                       :key key}
-                                      (assoc env
-                                             :locked-cb locked-cb
-                                             :operation :read-binary)))]
-                  (println "res" res)
-                  (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)}))
-                  (Files/delete meta-path)
-                  (Files/delete data-path))
-                (return-value (second value)))))))
-      (finally
-        (<?- (-close ac-data-file env))
-        (<?- (-close ac-meta-file env)))))))
+                 (let [{:keys [format key]} (->> (<?- (-read ac-meta-file 0 size-meta
+                                                             {:type :read-meta-old-error
+                                                              :path meta-path}
+                                                             env))
+                                                 (ByteArrayInputStream.)
+                                                 (-deserialize serializer read-handlers))
+                       store-key (key->store-key key)
+                       data         (when (= :edn format)
+                                      (->> (<?- (-read ac-data-file 0 (.size ac-data-file)
+                                                       {:type :read-data-old-error
+                                                        :path data-path}
+                                                       env))
+                                           (ByteArrayInputStream.)
+                                           (-deserialize serializer read-handlers)))
+                       [meta old]   (if (= :binary format)
+                                      [{:key key :type :binary :last-write (Date.)}
+                                       {:operation :write-binary
+                                        :input     (if input input (FileInputStream. data-store-key))
+                                        :msg       {:type :write-binary-error
+                                                    :key  key}}]
+                                      [{:key key :type :edn :last-write (Date.)}
+                                       {:operation :write-edn
+                                        :up-fn     (if up-fn (up-fn data) (fn [_] data))
+                                        :msg       {:type :write-edn-error
+                                                    :key  key}}])
+                       env          (merge {:version    version
+                                            :compressor compressor
+                                            :encryptor  encryptor
+                                            :buffer-size buffer-size
+                                            :base base
+                                            :store-key  store-key
+                                            :key-vec [key]
+                                            :up-fn-meta (fn [_] meta)}
+                                           old)
+                       return-value (fn [r]
+                                      (Files/delete meta-path)
+                                      (Files/delete data-path)
+                                      (swap! detected-old-blobs disj old-path) r)]
+                   (if (contains? #{:write-binary :write-edn} operation)
+                     (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))
+                     (let [value (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))]
+                       (if (= operation :read-meta)
+                         (return-value meta)
+                         (if (= operation :read-binary)
+                           (let [file-size (.size ac-data-file)
+                                 start-byte 0
+                                 stop-byte  file-size
+                                 res (<?- (-read ac-data-file start-byte stop-byte
+                                                 {:type :migration-v2-binary-read-error
+                                                  :key key}
+                                                 (assoc env
+                                                        :locked-cb locked-cb
+                                                        :operation :read-binary)))]
+                             (println "res" res)
+                             (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)}))
+                             (Files/delete meta-path)
+                             (Files/delete data-path))
+                           (return-value (second value)))))))
+                 (finally
+                   (<?- (-close ac-data-file env))
+                   (<?- (-close ac-meta-file env)))))))
 
 (defn migrate-old-files [{:keys [base] :as backing} old-store-key serializer read-handlers write-handlers {:keys [sync?] :as env}]
   (println "migrate-old-files" old-store-key base backing)
   (async+sync
-    sync? *sync-translation*
-    (go-try-
-  (let [env       (update-in env [:msg :keys] (fn [_] old-store-key))]
-    (cond
+   sync? *sync-translation*
+   (go-try-
+    (let [env       (update-in env [:msg :keys] (fn [_] old-store-key))]
+      (cond
       ;; ignore the data base
-      (includes? old-store-key "data") (do "data" [])
+        (includes? old-store-key "data") (do "data" [])
 
-      (includes? old-store-key "meta")
-      (vec
-        (let [meta-base (str base "/meta")]
-          (println "old-store-key key " old-store-key)
-          (println "meta-base" meta-base )
-          (println "files " (list-files meta-base))
-          (loop [meta-list-keys #{}
-                 [meta-key & meta-store-keys] (list-files meta-base)]
-            (println "meta key " meta-key)
-            (if meta-key
-              (let [old-path (str meta-base "/" meta-key)
-                    store-key     (str meta-key ".ksv")
-                    _ (println "store-key" store-key)
-                    env           (assoc-in env [:msg :keys] old-path)
-                    env           (assoc env :operation :read-meta)]
-                (println  env)
-                (recur
+        (includes? old-store-key "meta")
+        (vec
+         (let [meta-base (str base "/meta")]
+           (println "old-store-key key " old-store-key)
+           (println "meta-base" meta-base)
+           (println "files " (list-files meta-base))
+           (loop [meta-list-keys #{}
+                  [meta-key & meta-store-keys] (list-files meta-base)]
+             (println "meta key " meta-key)
+             (if meta-key
+               (let [old-path (str meta-base "/" meta-key)
+                     store-key     (str meta-key ".ksv")
+                     _ (println "store-key" store-key)
+                     env           (assoc-in env [:msg :keys] old-path)
+                     env           (assoc env :operation :read-meta)]
+                 (println  env)
+                 (recur
                   (conj meta-list-keys
                         (<?- (migrate-file-v2 backing
                                               old-path
                                               serializer read-handlers write-handlers
                                               env)))
                   meta-store-keys))
-              meta-list-keys))))
-      (includes? old-store-key "B_")
-      (do (println "binary")
-          [{:store-key old-store-key
-            :type      :stale-binary
-            :msg       "Old binary file detected. Use bget instead of keys for migration."}])
+               meta-list-keys))))
+        (includes? old-store-key "B_")
+        (do (println "binary")
+            [{:store-key old-store-key
+              :type      :stale-binary
+              :msg       "Old binary file detected. Use bget instead of keys for migration."}])
 
-      :else
-      [(let [old-path (str base "/" old-store-key)
-             _ (println "v1")
-             key-vec nil
-             _ (println "base" base)
-             _ (println "old-path" old-path)
-             key (<?- (migrate-file-v1 backing
-                                       old-path key-vec
-                                       serializer read-handlers write-handlers
-                                       env))]
-         (println "additional key: " key)
-         key)])))))
-
-
+        :else
+        [(let [old-path (str base "/" old-store-key)
+               _ (println "v1")
+               key-vec nil
+               _ (println "base" base)
+               _ (println "old-path" old-path)
+               key (<?- (migrate-file-v1 backing
+                                         old-path key-vec
+                                         serializer read-handlers write-handlers
+                                         env))]
+           (println "additional key: " key)
+           key)])))))
 
 (defn detect-old-file-schema [base]
   (reduce
@@ -667,7 +686,7 @@
    #{}
    (Files/newDirectoryStream (Paths/get base (into-array String [])))))
 
-(defn new-fs-store
+(defn connect-fs-store
   "Create Filestore in given path.
   Optional serializer, read-handlers, write-handlers, buffer-size and config (for fsync) can be changed.
   Defaults are
@@ -694,12 +713,12 @@
                                                         config)}
                             (dissoc params :config))
         detect-old-blob (when detect-old-file-schema?
-                             (atom (detect-old-file-schema path)))
+                          (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-blob)
                                (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
         backing            (BackingFilestore. path detect-old-blob)]
-    (new-default-store backing store-config)))
+    (connect-default-store backing store-config)))
 
 (comment
 
@@ -709,7 +728,7 @@
 
   (do
     (delete-store "/tmp/konserve")
-    (def store (<! (new-fs-store "/tmp/konserve"))))
+    (def store (<! (connect-fs-store "/tmp/konserve"))))
 
   (<! (-assoc-in store ["bar"] (fn [e] {:foo "OoO"}) 1123123123123123123123123 {:sync? false}))
   (<! (k/exists? store "bar" {:sync? false}))
@@ -750,7 +769,7 @@
 
   (require '[konserve.core :as k])
 
-  (def store (new-fs-store "/tmp/store" :opts {:sync? true}))
+  (def store (connect-fs-store "/tmp/store" :opts {:sync? true}))
 
   (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
   (k/get-in store ["foo"] nil {:sync? true})
@@ -767,15 +786,14 @@
   (k/bassoc store :binbar (byte-array (range 10)) {:sync? true})
   (k/bget store :binbar (fn [{:keys [input-stream]}]
                           (map byte (slurp input-stream)))
-          {:sync? true})
-  )
+          {:sync? true}))
 
 (comment
 
   (require '[konserve.core :as k])
   (require '[clojure.core.async :refer [<!]])
 
-  (def store (<! (new-fs-store "/tmp/store")))
+  (def store (<! (connect-fs-store "/tmp/store")))
 
   (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
   (<! (k/get-in store ["foo"]))
@@ -792,6 +810,4 @@
   (<!! (k/bassoc store :binbar (byte-array (range 10)) {:sync? false}))
   (<!! (k/bget store :binbar (fn [{:keys [input-stream]}]
                                (map byte (slurp input-stream)))
-               {:sync? false}))
-
-  )
+               {:sync? false})))

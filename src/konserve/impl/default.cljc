@@ -11,7 +11,7 @@
                                -serialize -deserialize
                                PKeyIterable]]
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
-                                         -copy -create-blob -delete -exists
+                                         -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
                                          -migratable -migrate -handle-foreign-key
                                          -close -get-lock -sync
@@ -67,8 +67,8 @@
                                    (update-in old-value rkey up-fn)
                                    (up-fn old-value)))
           new-store-key (if (:in-place? config)
-                                 store-key
-                                 (str store-key ".new"))
+                          store-key
+                          (str store-key ".new"))
           backup-store-key (str store-key ".backup")
           _ (when (:in-place? config) ;; let's back things up before writing then
               (trace "backing up to blob: " backup-store-key " for key " key)
@@ -152,10 +152,10 @@
     (let [{:keys [key-vec base]} env
           key          (first key-vec)
           store-key    (key->store-key key)
-          blob-exists? (<?- (-exists backing store-key env))]
+          blob-exists? (<?- (-blob-exists? backing store-key env))]
       (if blob-exists?
         (try
-          (<?- (-delete backing store-key env))
+          (<?- (-delete-blob backing store-key env))
           true
           (catch Exception e
             (throw (ex-info "Could not delete key."
@@ -201,7 +201,7 @@
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key)
           serializer    (get serializers default-serializer)
-          store-key-exists? (<?- (-exists backing store-key env))
+          store-key-exists? (<?- (-blob-exists? backing store-key env))
           migration-key (<?- (-migratable backing key store-key env))]
       (if (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
@@ -239,7 +239,7 @@
         (if store-key
           (cond
             (or (ends-with? store-key ".new")
-                (ends-with? store-key".backup"))
+                (ends-with? store-key ".backup"))
             (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
@@ -277,12 +277,12 @@
   PEDNKeyValueStore
   (-exists? [_ key env]
     (async+sync
-      (:sync? env) *default-sync-translation*
-      (go-try-
-        (let [store-key (key->store-key key)]
-          (or (<?- (-exists backing store-key env))
-              (<?- (-migratable backing key store-key env))
-              false)))))
+     (:sync? env) *default-sync-translation*
+     (go-try-
+      (let [store-key (key->store-key key)]
+        (or (<?- (-blob-exists? backing store-key env))
+            (<?- (-migratable backing key store-key env))
+            false)))))
   (-get-in [this key-vec not-found opts]
     (let [{:keys [sync?]} opts]
       (async+sync
@@ -417,7 +417,7 @@
                   :buffer-size buffer-size
                   :msg {:type :read-all-keys-error}}))))
 
-(defn new-default-store
+(defn connect-default-store
   "Create general store in given base of backing store."
   [backing
    {:keys [default-serializer serializers compressor encryptor

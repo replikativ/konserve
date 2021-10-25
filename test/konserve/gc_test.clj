@@ -3,7 +3,7 @@
             [clojure.test :refer :all]
             [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]
-            [konserve.filestore :refer [new-fs-store delete-store]]
+            [konserve.filestore :refer [connect-fs-store delete-store]]
             [clojure.core.async :refer [<!! <! go chan put! close!] :as async]))
 
 (deftest memory-store-gc-test
@@ -29,7 +29,7 @@
   (testing "Test the GC."
     (let [folder "/tmp/konserve-gc"
           _      (delete-store folder)
-          store  (<!! (new-fs-store folder))]
+          store  (<!! (connect-fs-store folder))]
       (<!! (k/assoc store :foo :bar))
       (<!! (k/assoc-in store [:foo] :bar2))
       (<!! (k/assoc-in store [:foo2] :bar2))
