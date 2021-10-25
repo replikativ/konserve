@@ -77,27 +77,27 @@
           meta-size            (count meta-arr)
           header               (create-header version
                                               serializer compressor encryptor meta-size)
-          ac-new               (<?- (-create-blob backing new-store-key env))]
+          new-blob             (<?- (-create-blob backing new-store-key env))]
       (try
-        (<?- (-write-header ac-new header env))
-        (<?- (-write-meta ac-new meta-arr env))
+        (<?- (-write-header new-blob header env))
+        (<?- (-write-meta new-blob meta-arr env))
         (if (= operation :write-binary)
-          (<?- (-write-binary ac-new meta-size input env))
+          (<?- (-write-binary new-blob meta-size input env))
           (let [value-arr            (to-array value)]
-            (<?- (-write-value ac-new value-arr meta-size env))))
+            (<?- (-write-value new-blob value-arr meta-size env))))
 
         (when (:sync-blob? config)
           (trace "syncing for " key)
-          (<?- (-sync ac-new env))
+          (<?- (-sync new-blob env))
           (<?- (-sync-store backing env)))
-        (<?- (-close ac-new env))
+        (<?- (-close new-blob env))
 
         (when-not (:in-place? config)
           (trace "moving blob: " key)
           (<?- (-atomic-move backing new-store-key store-key env)))
         (if (= operation :write-edn) [old-value value] true)
         (finally
-          (<?- (-close ac-new env))))))))
+          (<?- (-close new-blob env))))))))
 
 (defn read-header [ac serializers env]
   (let [{:keys [sync?]} env]
@@ -108,40 +108,40 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [ac read-handlers serializers {:keys [sync? operation locked-cb] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
-    (let [[_ serializer compressor encryptor meta-size] (<?- (read-header ac serializers env))
+    (let [[_ serializer compressor encryptor meta-size] (<?- (read-header blob serializers env))
           fn-read (partial -deserialize
                            (compressor (encryptor serializer))
                            read-handlers)]
       (case operation
         :read-meta (let [bais-read (ByteArrayInputStream.
-                                    (<?- (-read-meta ac meta-size env)))
+                                    (<?- (-read-meta blob meta-size env)))
                          value     (fn-read bais-read)
                          _         (.close bais-read)]
                      value)
         :read-edn (let [bais-read (ByteArrayInputStream.
-                                   (<?- (-read-value ac meta-size env)))
+                                   (<?- (-read-value blob meta-size env)))
                         value     (fn-read bais-read)
                         _         (.close bais-read)]
                     value)
         :write-binary          (let [bais-read (ByteArrayInputStream.
-                                                (<?- (-read-meta ac meta-size env)))
+                                                (<?- (-read-meta blob meta-size env)))
                                      meta      (fn-read bais-read)
                                      _         (.close bais-read)]
                                  [meta nil])
         :write-edn             (let [bais-meta  (ByteArrayInputStream.
-                                                 (<?- (-read-meta ac meta-size env)))
+                                                 (<?- (-read-meta blob meta-size env)))
                                      meta       (fn-read bais-meta)
                                      _          (.close bais-meta)
                                      bais-value (ByteArrayInputStream.
-                                                 (<?- (-read-value ac meta-size env)))
+                                                 (<?- (-read-value blob meta-size env)))
                                      value     (fn-read bais-value)
                                      _          (.close bais-value)]
                                  [meta value])
-        :read-binary           (<?- (-read-binary ac meta-size locked-cb env)))))))
+        :read-binary           (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (defn delete-blob
   "Remove/Delete key-value pair of backing store by given key. If success it will return true."
@@ -161,7 +161,7 @@
             (throw (ex-info "Could not delete key."
                             {:key key
                              :base base
-                             :exeption e}))))
+                             :exception e}))))
         false)))))
 
 (def ^:const max-lock-attempts 100)
@@ -206,29 +206,28 @@
       (if (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
         (if (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
-          (let [ac (<?- (-create-blob backing store-key env))
+          (let [blob (<?- (-create-blob backing store-key env))
                 lock   (when (:lock-blob? config)
-                         (trace "Acquiring blob lock for: " (first key-vec) (str ac))
-                         (<?- (get-lock ac (first key-vec) env)))]
+                         (trace "Acquiring blob lock for: " key (str blob))
+                         (<?- (get-lock blob (first key-vec) env)))]
             (try
               (let [old (if (and store-key-exists? (not overwrite?))
-                          (<?- (read-blob ac read-handlers serializers env))
+                          (<?- (read-blob blob read-handlers serializers env))
                           [nil nil])]
                 (if (or (= :write-edn operation) (= :write-binary operation))
                   (<?- (update-blob backing store-key serializer write-handlers env old))
                   old))
               (finally
                 (when (:lock-blob? config)
-                  (trace "Releasing lock for " (first key-vec) (str ac))
+                  (trace "Releasing lock for " (first key-vec) (str blob))
                   (<?- (-release lock env)))
-                (<?- (-close ac env)))))
+                (<?- (-close blob env)))))
           nil))))))
 
 (defn list-keys
   "Return all keys in the store."
   [{:keys [backing]}
    serializers read-handlers write-handlers {:keys [sync? config] :as env}]
-  (println "list-keys sync?" sync?)
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -243,32 +242,22 @@
             (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
-            (let [_ (println "ksv")
-                  ac          (<?- (-create-blob backing store-key env))
+            (let [blob        (<?- (-create-blob backing store-key env))
                   env         (update-in env [:msg :keys] (fn [_] store-key))
                   lock   (when (and (:in-place? config) (:lock-blob? config))
-                           (trace "Acquiring blob lock for: " store-key (str ac))
-                           (<?- (-get-lock ac env)))]
-              (println "blob" (<?- (read-blob ac read-handlers serializers env)))
-              (println "keys" keys)
-              (recur
-               (try
-                 (conj keys (<?- (read-blob ac read-handlers serializers env)))
-                    ;; it can be that the blob has been deleted, ignore reading errors
-                 (catch Exception _
-                   keys)
-                 (finally
-                   (<?- (-release lock env))
-                   (<?- (-close ac env))))
-               store-keys))
+                           (trace "Acquiring blob lock for: " store-key (str blob))
+                           (<?- (-get-lock blob env)))
+                  keys-new (try (conj keys (<?- (read-blob blob read-handlers serializers env)))
+                                    ;; it can be that the blob has been deleted, ignore reading errors
+                                (catch Exception _
+                                  keys)
+                                (finally
+                                  (<?- (-release lock env))
+                                  (<?- (-close blob env))))]
+              (recur keys-new store-keys))
 
             :else ;; needs migration
             (let [additional-keys (<! (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
-              (println "sync?" sync?)
-              (println "lk" additional-keys)
-              (println "store-keys" store-keys)
-              (println "keys" keys)
-
               (recur (into keys additional-keys) store-keys)))
           keys))))))
 

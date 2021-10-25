@@ -68,9 +68,7 @@
   (let [root (Paths/get directory (into-array String []))
         ds (Files/newDirectoryStream root)
         files (mapv (fn [^Path path]
-                      (println "pr" (str (.relativize root path)))
                       (str (.relativize root path))) ds)]
-    (println directory "files " files)
     (.close ds)
     files))
 
@@ -90,7 +88,7 @@
       (do (info "Store directory at " (str base) " does not exist.")
           false))))
 
-(declare migrate-old-files migrate migrate-file-v2 migrate-file-v1)
+(declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
 (defrecord BackingFilestore [base detected-old-blobs]
   PBackingStore
@@ -121,7 +119,6 @@
                                  (@detected-old-blobs (str base "/B_" uuid-key))))))))
 
   (-migrate [this old-path key-vec serializer read-handlers write-handlers env]
-    (println "-migrate" old-path key-vec)
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try- (if detected-old-blobs
                            (if (clojure.string/includes? old-path "meta")
@@ -130,8 +127,7 @@
                                (<?- (migrate-file-v1 this old-path key-vec serializer read-handlers write-handlers env))
                                (do (info "Migration of" old-path "not possible without knowing original key.")
                                    false)))
-                           false
-                           #_(migrate this old-path key-vec serializer read-handlers write-handlers env)))))
+                           false))))
 
   (-handle-foreign-key [this file-or-dir serializer read-handlers write-handlers env]
     (migrate-old-files this file-or-dir serializer read-handlers write-handlers env))
@@ -458,10 +454,6 @@
    serializer read-handlers write-handlers
    {:keys [version input up-fn compressor encryptor operation locked-cb buffer-size sync?]
     :as env}]
-  (println "migrate v1")
-  (println "base" base)
-  (println "key-vec" key-vec)
-  (println "old-path" old-path)
   (let [key (first key-vec)
         store-key (key->store-key key)
         standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
@@ -471,10 +463,6 @@
                                (FileChannel/open data-path standard-open-option)
                                (AsynchronousFileChannel/open data-path standard-open-option))
         binary?              (includes? old-path "B_")]
-    (println "key" key)
-    (println "new-path" new-path)
-    (println "data-path" data-path)
-    (println "binary?" binary?)
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
 
@@ -511,9 +499,6 @@
                                        (Files/delete data-path)
                                        (swap! detected-old-blobs disj old-path)
                                        r)]
-                   (println [[nkey] data] [meta old])
-                   (println "new-path" new-path)
-                   (println "store-key" store-key)
                    (if (contains? #{:write-binary :write-edn} operation)
                      (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))
                      (let [value (<?- (update-blob backing store-key serializer write-handlers env [nil nil]))]
@@ -529,7 +514,6 @@
                                                  (assoc env
                                                         :locked-cb locked-cb
                                                         :operation :read-binary)))]
-                             (println "res" res)
                              (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)})))
                            (return-value (second value)))))))
                  (finally
@@ -544,7 +528,6 @@
    old-path
    serializer read-handlers write-handlers
    {:keys [version input up-fn locked-cb operation compressor encryptor sync? buffer-size] :as env}]
-  (println "migrate v2")
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])
         meta-path            (Paths/get old-path (into-array String []))
         data-store-key       (clojure.string/replace old-path #"meta" "data")
@@ -611,7 +594,6 @@
                                                  (assoc env
                                                         :locked-cb locked-cb
                                                         :operation :read-binary)))]
-                             (println "res" res)
                              (<?- (locked-cb {:input-stream (ByteArrayInputStream. res)}))
                              (Files/delete meta-path)
                              (Files/delete data-path))
@@ -621,7 +603,6 @@
                    (<?- (-close ac-meta-file env)))))))
 
 (defn migrate-old-files [{:keys [base] :as backing} old-store-key serializer read-handlers write-handlers {:keys [sync?] :as env}]
-  (println "migrate-old-files" old-store-key base backing)
   (async+sync
    sync? *sync-translation*
    (go-try-
@@ -633,19 +614,13 @@
         (includes? old-store-key "meta")
         (vec
          (let [meta-base (str base "/meta")]
-           (println "old-store-key key " old-store-key)
-           (println "meta-base" meta-base)
-           (println "files " (list-files meta-base))
            (loop [meta-list-keys #{}
                   [meta-key & meta-store-keys] (list-files meta-base)]
-             (println "meta key " meta-key)
              (if meta-key
                (let [old-path (str meta-base "/" meta-key)
                      store-key     (str meta-key ".ksv")
-                     _ (println "store-key" store-key)
                      env           (assoc-in env [:msg :keys] old-path)
                      env           (assoc env :operation :read-meta)]
-                 (println  env)
                  (recur
                   (conj meta-list-keys
                         (<?- (migrate-file-v2 backing
@@ -655,22 +630,17 @@
                   meta-store-keys))
                meta-list-keys))))
         (includes? old-store-key "B_")
-        (do (println "binary")
-            [{:store-key old-store-key
-              :type      :stale-binary
-              :msg       "Old binary file detected. Use bget instead of keys for migration."}])
+        [{:store-key old-store-key
+          :type      :stale-binary
+          :msg       "Old binary file detected. Use bget instead of keys for migration."}]
 
         :else
         [(let [old-path (str base "/" old-store-key)
-               _ (println "v1")
                key-vec nil
-               _ (println "base" base)
-               _ (println "old-path" old-path)
                key (<?- (migrate-file-v1 backing
                                          old-path key-vec
                                          serializer read-handlers write-handlers
                                          env))]
-           (println "additional key: " key)
            key)])))))
 
 (defn detect-old-file-schema [base]
