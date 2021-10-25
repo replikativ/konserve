@@ -530,7 +530,7 @@
             (if (= operation :read-meta)
               (return-value meta)
               (if (= operation :read-binary)
-                (let [file-size  (.size ac-data-file)
+                (let [file-size (.size ac-data-file)
                       start-byte 0
                       stop-byte  file-size
                       res (<?- (-read ac-data-file start-byte stop-byte
@@ -547,7 +547,7 @@
         (<?- (-close ac-data-file env))
         (<?- (-close ac-meta-file env)))))))
 
-(defn migrate-in-list-keys [backing path base env serializer read-handlers write-handlers
+(defn migrate-in-list-keys [backing ^Path path base env serializer read-handlers write-handlers
                             list-keys file-paths]
   (async+sync (:sync? env)
               *default-sync-translation*
@@ -563,7 +563,7 @@
                    (includes? store-key "meta")
                    [(into list-keys
                           (loop [meta-list-keys #{}
-                                 [meta-path & meta-store-keys]
+                                 [^Path meta-path & meta-store-keys]
                                  (<?- (-keys backing path env))]
                             (if meta-path
                               (let [old-store-key (-> meta-path .toString)
@@ -601,7 +601,7 @@
 (defn detect-old-file-schema [base]
   (reduce
    (fn [old-list path]
-     (let [store-key (-> path .toString)]
+     (let [store-key (-> ^Path path .toString)]
        (cond
          (or
           (includes? store-key "data")
@@ -613,31 +613,31 @@
 
 (defn new-fs-store
   "Create Filestore in given path.
-  Optional serializer, read-handerls, write-handlers, buffer-size and config (for fsync) can be changed.
+  Optional serializer, read-handlers, write-handlers, buffer-size and config (for fsync) can be changed.
   Defaults are
-  {:base         path
+  {:base           path
    :serializer     fressian-serializer
    :read-handlers  empty
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path & {:keys [default-serializer serializers compressor encryptor
-                  read-handlers write-handlers
-                  buffer-size config detect-old-file-schema? opts]
-           :or   {default-serializer :FressianSerializer
-                  compressor         null-compressor
-                  ;; lz4-compressor
-                  encryptor          null-encryptor
-                  read-handlers      (atom {})
-                  write-handlers     (atom {})
-                  buffer-size        (* 1024 1024)
-                  opts               {:sync? false}
-                  config             {:sync-blob? true
-                                      :in-place? false
-                                      :lock-blob? true}}
+  [path & {:keys [detect-old-file-schema? config]
+           :or {detect-old-file-schema? false}
            :as params}]
   ;; check config
-  (let [detect-old-version (when detect-old-file-schema?
+  (let [store-config (merge {:default-serializer :FressianSerializer
+                             :compressor         null-compressor
+                             :encryptor          null-encryptor
+                             :read-handlers      (atom {})
+                             :write-handlers     (atom {})
+                             :buffer-size        (* 1024 1024)
+                             :opts               {:sync? false}
+                             :config             (merge {:sync-blob? true
+                                                         :in-place? false
+                                                         :lock-blob? true}
+                                                        config)}
+                            (dissoc params :config))
+        detect-old-version (when detect-old-file-schema?
                              (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-version)
@@ -646,31 +646,30 @@
     (new-default-store path backing detect-old-version
                        migrate-in-io-operation
                        migrate-in-list-keys
-                       params)))
+                       store-config)))
 
 (comment
 
-  (require '[konserve.protocols :refer [-assoc-in -get -get-meta -keys -bget -bassoc]])
-
+  (require '[konserve.protocols :as p :refer [-assoc-in -get-in -get-meta -bget -bassoc]])
   (require '[konserve.core :as k])
+  (require '[clojure.core.async :refer [<!]])
 
   (do
     (delete-store "/tmp/konserve")
-    (def store (<!! (new-fs-store "/tmp/konserve"))))
+    (def store (<! (new-fs-store "/tmp/konserve"))))
 
-  (<!! (-assoc-in store ["bar"] (fn [e] {:foo "OoO"}) 1123123123123123123123123 {:sync? false}))
+  (<! (-assoc-in store ["bar"] (fn [e] {:foo "OoO"}) 1123123123123123123123123 {:sync? false}))
+  (<! (k/exists? store "bar" {:sync? false}))
 
-  (<!! (k/exists? store "bar" {:sync? false}))
+  (-get-in store ["bar"] :not-found {:sync? true})
 
-  (-get store "bar" true)
+  (-assoc-in store ["bar"] (fn [e] {:foo "foo"}) 42 {:sync? true})
 
-  (-assoc-in store ["bar"] (fn [e] {:foo "foo"}) 42 true)
+  (p/-keys store {:sync? true})
 
-  (-keys store true)
+  (<! (-bassoc store "baz" (fn [e] {:foo "baz"}) (byte-array [1 2 3]) {:sync? false}))
 
-  (<!! (-bassoc store "baz" (fn [e] {:foo "baz"}) (byte-array [1 2 3]) false))
-
-  (-bget store "baz" (fn [input] (println input)) true)
+  (-bget store "baz" (fn [input] (println input)) {:sync? true})
 
   (defn reader-helper [start-byte stop-byte store-key]
     (let [path      (Paths/get store-key (into-array String []))
@@ -693,3 +692,46 @@
            (prn "fail"))))))
 
   (reader-helper 0 4 "/tmp/konserve/2c8e57a6-ed4e-5746-9f7e-af7ff2ac25c5.ksv"))
+
+(comment
+
+  (require '[konserve.core :as k])
+
+  (def store (new-fs-store "/tmp/store" :opts {:sync? true}))
+
+  (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
+  (k/get-in store ["foo"] nil {:sync? true})
+  (k/exists? store "foo" {:sync? true})
+
+  (k/assoc-in store [:bar] 42 {:sync? true})
+  (k/update-in store [:bar] inc {:sync? true})
+  (k/get-in store [:bar] nil {:sync? true})
+  (k/dissoc store :bar {:sync? true})
+
+  (k/append store :error-log {:type :horrible} {:sync? true})
+  (k/log store :error-log {:sync? true})
+
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+    (time (k/bassoc store "banana" ba {:sync? true}))))
+
+(comment
+
+  (require '[konserve.core :as k])
+  (require '[clojure.core.async :refer [<!]])
+
+  (def store (<! (new-fs-store "/tmp/store")))
+
+  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+  (<! (k/get-in store ["foo"]))
+  (<! (k/exists? store "foo"))
+
+  (<! (k/assoc-in store [:bar] 42))
+  (<! (k/update-in store [:bar] inc))
+  (<! (k/get-in store [:bar]))
+  (<! (k/dissoc store :bar))
+
+  (<! (k/append store :error-log {:type :horrible}))
+  (<! (k/log store :error-log))
+
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+    (time (<! (k/bassoc store "banana" ba)))))

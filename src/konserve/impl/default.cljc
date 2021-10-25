@@ -22,7 +22,7 @@
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
    [clojure.core.async :refer [<! timeout]]
-   [taoensso.timbre :as timbre :refer [trace]])
+   [taoensso.timbre :refer [trace]])
   #?(:clj
      (:import
       [java.io ByteArrayOutputStream ByteArrayInputStream])))
@@ -452,35 +452,33 @@
            read-handlers      (atom {})
            write-handlers     (atom {})
            buffer-size        (* 1024 1024)
-           opts               {:sync? false}
-           config             {:sync-blob? true
-                               :in-place? false
-                               :lock-blob? true}}}]
+           opts               {:sync? false}}}]
   ;; check config
-  (async+sync
-   (:sync? opts) *default-sync-translation*
-   (go-try-
-    (if (and (:in-place? config) (not (:lock-blob? config)))
-      (throw (ex-info "You need to activate file-locking for in-place mode."
-                      {:type :store-configuration-error
-                       :config config}))
-      (let [_                  (<?- (-create-store backing opts))
-            store              (map->DefaultStore {:detected-old-blobs old-files
-                                                   :base               base
-                                                   :backing            backing
-                                                   :default-serializer default-serializer
-                                                   :serializers        (merge key->serializer serializers)
-                                                   :version  default-version
-                                                   :compressor         compressor
-                                                   :encryptor          encryptor
-                                                   :read-handlers      read-handlers
-                                                   :write-handlers     write-handlers
-                                                   :buffer-size        buffer-size
-                                                   :locks              (atom {})
-                                                   :config             (merge {:sync-blob? true
-                                                                               :in-place? false
-                                                                               :lock-blob? true}
-                                                                              config)
-                                                   :migrate-in-io-operation migrate-in-io-operation
-                                                   :migrate-in-list-keys migrate-in-list-keys})]
-        store)))))
+  (let [complete-config (merge {:sync-blob? true
+                                :in-place? false
+                                :lock-blob? true}
+                               config)]
+    (async+sync
+     (:sync? opts) *default-sync-translation*
+     (go-try-
+      (if (and (:in-place? complete-config) (not (:lock-blob? complete-config)))
+        (throw (ex-info "You need to activate file-locking for in-place mode."
+                        {:type :store-configuration-error
+                         :config complete-config}))
+        (let [_                  (<?- (-create-store backing opts))
+              store              (map->DefaultStore {:detected-old-blobs old-files
+                                                     :base               base
+                                                     :backing            backing
+                                                     :default-serializer default-serializer
+                                                     :serializers        (merge key->serializer serializers)
+                                                     :version  default-version
+                                                     :compressor         compressor
+                                                     :encryptor          encryptor
+                                                     :read-handlers      read-handlers
+                                                     :write-handlers     write-handlers
+                                                     :buffer-size        buffer-size
+                                                     :locks              (atom {})
+                                                     :config             complete-config
+                                                     :migrate-in-io-operation migrate-in-io-operation
+                                                     :migrate-in-list-keys migrate-in-list-keys})]
+          store))))))
