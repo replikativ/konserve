@@ -13,6 +13,7 @@
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
                                          -copy -create-blob -delete -exists
                                          -keys -sync-store
+                                         -migratable -migrate -handle-foreign-key
                                          -close -get-lock -sync
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
@@ -29,7 +30,7 @@
 
 (extend-protocol PBackingLock
   nil
-  (-release [this env]
+  (-release [_this env]
     (if (:sync? env) nil (go-try- nil))))
 
 (defn key->store-key [key]
@@ -47,13 +48,13 @@
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."
   [backing store-key serializer write-handlers
-   {:keys [base key-vec compressor encryptor store-key up-fn up-fn-meta
+   {:keys [key-vec compressor encryptor up-fn up-fn-meta
            config operation input sync? version] :as env} [old-meta old-value]]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [[key & rkey] key-vec
-          store-key (key->store-key key)
+          store-key (or store-key (key->store-key key))
           to-array (fn [value]
                      (let [bos (ByteArrayOutputStream.)]
                        (try (-serialize (encryptor (compressor serializer))
@@ -107,7 +108,7 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [ac read-handlers serializers {:keys [sync? operation store-key locked-cb] :as env}]
+  [ac read-handlers serializers {:keys [sync? operation locked-cb] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -191,27 +192,19 @@
 
 (defn io-operation
   "Read/Write blob. For better understanding use the flow-chart of konserve."
-  [{:keys [backing migrate-in-io-operation]} serializers read-handlers write-handlers
-   {:keys [base key-vec detect-old-blobs operation default-serializer
-           sync? overwrite? config] :as env}]
+  [{:keys [backing]} serializers read-handlers write-handlers
+   {:keys [key-vec operation default-serializer sync? overwrite? config] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [key           (first  key-vec)
-          uuid-key      (uuid key)
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key)
-          store-key-exists?  (<?- (-exists backing store-key env))
-          old-path (when detect-old-blobs
-                          (let [old-meta (str base "/meta/" uuid-key)
-                                old (str base "/"  uuid-key)
-                                old-binary (str base "/B_"  uuid-key)]
-                            (or (@detect-old-blobs old-meta)
-                                (@detect-old-blobs old)
-                                (@detect-old-blobs old-binary))))
-          serializer    (get serializers default-serializer)]
-      (if (and old-path (not store-key-exists?))
-        (<?- (migrate-in-io-operation old-path store-key env serializer read-handlers write-handlers))
+          serializer    (get serializers default-serializer)
+          store-key-exists? (<?- (-exists backing store-key env))
+          migration-key (<?- (-migratable backing key store-key env))]
+      (if (and (not store-key-exists?) migration-key)
+        (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
         (if (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
           (let [ac (<?- (-create-blob backing store-key env))
                 lock   (when (:lock-blob? config)
@@ -233,67 +226,63 @@
 
 (defn list-keys
   "Return all keys in the store."
-  [{:keys [backing migrate-in-list-keys]}
-   serializers read-handlers write-handlers {:keys [sync? config base] :as env}]
+  [{:keys [backing]}
+   serializers read-handlers write-handlers {:keys [sync? config] :as env}]
+  (println "list-keys sync?" sync?)
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [serializer (get serializers (:default-serializer env))
           store-keys (<?- (-keys backing env))]
-      (loop [list-keys  #{}
+      (loop [keys  #{}
              [store-key & store-keys] store-keys]
         (if store-key
           (cond
             (or (ends-with? store-key ".new")
                 (ends-with? store-key".backup"))
-            (recur list-keys store-keys)
+            (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
-            (let [ac          (<?- (-create-blob backing store-key env))
+            (let [_ (println "ksv")
+                  ac          (<?- (-create-blob backing store-key env))
                   env         (update-in env [:msg :keys] (fn [_] store-key))
                   lock   (when (and (:in-place? config) (:lock-blob? config))
                            (trace "Acquiring blob lock for: " store-key (str ac))
                            (<?- (-get-lock ac env)))]
+              (println "blob" (<?- (read-blob ac read-handlers serializers env)))
+              (println "keys" keys)
               (recur
                (try
-                 (conj list-keys (<?- (read-blob ac read-handlers serializers env)))
+                 (conj keys (<?- (read-blob ac read-handlers serializers env)))
                     ;; it can be that the blob has been deleted, ignore reading errors
                  (catch Exception _
-                   list-keys)
+                   keys)
                  (finally
                    (<?- (-release lock env))
                    (<?- (-close ac env))))
                store-keys))
 
-            :else ;; need migration
-            (let [[list-keys store-keys]
-                  (<?- (migrate-in-list-keys backing store-key base env serializer read-handlers write-handlers
-                                             list-keys store-keys))]
-              (println "lk" list-keys)
-              (println "sk " store-keys)
-              (recur list-keys store-keys)))
-          list-keys))))))
+            :else ;; needs migration
+            (let [additional-keys (<! (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
+              (println "sync?" sync?)
+              (println "lk" additional-keys)
+              (println "store-keys" store-keys)
+              (println "keys" keys)
 
-(defrecord DefaultStore [version base backing serializers default-serializer compressor encryptor
-                         read-handlers write-handlers buffer-size detected-old-blobs locks config
-                         migrate-in-io-operation migrate-in-list-keys]
+              (recur (into keys additional-keys) store-keys)))
+          keys))))))
+
+(defrecord DefaultStore [version backing serializers default-serializer compressor encryptor
+                         read-handlers write-handlers buffer-size locks config]
   PEDNKeyValueStore
   (-exists? [_ key env]
     (async+sync
-     (:sync? env) *default-sync-translation*
-     (go-try-
-      (let [uuid-key (uuid key)
-            store-key (key->store-key key)]
-        (or
-         ;; filestore specific patch to detect existing old values
-         (when detected-old-blobs
-           (let [old-meta (str base "/meta/" uuid-key)
-                 old (str base "/"  uuid-key)
-                 old-binary (str base "/B_"  uuid-key)]
-             (or (@detected-old-blobs old-meta)
-                 (@detected-old-blobs old)
-                 (@detected-old-blobs old-binary))))
-         (<?- (-exists backing store-key env)))))))
+      (:sync? env) *default-sync-translation*
+      (go-try-
+        (let [store-key (key->store-key key)]
+          (or (<?- (-exists backing store-key env))
+              (<?- (-migratable backing key store-key env))
+              false)))))
   (-get-in [this key-vec not-found opts]
     (let [{:keys [sync?]} opts]
       (async+sync
@@ -304,7 +293,6 @@
           (let [a (<?-
                    (io-operation this serializers read-handlers write-handlers
                                  {:key-vec key-vec
-                                  :base base
                                   :operation :read-edn
                                   :compressor compressor
                                   :encryptor encryptor
@@ -314,7 +302,6 @@
                                   :buffer-size buffer-size
                                   :config config
                                   :default-serializer default-serializer
-                                  :detect-old-blobs detected-old-blobs
                                   :msg       {:type :read-edn-error
                                               :key  key}}))]
             (clojure.core/get-in a (rest key-vec)))
@@ -323,11 +310,9 @@
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
-                     :base base
                      :operation :read-meta
                      :compressor compressor
                      :encryptor encryptor
-                     :detect-old-blobs detected-old-blobs
                      :default-serializer default-serializer
                      :version version
                      :sync? sync?
@@ -340,11 +325,9 @@
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
-                     :base base
                      :operation  :write-edn
                      :compressor compressor
                      :encryptor encryptor
-                     :detect-old-blobs detected-old-blobs
                      :version version
                      :default-serializer default-serializer
                      :up-fn      (fn [_] val)
@@ -360,11 +343,9 @@
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
-                     :base base
                      :operation  :write-edn
                      :compressor compressor
                      :encryptor encryptor
-                     :detect-old-blobs detected-old-blobs
                      :version version
                      :default-serializer default-serializer
                      :up-fn      up-fn
@@ -377,11 +358,9 @@
   (-dissoc [_ key opts]
     (delete-blob backing
                  {:key-vec  [key]
-                  :base base
                   :operation  :write-edn
                   :compressor compressor
                   :encryptor encryptor
-                  :detect-old-blobs detected-old-blobs
                   :version version
                   :default-serializer default-serializer
                   :config     config
@@ -395,9 +374,7 @@
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
-                     :base base
                      :operation :read-binary
-                     :detect-old-blobs detected-old-blobs
                      :default-serializer default-serializer
                      :compressor compressor
                      :encryptor encryptor
@@ -412,9 +389,7 @@
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
-                     :base base
                      :operation  :write-binary
-                     :detect-old-blobs detected-old-blobs
                      :default-serializer default-serializer
                      :compressor compressor
                      :encryptor  encryptor
@@ -430,11 +405,10 @@
   PKeyIterable
   (-keys [this opts]
     (let [{:keys [sync?]} opts]
-      (list-keys this serializers read-handlers write-handlers
+      (list-keys this
+                 serializers read-handlers write-handlers
                  {:operation :read-meta
-                  :base base
                   :default-serializer default-serializer
-                  :detect-old-blobs detected-old-blobs
                   :version version
                   :compressor compressor
                   :encryptor encryptor
@@ -445,10 +419,7 @@
 
 (defn new-default-store
   "Create general store in given base of backing store."
-  [base backing
-   old-files
-   migrate-in-io-operation
-   migrate-in-list-keys
+  [backing
    {:keys [default-serializer serializers compressor encryptor
            read-handlers write-handlers
            buffer-size config opts]
@@ -473,19 +444,15 @@
                         {:type :store-configuration-error
                          :config complete-config}))
         (let [_                  (<?- (-create-store backing opts))
-              store              (map->DefaultStore {:detected-old-blobs old-files
-                                                     :base               base
-                                                     :backing            backing
-                                                     :default-serializer default-serializer
-                                                     :serializers        (merge key->serializer serializers)
-                                                     :version  default-version
-                                                     :compressor         compressor
-                                                     :encryptor          encryptor
-                                                     :read-handlers      read-handlers
-                                                     :write-handlers     write-handlers
-                                                     :buffer-size        buffer-size
-                                                     :locks              (atom {})
-                                                     :config             complete-config
-                                                     :migrate-in-io-operation migrate-in-io-operation
-                                                     :migrate-in-list-keys migrate-in-list-keys})]
+              store              (map->DefaultStore {:backing             backing
+                                                     :default-serializer  default-serializer
+                                                     :serializers         (merge key->serializer serializers)
+                                                     :version             default-version
+                                                     :compressor          compressor
+                                                     :encryptor           encryptor
+                                                     :read-handlers       read-handlers
+                                                     :write-handlers      write-handlers
+                                                     :buffer-size         buffer-size
+                                                     :locks               (atom {})
+                                                     :config              complete-config})]
           store))))))

@@ -63,14 +63,17 @@
 (defprotocol PBackingStore
   "Backing store protocol for default implementation of the high-level konserve protocol."
   (-create-blob [this store-key env] "Create a blob object to write a metadata and value into.")
-  (-delete [this path env] "Delete a blob object under path.")
-  (-exists [this path env] "Check whether blob exists under path")
+  (-delete [this store-key env] "Delete a blob object under path.")
+  (-exists [this store-key env] "Check whether blob exists under path")
+  (-migratable [this key store-key env] "Check if blob exists elsewhere and return a migration key or nil.")
+  (-migrate [this migration-key key-vec serializer read-handlers write-handlers env] "Use the key returned from -migratable to import blob for key-vec.")
   (-copy [this from to env] "Copy a blob from one key to another.")
   (-atomic-move [this from to env] "Atomically move (rename) a blob.")
   (-create-store [this env] "Create the underlying store.")
   (-sync-store [this env] "Synchronize the store. This is only needed if your store does not guarantee durability without this synchronisation command, e.g. fsync in the file system.")
   (-delete-store [this env] "Delete the underlying store.")
-  (-keys [this env] "List all the keys representing blobs in the store."))
+  (-keys [this env] "List all the keys representing blobs in the store.")
+  (-handle-foreign-key [this migration-key serializer read-handlers write-handlers env] "Handle keys not recognized by the current konserve version."))
 
 (defprotocol PBackingBlob
   "Blob object that is backing a stored value and its metadata."
