@@ -4,26 +4,26 @@
             [clojure.core.async :refer [<!! go chan put! close!] :as async]
             [konserve.core :refer :all]
             [konserve.compliance-test :refer [compliance-test]]
-            [konserve.filestore :refer [new-fs-store delete-store]]))
+            [konserve.filestore :refer [connect-fs-store delete-store]]))
 
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (<!! (new-fs-store folder))]
+        store  (<!! (connect-fs-store folder))]
     (testing "Compliance test with default config."
       (compliance-test store))))
 
 (deftest filestore-compliance-test-no-fsync
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (new-fs-store folder :opts {:sync? true} :config {:sync-blob? false})]
+        store  (connect-fs-store folder :opts {:sync? true} :config {:sync-blob? false})]
     (testing "Compliance test without syncing."
       (compliance-test store))))
 
 (deftest filestore-compliance-test-no-file-lock
   (let [folder "/tmp/konserve-fs-comp-test"
         _      (delete-store folder)
-        store  (<!! (new-fs-store folder :config {:lock-blob? false}))]
+        store  (<!! (connect-fs-store folder :config {:lock-blob? false}))]
     (testing "Compliance test without file locking."
       (compliance-test store))))
 
@@ -32,7 +32,7 @@
     (let [folder "/tmp/konserve-fs-test"
           _      (spit "/tmp/foo" (range 1 10))
           _      (delete-store folder)
-          store  (<!! (new-fs-store folder))]
+          store  (<!! (connect-fs-store folder))]
       (testing "Binary"
         (testing "ByteArray"
           (let [res-ch (chan)]
@@ -86,6 +86,6 @@
                                        (put! res-ch (slurp input-stream))))))))
             (is (=  "foo bar" (<!! res-ch))))))
       (delete-store folder)
-      (let [store (<!! (new-fs-store folder))]
+      (let [store (<!! (connect-fs-store folder))]
         (is (= (<!! (keys store))
                #{}))))))
