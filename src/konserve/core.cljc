@@ -3,8 +3,8 @@
   (:require [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
-            [hasch.core :refer [uuid]]
-            [taoensso.timbre :as timbre :refer [trace debug]]
+            [hasch.core :as hasch]
+            [taoensso.timbre :refer [trace debug]]
             [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
             [superv.async :refer [go-try- <?-]]
             [clojure.core.async :refer [chan put! poll!]])
@@ -21,7 +21,7 @@
 ;; durable
 
 
-(defn get-lock [{:keys [locks] :as store} key]
+(defn get-lock [{:keys [locks] :as _store} key]
   (or (clojure.core/get @locks key)
       (let [c (chan)]
         (put! c :unlocked)
@@ -185,7 +185,7 @@
                       [append-log? last-id first-id] head
                       new-elem {:next nil
                                 :elem elem}
-                      id (uuid)]
+                      id (hasch/uuid)]
                   (when (and head (not= append-log? :append-log))
                     (throw (ex-info "This is not an append-log." {:key key})))
                   (<?- (-update-in store [id] (partial meta-update key :append-log) (fn [_] new-elem) opts))
@@ -204,7 +204,7 @@
                *default-sync-translation*
                (go-try-
                 (let [head (<?- (get store key nil opts))
-                      [append-log? last-id first-id] head]
+                      [append-log? _last-id first-id] head]
                   (when (and head (not= append-log? :append-log))
                     (throw (ex-info "This is not an append-log." {:key key})))
                   (when first-id

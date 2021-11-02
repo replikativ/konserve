@@ -4,7 +4,7 @@
             [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
-            [konserve.filestore :refer [new-fs-store delete-store]])
+            [konserve.filestore :refer [connect-fs-store delete-store]])
   (:import [org.fressian.handlers WriteHandler ReadHandler]))
 
 (def custom-tag "java.util.Date")
@@ -24,7 +24,7 @@
   (testing "Test the custom fressian serializers functionality."
     (let [folder "/tmp/konserve-fs-serializers-test"
           _      (delete-store folder)
-          store  (<!! (new-fs-store folder :serializers {:FressianSerializer (fressian-serializer custom-read-handler custom-write-handler)}))]
+          store  (<!! (connect-fs-store folder :serializers {:FressianSerializer (fressian-serializer custom-read-handler custom-write-handler)}))]
       (is (= (<!! (k/get-in store [:foo]))
              nil))
       (<!! (k/assoc-in store [:foo] (java.util.Date.)))
