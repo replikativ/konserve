@@ -5,7 +5,7 @@
    [konserve.encryptor :refer [null-encryptor]]
    [konserve.impl.default :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.protocols :refer [-deserialize]]
-   [clojure.string :refer [includes? ends-with?]]
+   [clojure.string :refer [includes? ends-with? starts-with?]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          -keys
                                          PBackingBlob -close -get-lock -sync
@@ -67,8 +67,9 @@
   "Lists all files on the first level of a directory."
   (let [root (Paths/get directory (into-array String []))
         ds (Files/newDirectoryStream root)
+        ephemeral? (fn [^Path path] (starts-with? (.getFileName path) ".nfs"))
         files (mapv (fn [^Path path]
-                      (str (.relativize root path))) ds)]
+                      (str (.relativize root path))) (remove ephemeral? ds))]
     (.close ds)
     files))
 
