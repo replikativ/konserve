@@ -26,6 +26,9 @@
    [sun.nio.ch FileLockImpl]
    (java.util Date UUID)))
 
+(def ^:dynamic *ephemeral?*
+  (fn [^Path path] (some #(starts-with? (.getFileName path) %) [".nfs"])))
+
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
          '{AsynchronousFileChannel FileChannel}))
@@ -67,9 +70,8 @@
   "Lists all files on the first level of a directory."
   (let [root (Paths/get directory (into-array String []))
         ds (Files/newDirectoryStream root)
-        ephemeral? (fn [^Path path] (starts-with? (.getFileName path) ".nfs"))
         files (mapv (fn [^Path path]
-                      (str (.relativize root path))) (remove ephemeral? ds))]
+                      (str (.relativize root path))) (remove *ephemeral?* ds))]
     (.close ds)
     files))
 
