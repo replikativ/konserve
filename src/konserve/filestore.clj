@@ -5,7 +5,7 @@
    [konserve.encryptor :refer [null-encryptor]]
    [konserve.impl.default :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.protocols :refer [-deserialize]]
-   [clojure.string :refer [includes? ends-with? starts-with?]]
+   [clojure.string :refer [includes? ends-with?]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          -keys
                                          PBackingBlob -close -get-lock -sync
@@ -27,7 +27,10 @@
    (java.util Date UUID)))
 
 (def ^:dynamic *ephemeral?*
-  (fn [^Path path] (some #(starts-with? (.getFileName path) %) [".nfs"])))
+  "Decides if a file is ephemeral, based on its base name."
+  (fn [^Path path]
+    (some #(re-matches % (-> path .getFileName .toString))
+          [#"\.nfs.*"])))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
