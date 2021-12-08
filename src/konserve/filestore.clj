@@ -27,7 +27,7 @@
    (java.util Date UUID)))
 
 (def ^:dynamic *ephemeral?*
-  "Decides if a file is ephemeral, based on its base name."
+  "Decides if a path is ephemeral, based on its filename."
   (fn [^Path path]
     (some #(re-matches % (-> path .getFileName .toString))
           [#"\.nfs.*"])))
