@@ -26,12 +26,6 @@
    [sun.nio.ch FileLockImpl]
    (java.util Date UUID)))
 
-(def ^:dynamic *ephemeral?*
-  "Decides if a path is ephemeral, based on its filename."
-  (fn [^Path path]
-    (some #(re-matches % (-> path .getFileName .toString))
-          [#"\.nfs.*"])))
-
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
          '{AsynchronousFileChannel FileChannel}))
@@ -69,14 +63,17 @@
       (catch Exception e
         e))))
 
-(defn list-files [directory]
+(defn list-files
   "Lists all files on the first level of a directory."
-  (let [root (Paths/get directory (into-array String []))
-        ds (Files/newDirectoryStream root)
-        files (mapv (fn [^Path path]
-                      (str (.relativize root path))) (remove *ephemeral?* ds))]
-    (.close ds)
-    files))
+  ([directory]
+   (list-files directory (fn [_] false)))
+  ([directory ephemeral?]
+   (let [root (Paths/get directory (into-array String []))
+         ds (Files/newDirectoryStream root)
+         files (mapv (fn [^Path path] (str (.relativize root path)))
+                     (remove ephemeral? ds))]
+     (.close ds)
+     files)))
 
 (defn count-konserve-keys [dir]
   "Counts konserve files in the directory."
@@ -96,7 +93,7 @@
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
-(defrecord BackingFilestore [base detected-old-blobs]
+(defrecord BackingFilestore [base detected-old-blobs ephemeral?]
   PBackingStore
   (-create-blob [_this store-key env]
     (let [{:keys [sync?]} env
@@ -140,7 +137,7 @@
 
   (-keys [_this env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (into [] (list-files base)))))
+                (go-try- (into [] (list-files base ephemeral?)))))
 
   (-copy [_this from to env]
     (async+sync (:sync? env) *default-sync-translation*
@@ -688,12 +685,15 @@
                                                          :lock-blob? true}
                                                         config)}
                             (dissoc params :config))
+        ephemeral? (fn [^Path path]
+                     (some #(re-matches % (-> path .getFileName .toString))
+                           [#"\.nfs.*"]))
         detect-old-blob (when detect-old-file-schema?
                           (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-blob)
                                (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
-        backing            (BackingFilestore. path detect-old-blob)]
+        backing            (BackingFilestore. path detect-old-blob ephemeral?)]
     (connect-default-store backing store-config)))
 
 (comment
