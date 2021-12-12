@@ -669,8 +669,11 @@
    :write-handlers empty
    :buffer-size    1 MB
    :config         config} "
-  [path & {:keys [detect-old-file-schema? config]
-           :or {detect-old-file-schema? false}
+  [path & {:keys [detect-old-file-schema? ephemeral? config]
+           :or {detect-old-file-schema? false
+                ephemeral? (fn [^Path path]
+                             (some #(re-matches % (-> path .getFileName .toString))
+                                   [#"\.nfs.*"]))}
            :as params}]
   ;; check config
   (let [store-config (merge {:default-serializer :FressianSerializer
@@ -685,9 +688,6 @@
                                                          :lock-blob? true}
                                                         config)}
                             (dissoc params :config))
-        ephemeral? (fn [^Path path]
-                     (some #(re-matches % (-> path .getFileName .toString))
-                           [#"\.nfs.*"]))
         detect-old-blob (when detect-old-file-schema?
                           (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
