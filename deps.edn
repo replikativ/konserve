@@ -1,8 +1,8 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.10.3"}
-        org.clojure/clojurescript {:mvn/version "1.10.866"}
+        org.clojure/clojurescript {:mvn/version "1.11.4"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
-        fress/fress {:mvn/version "0.3.1"}
+        fress/fress {:mvn/version "0.3.2"}
         io.replikativ/incognito {:mvn/version "0.2.5"}
         io.replikativ/hasch {:mvn/version "0.3.7"}
         io.replikativ/superv.async {:mvn/version "0.2.11"}
@@ -12,10 +12,10 @@
         ;org.clojure/google-closure-library {:mvn/version "0.0-20190213-2033d5d9"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "5.1.2"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.15.12"}
-                               binaryage/devtools   {:mvn/version "1.0.2"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.16.12"}
+                               binaryage/devtools   {:mvn/version "1.0.4"}}
                   :extra-paths ["test"]}
-           :dev  {:extra-deps {criterium/criterium  {:mvn/version "0.4.4"}
+           :dev  {:extra-deps {criterium/criterium  {:mvn/version "0.4.6"}
                                metasoarous/oz {:mvn/version "1.6.0-alpha34"}
                                org.clojure/tools.cli {:mvn/version "1.0.206"}}
                   :extra-paths ["benchmark/src"]}
@@ -23,8 +23,8 @@
                                     org.clojure/tools.cli {:mvn/version "1.0.206"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.0.641"}
-                               org.clojure/test.check   {:mvn/version "0.9.0"}}
+           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.60.977"}
+                               org.clojure/test.check   {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]}
            :jar {:extra-deps {seancorfield/depstar {:mvn/version "1.1.116"}}
                  :main-opts ["-m" "hf.depstar.jar" "replikativ-konserve.jar"]}
@@ -32,5 +32,5 @@
                     :main-opts ["-m" "deps-deploy.deps-deploy" "deploy" "replikativ-konserve.jar"]}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
-           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
+           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
                   :main-opts ["-m" "cljfmt.main" "fix"]}}}

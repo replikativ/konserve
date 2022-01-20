@@ -15,8 +15,8 @@ out
 .lsp
 .dir-locals.el
 node_modules
-public 
+public
 
 .idea
 *.iml
-.lsp
+package-lock.json
