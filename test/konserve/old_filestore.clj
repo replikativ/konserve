@@ -16,7 +16,7 @@
            [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
            [java.nio ByteBuffer]
            [java.nio.file Files StandardCopyOption FileSystems OpenOption
-                          StandardOpenOption]
+            StandardOpenOption]
            (java.util UUID)))
 
 ;; A useful overview over fsync on Linux:

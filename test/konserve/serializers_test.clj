@@ -17,9 +17,9 @@
 
 (def custom-write-handler
   {Date {custom-tag (reify WriteHandler
-                                (write [_ writer instant]
-                                  (.writeTag    writer custom-tag 1)
-                                  (.writeObject writer (.getTime ^Date instant))))}})
+                      (write [_ writer instant]
+                        (.writeTag    writer custom-tag 1)
+                        (.writeObject writer (.getTime ^Date instant))))}})
 
 (deftest serializers-test
   (testing "Test the custom fressian serializers functionality."

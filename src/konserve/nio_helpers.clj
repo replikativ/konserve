@@ -1,7 +1,7 @@
 (ns konserve.nio-helpers
   (:import [java.nio.channels Channels ReadableByteChannel]
            [java.io Reader File InputStream
-                    ByteArrayInputStream FileInputStream StringReader]
+            ByteArrayInputStream FileInputStream StringReader]
            (java.util Arrays)
            (java.nio ByteBuffer)))
 

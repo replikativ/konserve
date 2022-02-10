@@ -11,15 +11,12 @@
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
                             [konserve.core :refer [go-locked locked]])))
 
-
-
 ;; ACID
 
 ;; atomic
 ;; consistent
 ;; isolated
 ;; durable
-
 
 (defn get-lock [{:keys [locks] :as _store} key]
   (or (clojure.core/get @locks key)

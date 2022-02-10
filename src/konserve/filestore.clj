@@ -18,12 +18,12 @@
    [clojure.core.async :refer [go <!! chan close! put!]]
    [taoensso.timbre :refer [info trace]])
   (:import
-    [java.io ByteArrayInputStream FileInputStream Closeable]
-    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
-    [java.nio ByteBuffer]
-    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
-    [sun.nio.ch FileLockImpl]
-    (java.util Date UUID)))
+   [java.io ByteArrayInputStream FileInputStream Closeable]
+   [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
+   [java.nio ByteBuffer]
+   [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
+   [sun.nio.ch FileLockImpl]
+   (java.util Date UUID)))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -423,9 +423,7 @@
       (.release this)
       (go-try- (.release this)))))
 
-
 ;; ====================== Migration code ======================
-
 
 (defn- -read [this start-byte stop-byte msg env]
   (if (:sync? env)
