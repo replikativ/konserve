@@ -122,10 +122,10 @@ workflows:
     jobs:
       - setup:
           context: clojars-deploy
-          setup_cljs: true
+          setup_cljs: false
       - build:
           context: clojars-deploy
-          build_cljs: true
+          build_cljs: false
           requires:
             - setup
       - tools/format:
@@ -134,7 +134,7 @@ workflows:
             - setup
       - test:
           context: clojars-deploy
-          test_cljs: true
+          test_cljs: false
           requires:
             - build
       - deploy:
