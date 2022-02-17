@@ -27,10 +27,14 @@
                                org.clojure/test.check   {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
-           :jar {:extra-deps {seancorfield/depstar {:mvn/version "1.1.116"}}
-                 :main-opts ["-m" "hf.depstar.jar" "replikativ-konserve.jar"]}
-           :deploy {:extra-deps {deps-deploy/deps-deploy {:mvn/version "0.0.9"}}
-                    :main-opts ["-m" "deps-deploy.deps-deploy" "deploy" "replikativ-konserve.jar"]}
+           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.6.7"
+                                                                   :git/sha "22c2d09"}
+                                 borkdude/gh-release-artifact     {:git/url "https://github.com/borkdude/gh-release-artifact"
+                                                                   :sha     "a83ee8da47d56a80b6380cbb6b4b9274048067bd"}
+                                 babashka/babashka.curl           {:mvn/version "0.1.1"}
+                                 babashka/fs                      {:mvn/version "0.1.2"}
+                                 cheshire/cheshire                {:mvn/version "5.10.2"}}
+                    :ns-default build}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
            :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
