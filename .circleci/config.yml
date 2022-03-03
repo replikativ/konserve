@@ -90,7 +90,7 @@ jobs:
           at: /home/circleci
       - run:
           name: test
-          command: clojure -Sthreads 1 -T:build test
+          command: ./bin/run-unittests
           no_output_timeout: 5m
       - when:
           condition: <<parameters.test_cljs>>
