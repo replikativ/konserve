@@ -2,18 +2,18 @@
  :deps {org.clojure/clojure {:mvn/version "1.10.3"}
         org.clojure/clojurescript {:mvn/version "1.11.4"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
-        fress/fress {:mvn/version "0.3.3"}
+        fress/fress {:mvn/version "0.4.0"}
         io.replikativ/incognito {:mvn/version "0.3.66"}
         io.replikativ/hasch {:mvn/version "0.3.7"}
-        io.replikativ/superv.async {:mvn/version "0.2.11"}
+        io.replikativ/superv.async {:mvn/version "0.3.43"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
         ;; reactivate for nodejs support
         ;com.google.javascript/closure-compiler-unshaded {:mvn/version "v20190325"}
         ;org.clojure/google-closure-library {:mvn/version "0.0-20190213-2033d5d9"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "5.1.2"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.17.0"}
-                               binaryage/devtools   {:mvn/version "1.0.4"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.17.6"}
+                               binaryage/devtools   {:mvn/version "1.0.5"}}
                   :extra-paths ["test"]}
            :dev  {:extra-deps {criterium/criterium  {:mvn/version "0.4.6"}
                                metasoarous/oz {:mvn/version "1.6.0-alpha34"}
@@ -23,7 +23,7 @@
                                     org.clojure/tools.cli {:mvn/version "1.0.206"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.62.993"}
+           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.63.998"}
                                org.clojure/test.check   {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]}

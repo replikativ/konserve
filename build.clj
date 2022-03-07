@@ -26,13 +26,9 @@
              :src-dirs ["src"])
       bb/jar))
 
-(defn test "Run the tests." [opts]
-  (bb/run-tests opts))
-
 (defn ci "Run the CI pipeline of tests (and build the JAR)." [opts]
   (-> opts
       (assoc :lib lib :version version)
-      (bb/run-tests)
       (bb/clean)
       (bb/jar)))
 
