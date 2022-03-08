@@ -10,7 +10,7 @@
                :cljs [cljs.cache :as cache])
             [konserve.core :refer [#?(:clj go-locked) #?(:clj locked)] :as core]
             [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
-            [taoensso.timbre :as timbre :refer [trace]]
+            [taoensso.timbre :refer [trace]]
             [superv.async :refer [go-try- <?-]])
   #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
                             [konserve.core :refer [go-locked locked]])))

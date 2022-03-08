@@ -1,5 +1,5 @@
 (ns konserve.compliance-test
-  (:require [clojure.core.async :as async :refer [#?(:clj <!!) go chan <!]]
+  (:require [clojure.core.async :refer [#?(:clj <!!) go chan <!]]
             [konserve.core :as k]
             #?(:cljs [cljs.test :refer [deftest is testing async]])
             #?(:clj [clojure.test :refer :all])
@@ -30,7 +30,7 @@
                                    []
                                    opts))
                 [{:bar 42} {:bar 43}]))
-         (let [{:keys [key type last-write] :as foolog-meta} (<!! (k/get-meta store :foolog nil opts))]
+         (let [{:keys [key type last-write]} (<!! (k/get-meta store :foolog nil opts))]
            (are [x y] (= x y)
              :foolog        key
              :append-log    type
@@ -66,7 +66,6 @@
                                         true))
                       opts))
          (let  [list-keys (<!! (k/keys store opts))]
-           (prn list-keys)
            (are [x y] (= x y)
              #{{:key :baz
                 :type :edn}

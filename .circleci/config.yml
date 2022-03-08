@@ -1,55 +1,155 @@
 version: 2.1
 
 orbs:
+  github-cli: circleci/github-cli@1.0
   tools: replikativ/clj-tools@0
+
+jobs:
+  setup:
+    executor: tools/clojurecli
+    parameters:
+      setup_cljs:
+        type: boolean
+        default: false
+    steps:
+      - restore_cache:
+          keys:
+            - source-{{ .Branch }}-{{ .Revision }}
+            - source-{{ .Branch }}
+            - source-
+      - checkout
+      - save_cache:
+          key: source-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - .git
+      - restore_cache:
+          keys:
+            - deps-{{ checksum "deps.edn" }}
+            - deps-
+      - run:
+          name: resolve deps
+          command: clojure -P
+      - save_cache:
+          key: deps-{{ checksum "deps.edn" }}
+          paths:
+            - /home/circleci/.m2
+      - when:
+          condition: <<parameters.setup_cljs>>
+          steps:
+            - restore_cache:
+                keys:
+                  - npm-{{ checksum "package-lock.json" }}
+                  - npm-
+            - run: npm ci
+            - save_cache:
+                key: npm-{{ checksum "package-lock.json" }}
+                paths:
+                  - /home/circleci/.npm
+      - persist_to_workspace:
+          root: /home/circleci/
+          paths:
+            - .m2
+            - .npm
+            - replikativ
+  build:
+    executor: tools/clojurecli
+    parameters:
+      build_cljs:
+        type: boolean
+        default: false
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: clean
+          command: clojure -Sthreads 1 -T:build clean
+      - run:
+          name: jar
+          command: clojure -Sthreads 1 -T:build jar
+      - when:
+          condition: <<parameters.build_cljs>>
+          steps:
+            - run:
+                name: compile_cljs
+                command: npx shadow-cljs compile ci
+                no_output_timeout: 5m
+      - persist_to_workspace:
+          root: /home/circleci/
+          paths:
+            - .m2
+            - replikativ
+
+  test:
+    executor: tools/clojurecli
+    parameters:
+      test_cljs:
+        type: boolean
+        default: false
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: test
+          command: ./bin/run-unittests
+          no_output_timeout: 5m
+      - when:
+          condition: <<parameters.test_cljs>>
+          steps:
+            - run:
+                name: karma_test
+                command: ./bin/run-cljstests
+                no_output_timeout: 5m
+  deploy:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: deploy
+          command: clojure -Sthreads 1 -T:build deploy
+  release:
+    executor: tools/clojurecli
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: deploy
+          command: clojure -Sthreads 1 -T:build release
+
 
 workflows:
   build-test-and-deploy:
     jobs:
-      - tools/setup:
-          context: dockerhub-deploy
+      - setup:
+          context: clojars-deploy
+          setup_cljs: false
+      - build:
+          context: clojars-deploy
+          build_cljs: false
+          requires:
+            - setup
       - tools/format:
-          context: dockerhub-deploy
+          context: clojars-deploy
           requires:
-            - tools/setup
-      - tools/unittest:
-          context: dockerhub-deploy
+            - setup
+      - test:
+          context: clojars-deploy
+          test_cljs: false
           requires:
-            - tools/setup
-      - tools/cljstest:
-          context: dockerhub-deploy
-          requires:
-            - tools/setup
-      - tools/build:
-          context: dockerhub-deploy
-          jarname: "konserve"
-          requires:
-            - tools/setup
-      - tools/deploy-snapshot:
-          jarname: "konserve"
-          context:
-            - clojars-deploy
-            - dockerhub-deploy
+            - build
+      - deploy:
+          context: clojars-deploy
           filters:
             branches:
-              only: development
+              only: main
           requires:
-            - tools/setup
             - tools/format
-            - tools/unittest
-            - tools/cljstest
-            - tools/build
-      - tools/deploy-release:
-          jarname: "konserve"
+            - test
+      - release:
           context:
-            - clojars-deploy
-            - dockerhub-deploy
+            - github-token
           filters:
             branches:
-              only: master
+              only: main
           requires:
-            - tools/setup
-            - tools/format
-            - tools/unittest
-            - tools/cljstest
-            - tools/build
+            - deploy
