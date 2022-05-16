@@ -3,7 +3,7 @@
         org.clojure/clojurescript {:mvn/version "1.11.51"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         fress/fress {:mvn/version "0.4.0"}
-        io.replikativ/incognito {:mvn/version "0.3.67"}
+        io.replikativ/incognito {:mvn/version "0.3.66"}
         io.replikativ/hasch {:mvn/version "0.3.7"}
         io.replikativ/superv.async {:mvn/version "0.3.43"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
