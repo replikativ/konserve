@@ -19,10 +19,9 @@
    [taoensso.timbre :refer [info trace]])
   (:import
    [java.io ByteArrayInputStream FileInputStream Closeable]
-   [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler]
+   [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
-   [sun.nio.ch FileLockImpl]
    (java.util Date UUID)))
 
 (def ^:dynamic *sync-translation*
@@ -416,7 +415,7 @@
                                        (.clear buffer)))))
                   :size         total-size}))))
 
-(extend-type FileLockImpl
+(extend-type FileLock
   PBackingLock
   (-release [this env]
     (if (:sync? env)

@@ -1,6 +1,6 @@
 {:paths ["src"]
- :deps {org.clojure/clojure {:mvn/version "1.10.3"}
-        org.clojure/clojurescript {:mvn/version "1.11.4"}
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        org.clojure/clojurescript {:mvn/version "1.11.51"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         fress/fress {:mvn/version "0.4.0"}
         io.replikativ/incognito {:mvn/version "0.3.66"}
@@ -11,31 +11,31 @@
         ;com.google.javascript/closure-compiler-unshaded {:mvn/version "v20190325"}
         ;org.clojure/google-closure-library {:mvn/version "0.0-20190213-2033d5d9"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
-        com.taoensso/timbre {:mvn/version "5.1.2"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.17.6"}
-                               binaryage/devtools   {:mvn/version "1.0.5"}}
+        com.taoensso/timbre {:mvn/version "5.2.1"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.19.0"}
+                               binaryage/devtools   {:mvn/version "1.0.6"}}
                   :extra-paths ["test"]}
            :dev  {:extra-deps {criterium/criterium  {:mvn/version "0.4.6"}
-                               metasoarous/oz {:mvn/version "1.6.0-alpha34"}
+                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                org.clojure/tools.cli {:mvn/version "1.0.206"}}
                   :extra-paths ["benchmark/src"]}
-           :benchmark {:extra-deps {metasoarous/oz {:mvn/version "1.6.0-alpha34"}
+           :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.206"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.63.998"}
+           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.66.1034"}
                                org.clojure/test.check   {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
-           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.6.7"
-                                                                   :git/sha "22c2d09"}
+           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.8.0"
+                                                                   :git/sha "9bd8b8a"}
                                  borkdude/gh-release-artifact     {:git/url "https://github.com/borkdude/gh-release-artifact"
-                                                                   :sha     "a83ee8da47d56a80b6380cbb6b4b9274048067bd"}
-                                 babashka/babashka.curl           {:mvn/version "0.1.1"}
-                                 babashka/fs                      {:mvn/version "0.1.2"}
+                                                                   :sha     "cf082df46a648178d1904e9cbcb787d8136a35c6"}
+                                 babashka/babashka.curl           {:mvn/version "0.1.2"}
+                                 babashka/fs                      {:mvn/version "0.1.6"}
                                  cheshire/cheshire                {:mvn/version "5.10.2"}}
                     :ns-default build}
-           :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.7.0"}}
+           :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
            :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
                   :main-opts ["-m" "cljfmt.main" "fix"]}}}
