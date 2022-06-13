@@ -1,11 +1,11 @@
 (ns konserve.filestore
   (:require
+   [clojure.core.async :refer [go <!! chan close! put!]]
    [clojure.java.io :as io]
+   [clojure.string :refer [includes? ends-with?]]
    [konserve.compressor :refer [null-compressor]]
    [konserve.encryptor :refer [null-encryptor]]
-   [konserve.impl.default :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
-   [konserve.protocols :refer [-deserialize]]
-   [clojure.string :refer [includes? ends-with?]]
+   [konserve.impl.defaults :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          -keys
                                          PBackingBlob -close -get-lock -sync
@@ -13,9 +13,9 @@
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release header-size]]
    [konserve.nio-helpers :refer [blob->channel]]
+   [konserve.protocols :refer [-deserialize]]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
-   [clojure.core.async :refer [go <!! chan close! put!]]
    [taoensso.timbre :refer [info trace]])
   (:import
    [java.io ByteArrayInputStream FileInputStream Closeable]

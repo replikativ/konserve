@@ -8,12 +8,12 @@
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
-            [konserve.core :refer [#?(:clj go-locked) #?(:clj locked)] :as core]
-            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
+            [konserve.core #?@(:clj (:refer [go-locked locked])) :as core]
+            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [taoensso.timbre :refer [trace]]
-            [superv.async :refer [go-try- <?-]])
-  #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
-                            [konserve.core :refer [go-locked locked]])))
+            [superv.async :refer [go-try- <?-]]
+            [clojure.core.async])
+  #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
 
 (defn ensure-cache
   "Adds a cache to the store. If none is provided it takes a LRU cache with 32
@@ -94,12 +94,12 @@
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old new] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                      [old-val new-val] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
-                    (swap! cache cache/miss key new))
-                  [old new])))))
+                    (swap! cache cache/miss key new-val))
+                  [old-val new-val])))))
 
 (defn update
   "Updates a position described by key by applying up-fn and storing
@@ -123,12 +123,12 @@
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
-                      [old new] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
+                      [old-val new-val :as res] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict (first key-vec))
                   (when had-key?
-                    (swap! cache cache/miss (first key-vec) new))
-                  [old new])))))
+                    (swap! cache cache/miss (first key-vec) new-val))
+                  [old-val new-val])))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for

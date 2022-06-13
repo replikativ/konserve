@@ -21,30 +21,24 @@
     {:key key :type type :last-write (now)}
     (clojure.core/assoc old :last-write (now))))
 
+#?(:clj
 (defmacro async+sync
   [sync? async->sync async-code]
   (let [async->sync (if (symbol? async->sync)
-                      (resolve async->sync)
-                      async->sync)
-        res
-        (if (boolean? sync?)
-          (if sync?
-            (clojure.walk/postwalk (fn [n]
-                                     (if-not (meta n)
-                                       (async->sync n n) ;; primitives have no metadata
-                                       (with-meta (async->sync n n)
-                                         (update (meta n) :tag (fn [t] (async->sync t t))))))
-                                   async-code)
-            async-code)
-          `(if ~sync?
-             ~(clojure.walk/postwalk (fn [n]
-                                       (if-not (meta n)
-                                         (async->sync n n) ;; primitives have no metadata
-                                         (with-meta (async->sync n n)
-                                           (update (meta n) :tag (fn [t] (async->sync t t))))))
-                                     async-code)
-             ~async-code))]
-    res))
+                      (or (resolve async->sync)
+                          (when-let [_ns (or (get-in &env [:ns :use-macros async->sync])
+                                             (get-in &env [:ns :uses async->sync]))]
+                            (resolve (symbol (str _ns) (str async->sync)))))
+                      async->sync)]
+    (assert (some? async->sync))
+    `(if ~sync?
+       ~(clojure.walk/postwalk (fn [n]
+                                 (if-not (meta n)
+                                   (async->sync n n) ;; primitives have no metadata
+                                   (with-meta (async->sync n n)
+                                     (update (meta n) :tag (fn [t] (async->sync t t))))))
+                               async-code)
+       ~async-code))))
 
 (def ^:dynamic *default-sync-translation*
   '{go-try try
@@ -53,3 +47,8 @@
     <!- do
     <?- do
     go-locked locked})
+
+(defmacro with-promise [sym & body]
+  `(let [~sym (cljs.core.async/promise-chan)]
+     ~@body
+     ~sym))

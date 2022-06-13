@@ -17,5 +17,3 @@
 
 (def encryptor->byte
   (invert-map byte->encryptor))
-
-

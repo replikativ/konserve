@@ -7,9 +7,7 @@
         io.replikativ/hasch {:mvn/version "0.3.7"}
         io.replikativ/superv.async {:mvn/version "0.3.43"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
-        ;; reactivate for nodejs support
-        ;com.google.javascript/closure-compiler-unshaded {:mvn/version "v20190325"}
-        ;org.clojure/google-closure-library {:mvn/version "0.0-20190213-2033d5d9"}
+        com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.332"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "5.2.1"}}
  :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.19.0"}
@@ -27,8 +25,10 @@
                                org.clojure/test.check   {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
-           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.8.0"
-                                                                   :git/sha "9bd8b8a"}
+           :node-test {:extra-paths ["test"]
+                       :main-opts ["-m" "cljs.main" "-t" "node" "-m" "konserve.node-runner"]}
+           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.8.2"
+                                                                   :git/sha "0ffdb4c"}
                                  borkdude/gh-release-artifact     {:git/url "https://github.com/borkdude/gh-release-artifact"
                                                                    :sha     "cf082df46a648178d1904e9cbcb787d8136a35c6"}
                                  babashka/babashka.curl           {:mvn/version "0.1.2"}

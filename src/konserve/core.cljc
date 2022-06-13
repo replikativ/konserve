@@ -1,15 +1,14 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
+  (:require [clojure.core.async :refer [chan put! poll!]]
+            [hasch.core :as hasch]
+            [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
-            [hasch.core :as hasch]
-            [taoensso.timbre :refer [trace debug]]
-            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]]
+            [konserve.utils :refer [meta-update async+sync #?(:clj *default-sync-translation*)]]
             [superv.async :refer [go-try- <?-]]
-            [clojure.core.async :refer [chan put! poll!]])
-  #?(:cljs (:require-macros [konserve.utils :refer [async+sync]]
-                            [konserve.core :refer [go-locked locked]])))
+            [taoensso.timbre :refer [trace debug]])
+  #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
 
 ;; ACID
 
