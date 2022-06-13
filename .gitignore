@@ -11,6 +11,7 @@ pom.xml.asc
 out
 .shadow-cljs
 .cpcache
+.cljs_node_repl/
 .calva
 .lsp
 .dir-locals.el

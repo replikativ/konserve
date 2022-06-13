@@ -1,12 +1,12 @@
 (ns konserve.indexeddb
-  (:require [incognito.edn :refer [read-string-safe]]
-            [konserve.serializers :as ser]
-            [konserve.protocols :refer [PEDNKeyValueStore -exists? -get -update-in -assoc-in -get-meta
+  (:require [cljs.core.async :refer [go go-loop take! <! >! put! close! chan poll!]]
+            [incognito.edn :refer [read-string-safe]]
+            [konserve.protocols :refer [PEDNKeyValueStore -exists? -update-in -assoc-in -get-meta
                                         PBinaryKeyValueStore -bget -bassoc
                                         PStoreSerializer -serialize -deserialize]]
-            [cljs.core.async :refer (take! <! >! put! close! chan poll!)])
-  (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
+            [konserve.serializers :as ser]))
 
+#_
 (defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers locks version]
   PEDNKeyValueStore
   (-exists? [_this key]
@@ -192,6 +192,7 @@
                   (close! res)))))
       res)))
 
+#_
 (defn new-indexeddb-store
   "Create an IndexedDB backed edn store with read-handlers according to
   incognito.

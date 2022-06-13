@@ -1,78 +1,59 @@
 (ns konserve.serializers
-  (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
-            #?@(:clj [[clojure.data.fressian :as fress]
-                      [incognito.fressian :refer [incognito-read-handlers
-                                                  incognito-write-handlers]]])
-            #?@(:cljs [[fress.api :as fress]
-                       [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]])
+  (:require #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
+            [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
+            [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
             [incognito.edn :refer [read-string-safe]])
-  #?(:clj (:import [java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
+  #?(:clj (:import ;[java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
                    [org.fressian.handlers WriteHandler ReadHandler])))
 
-#?(:clj
-   (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
-     PStoreSerializer
-     (-deserialize [_ read-handlers bytes]
-       (fress/read bytes
-                   :handlers (-> (merge fress/clojure-read-handlers
-                                        custom-read-handlers
-                                        (incognito-read-handlers read-handlers))
-                                 fress/associative-lookup)))
-
-     (-serialize [_ bytes write-handlers val]
-       (let [w (fress/create-writer bytes :handlers (-> (merge
-                                                         fress/clojure-write-handlers
-                                                         custom-write-handlers
-                                                         (incognito-write-handlers write-handlers))
-                                                        fress/associative-lookup
-                                                        fress/inheritance-lookup))]
-         (fress/write-object w val)))))
-
-#?(:cljs
-   (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
-     PStoreSerializer
-     (-deserialize [_ read-handlers bytes]
-       (let [buf->arr (.from js/Array (.from js/Int8Array bytes))
-             buf      (fress.impl.buffer/BytesOutputStream. buf->arr (count buf->arr))
-             reader   (fress/create-reader buf
-                                           :handlers (merge custom-read-handlers
-                                                            (incognito-read-handlers read-handlers)))
-             read     (fress/read-object reader)]
-         read))
-     (-serialize [_ bytes write-handlers val]
-       (let [writer (fress/create-writer bytes
-                                         :handlers (merge
-                                                    custom-write-handlers
-                                                    (incognito-write-handlers write-handlers)))]
-         (fress/write-object writer val)))))
+(defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
+  #?@(:cljs (INamed ;clojure.lang.Named
+             (-name [_] "FressianSerializer")
+             (-namespace [_]"konserve.serializers")))
+  PStoreSerializer
+  (-deserialize [_ read-handlers bytes]
+    (let [handlers #?(:cljs (merge custom-read-handlers (incognito-read-handlers read-handlers))
+                      :clj (-> (merge fress/clojure-read-handlers
+                                      custom-read-handlers
+                                      (incognito-read-handlers read-handlers))
+                                      fress/associative-lookup))]
+      (fress/read bytes :handlers handlers)))
+  (-serialize [_ bytes write-handlers val]
+    (let [handlers #?(:clj (-> (merge
+                                fress/clojure-write-handlers
+                                custom-write-handlers
+                                (incognito-write-handlers write-handlers))
+                             fress/associative-lookup
+                             fress/inheritance-lookup)
+                      :cljs (merge custom-write-handlers
+                                   (incognito-write-handlers write-handlers)))]
+      #?(:clj (let [writer (fress/create-writer bytes :handlers handlers)]
+                (fress/write-object writer val))
+         :cljs (fress/write val :handlers handlers)))))
 
 (defn fressian-serializer
   ([] (fressian-serializer {} {}))
   ([read-handlers write-handlers] (map->FressianSerializer {:custom-read-handlers read-handlers
                                                             :custom-write-handlers write-handlers})))
 (defrecord StringSerializer []
+  #?@(:cljs (INamed
+             (-name [_] "StringSerializer")
+             (-namespace [_]"konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers s]
     (read-string-safe @read-handlers s))
   (-serialize [_ output-stream _ val]
-    #?(:clj
-       (binding [clojure.core/*out* output-stream]
-         (pr val)))
-    #?(:cljs
-       (pr-str val))))
+    #?(:cljs (pr-str val)
+       :clj (binding [clojure.core/*out* output-stream]
+              (pr val)))))
 
 (defn string-serializer []
   (map->StringSerializer {}))
 
-#?(:clj
-   (defn construct->class [m]
-     (->> (map (fn [[k v]] [(class v) k]) m)
-          (into {}))))
-
-#?(:cljs
-   (defn construct->class [m]
-     (->> (map (fn [[k v]] [(pr-str (type v)) k]) m)
-          (into {}))))
+(defn construct->class [m]
+  (->> (map (fn [[k v]] [#?(:clj (class v)
+                            :cljs (type v)) k]) m)
+    (into {})))
 
 (def byte->serializer
   {0 (string-serializer)
@@ -81,15 +62,11 @@
 (def serializer-class->byte
   (construct->class byte->serializer))
 
-#?(:clj
-   (defn construct->keys [m]
-     (->> (map (fn [[k v]] [(-> v class .getSimpleName keyword) v]) m)
-          (into {}))))
-
-#?(:cljs
-   (defn construct->keys [m]
-     (->> (map (fn [[k v]] [(-> v type pr-str) v]) m)
-          (into {}))))
+(defn construct->keys [m]
+  (->> (map (fn [[_ v]]
+              [#?(:clj (-> v class .getSimpleName keyword)
+                  :cljs (-> v name keyword)) v]) m)
+    (into {})))
 
 (def key->serializer
   (construct->keys byte->serializer))

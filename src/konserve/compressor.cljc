@@ -1,7 +1,7 @@
 (ns konserve.compressor
   (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
             [konserve.utils :refer [invert-map]])
-  (:import [net.jpountz.lz4 LZ4FrameOutputStream LZ4FrameInputStream]))
+  #?(:clj (:import [net.jpountz.lz4 LZ4FrameOutputStream LZ4FrameInputStream])))
 
 (defrecord NullCompressor [serializer]
   PStoreSerializer
@@ -17,6 +17,7 @@
   (-serialize [_ bytes write-handlers val]
     (throw (ex-info "Unsupported LZ4 compressor." {:bytes bytes}))))
 
+#?(:clj
 (defrecord Lz4Compressor [serializer]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
@@ -26,6 +27,7 @@
     (let [lz4-byte (LZ4FrameOutputStream. bytes)]
       (-serialize serializer lz4-byte write-handlers val)
       (.flush lz4-byte))))
+)
 
 (defn null-compressor [serializer]
   (NullCompressor. serializer))
@@ -33,8 +35,11 @@
 (defn unsupported-lz4-compressor [serializer]
   (UnsupportedLZ4Compressor. serializer))
 
+#?(:clj
 (defn lz4-compressor [serializer]
   (Lz4Compressor. serializer))
+
+)
 
 #?(:clj
    (defmacro native-image-build? []

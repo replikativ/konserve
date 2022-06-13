@@ -30,7 +30,16 @@
            return-array     (.array return-buffer)]
        (.clear return-buffer)
        return-array)
-     :cljs (throw (ex-info "Not supported yet." {}))))
+     :cljs
+     (let [serializer-id        (get serializer-class->byte (type serializer)) ;;TODO
+           compressor-id        (get compressor->byte compressor)
+           encryptor-id         (get encryptor->byte encryptor)
+           env-array        #js [version serializer-id compressor-id encryptor-id]
+           return-buffer    (js/Uint8Array. header-size)] ;;possibly sparse?
+       (dotimes [i (alength env-array)]
+         (aset return-buffer i (aget env-array i)))
+       (aset return-buffer 4 meta)
+       return-buffer)))
 
 (defn parse-header
   "Inverse function to create-header. serializers are a map of serializer-id to
@@ -56,7 +65,21 @@
         (byte->encryptor encryptor-id)
         meta-size])
      :cljs
-     (throw (ex-info "Not supported yet." {}))))
+     (let [version (aget header-bytes 0)
+           _ (when-not (= version 1)
+               (throw (ex-info "Konserve version not supported."
+                               {:type :konserve-version-in-header-no-supported
+                                :header-version version
+                                :supported-versions #{1}})))
+           serializer-id (aget header-bytes 1)
+           compressor-id (aget header-bytes 2)
+           encryptor-id (aget header-bytes 3)
+           meta-size (aget header-bytes 4)]
+       [version
+        (serializers (byte->key serializer-id))
+        (byte->compressor compressor-id)
+        (byte->encryptor encryptor-id)
+        meta-size])))
 
 (def ^:const default-version 1)
 

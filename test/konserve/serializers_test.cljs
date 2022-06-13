@@ -1,48 +1,39 @@
 (ns konserve.serializers-test
-  #_(:require [cljs.core.async :as async :refer [<! >!]]
-              [konserve.core :refer [get-in assoc-in dissoc]]
+  (:require-macros [cljs.core.async.macros :refer [go]])
+  (:require   [cljs.core.async :as async :refer [<! >!]]
+              [cljs.test :refer-macros [deftest is testing async use-fixtures]]
+              [fress.api :as fress]
+              [konserve.core :as k]
               [konserve.serializers :refer [fressian-serializer]]
-              [cljs.test :refer-macros [run-tests deftest is testing async use-fixtures]]
-              [konserve.filestore :refer [new-fs-store delete-store list-keys]]
-              [cljs.nodejs :as node])
-  #_(:require-macros [cljs.core.async.macros :refer [go]]))
+              [konserve.node-filestore :as filestore]))
 
-#_(comment
-    (enable-console-print!)
+(deftype MyType [field0 field1]
+  IEquiv
+  (-equiv [this o]
+    (and (instance? MyType o)
+         (= field0 (.-field0 o))
+         (= field1 (.-field1 o)))))
 
-    (def custom-read-handler
-      {"js-date" (fn [reader tag field-count]
-                   (js/Date. (fress.api/read-object reader)))})
+(def custom-read-handler
+  {"my-type" (fn [reader tag field-count]
+               (let [field0 (fress.api/read-object reader)
+                     field1 (fress.api/read-object reader)]
+                 (MyType. field0 field1)))})
 
-    (def custom-write-handler
-      {js/Date (fn [writer o] (let [date-time (.getTime o)]
-                                (fress.api/write-tag writer "js-date" 1)
-                                (fress.api/write-object writer date-time)))})
+(def custom-write-handler
+  {MyType (fn [writer o]
+            (fress.api/write-tag writer "my-type" 2)
+            (fress.api/write-object writer (.-field0 o))
+            (fress.api/write-object writer (.-field1 o)))})
 
-    (use-fixtures :once
-      {:before
-       (fn []
-         (async done
-                (go (delete-store "/tmp/konserve-fs-serializer-node-test")
-                    (def store (<! (new-fs-store "/tmp/konserve-fs-serializers-test" :serializer (fressian-serializer custom-read-handler custom-write-handler))))
-                    (done))))})
-
-    (deftest serializers-test
-      (testing "Test the custom fressian serializers functionality."
-        (async done
-               (go
-                 (is (= (<! (get-in store [:foo]))
-                        nil))
-                 (<! (assoc-in store [:foo] (js/Date.)))
-                 (is (= (type (<! (get-in store [:foo])))
-                        js/Date))
-                 (is (= (<! (list-keys store {}))
-                        #{{:key :foo, :format :edn}}))
-                 (<! (dissoc store :foo))
-                 (is (= (<! (get-in store [:foo]))
-                        nil))
-                 (is (= (<! (list-keys store {}))
-                        #{}))
-                 (delete-store (:folder store))))))
-
-    (run-tests))
+(deftest serializers-test
+  (async done
+   (go
+    (let [store-path "/tmp/konserve-fs-serializer-node-test"
+          _(filestore/delete-store store-path)
+          ser (fressian-serializer custom-read-handler custom-write-handler)
+          store (<! (filestore/connect-fs-store store-path :serializers {:FressianSerializer ser}))
+          mt (MyType. :a/b "c")]
+      (is (= [nil mt] (<! (k/assoc-in store [:my-type] mt))))
+      (is (= mt (<! (k/get-in store [:my-type]))))
+      (done)))))

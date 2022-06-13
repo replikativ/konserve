@@ -1,8 +1,8 @@
 (ns konserve.gc
-  (:require [konserve.core :as k]
+  (:require [clojure.core.async]
+            [konserve.core :as k]
             [superv.async :refer [go-try- <?- reduce<?-]])
-  (:import [java.util Date])
-  #?(:cljs (:require-macros [superv.async :refer [go-try- <?-]])))
+  #?(:clj (:import [java.util Date])))
 
 (defn sweep! [store whitelist ts]
   (go-try-
