@@ -4,27 +4,27 @@
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
             [incognito.edn :refer [read-string-safe]])
   #?(:clj (:import ;[java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
-                   [org.fressian.handlers WriteHandler ReadHandler])))
+           [org.fressian.handlers WriteHandler ReadHandler])))
 
 (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
   #?@(:cljs (INamed ;clojure.lang.Named
              (-name [_] "FressianSerializer")
-             (-namespace [_]"konserve.serializers")))
+             (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
     (let [handlers #?(:cljs (merge custom-read-handlers (incognito-read-handlers read-handlers))
                       :clj (-> (merge fress/clojure-read-handlers
                                       custom-read-handlers
                                       (incognito-read-handlers read-handlers))
-                                      fress/associative-lookup))]
+                               fress/associative-lookup))]
       (fress/read bytes :handlers handlers)))
   (-serialize [_ bytes write-handlers val]
     (let [handlers #?(:clj (-> (merge
                                 fress/clojure-write-handlers
                                 custom-write-handlers
                                 (incognito-write-handlers write-handlers))
-                             fress/associative-lookup
-                             fress/inheritance-lookup)
+                               fress/associative-lookup
+                               fress/inheritance-lookup)
                       :cljs (merge custom-write-handlers
                                    (incognito-write-handlers write-handlers)))]
       #?(:clj (let [writer (fress/create-writer bytes :handlers handlers)]
@@ -38,7 +38,7 @@
 (defrecord StringSerializer []
   #?@(:cljs (INamed
              (-name [_] "StringSerializer")
-             (-namespace [_]"konserve.serializers")))
+             (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers s]
     (read-string-safe @read-handlers s))
@@ -53,7 +53,7 @@
 (defn construct->class [m]
   (->> (map (fn [[k v]] [#?(:clj (class v)
                             :cljs (type v)) k]) m)
-    (into {})))
+       (into {})))
 
 (def byte->serializer
   {0 (string-serializer)
@@ -66,7 +66,7 @@
   (->> (map (fn [[_ v]]
               [#?(:clj (-> v class .getSimpleName keyword)
                   :cljs (-> v name keyword)) v]) m)
-    (into {})))
+       (into {})))
 
 (def key->serializer
   (construct->keys byte->serializer))

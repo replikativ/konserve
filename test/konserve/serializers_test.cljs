@@ -28,12 +28,12 @@
 
 (deftest serializers-test
   (async done
-   (go
-    (let [store-path "/tmp/konserve-fs-serializer-node-test"
-          _(filestore/delete-store store-path)
-          ser (fressian-serializer custom-read-handler custom-write-handler)
-          store (<! (filestore/connect-fs-store store-path :serializers {:FressianSerializer ser}))
-          mt (MyType. :a/b "c")]
-      (is (= [nil mt] (<! (k/assoc-in store [:my-type] mt))))
-      (is (= mt (<! (k/get-in store [:my-type]))))
-      (done)))))
+         (go
+           (let [store-path "/tmp/konserve-fs-serializer-node-test"
+                 _ (filestore/delete-store store-path)
+                 ser (fressian-serializer custom-read-handler custom-write-handler)
+                 store (<! (filestore/connect-fs-store store-path :serializers {:FressianSerializer ser}))
+                 mt (MyType. :a/b "c")]
+             (is (= [nil mt] (<! (k/assoc-in store [:my-type] mt))))
+             (is (= mt (<! (k/get-in store [:my-type]))))
+             (done)))))

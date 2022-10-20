@@ -61,14 +61,16 @@
                         (-> serializer
                             compressor
                             encryptor
-                          (-serialize nil write-handlers value)))
+                            (-serialize nil write-handlers value)))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
                           (try (-serialize (encryptor (compressor serializer))
                                            bos write-handlers value)
-                            (.toByteArray bos)
-                            (finally (.close bos))))))
+                               (.toByteArray bos)
+                               (finally
+                                 (.close bos))))))
+
           meta  (up-fn-meta old-meta)
           value (when (= operation :write-edn)
                   (if-not (empty? rkey)
@@ -82,7 +84,7 @@
               (trace "backing up to blob: " backup-store-key " for key " key)
               (<?- (-copy backing store-key backup-store-key env)))
           meta-arr             (to-array meta)
-          meta-size            (alength meta-arr)
+          meta-size            (count meta-arr)
           header               (create-header version
                                               serializer compressor encryptor meta-size)
           new-blob             (<?- (-create-blob backing new-store-key env))]

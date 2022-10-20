@@ -34,9 +34,9 @@
                (release [_] (release))
                storage-layout/PBackingLock
                (-release [_ env]
-                         (if (:sync? env)
-                           (release)
-                           (go (release)))))]
+                 (if (:sync? env)
+                   (release)
+                   (go (release)))))]
     (set! (.-locked this) lock)
     lock))
 
@@ -68,7 +68,7 @@
           pos (+ meta-size storage-layout/header-size)
           rstream (fs.createReadStream nil #js{:fd (.-fd this) :start pos})]
       (.on rstream "readable"
-        #(locked-cb {:input-stream rstream :size blob-size}))))
+           #(locked-cb {:input-stream rstream :size blob-size}))))
   (-write-header [this header _env]
     (let [buffer (js/Buffer.from header)
           bytes-written (iofs/write fd buffer {:position 0})]
@@ -116,10 +116,10 @@
   [^AsyncFileChannel this _]
   (with-promise out
     (fs.fsync (.-fd this)
-      (fn [?err]
-        (if (some? ?err)
-          (put! out ?err)
-          (close! out))))))
+              (fn [?err]
+                (if (some? ?err)
+                  (put! out ?err)
+                  (close! out))))))
 
 (defn- _close-async
   "close fd, cleanup lockfile if any"
@@ -128,47 +128,47 @@
     (if-not (.-open? this)
       (close! out)
       (fs.close (.-fd this)
-        (fn [?err]
-          (if (some? ?err)
-            (put! out ?err)
-            (do
-              (set! (.-open? this) false)
-              (if (.-locked this)
-                (take! (.release (.-locked this))
-                  (fn [?err]
-                    (if ?err
-                      (put! out ?err)
-                      (close! out))))
-                (close! out)))))))))
+                (fn [?err]
+                  (if (some? ?err)
+                    (put! out ?err)
+                    (do
+                      (set! (.-open? this) false)
+                      (if (.-locked this)
+                        (take! (.release (.-locked this))
+                               (fn [?err]
+                                 (if ?err
+                                   (put! out ?err)
+                                   (close! out))))
+                        (close! out)))))))))
 
 (defn- _lock-async
   [^AsyncFileChannel fc]
   (with-promise out
     (take! (iofs/alock-file (.-path fc))
-      (fn [[?err lock]]
-        (if (some? ?err)
-          (put! out ?err)
-          (let [release #(go (or (first (<! (.release lock)))
-                                 (set! (.-locked fc) nil)))
-                lock  (reify
-                        storage-layout/PBackingLock
-                        (-release [this env] (release))
-                        Object
-                        (release [this] (release)))]
-            (set! (.-locked fc) lock)
-            (put! out lock)))))))
+           (fn [[?err lock]]
+             (if (some? ?err)
+               (put! out ?err)
+               (let [release #(go (or (first (<! (.release lock)))
+                                      (set! (.-locked fc) nil)))
+                     lock  (reify
+                             storage-layout/PBackingLock
+                             (-release [this env] (release))
+                             Object
+                             (release [this] (release)))]
+                 (set! (.-locked fc) lock)
+                 (put! out lock)))))))
 
 (defn- afread
   "Read data from the fd into a chan. yields err|buf"
   [fd buf pos]
   (with-promise out
     (fs.read fd buf 0 (alength buf) pos
-      (fn [?err bytes-read]
-        (if (some? ?err)
-          (put! out ?err)
-          (do
-            (assert (== bytes-read (alength buf)))
-            (put! out buf)))))))
+             (fn [?err bytes-read]
+               (if (some? ?err)
+                 (put! out ?err)
+                 (do
+                   (assert (== bytes-read (alength buf)))
+                   (put! out buf)))))))
 
 (defn- afwrite
   "Write buffer to the fd. yields ?err"
@@ -178,34 +178,34 @@
         len (alength buf)]
     (with-promise out
       (fs.write fd buf offset len pos
-        (fn [?err ?byte-count _]
-          (if ?err
-            (put! out ?err)
-            (close! out)))))))
+                (fn [?err ?byte-count _]
+                  (if ?err
+                    (put! out ?err)
+                    (close! out)))))))
 
 (defn- afsize
   "The size of the file in bytes. yields ;=> [?err ?size]"
   [fd]
   (with-promise out
     (fs.fstat fd
-      (fn [?err ?stat]
-        (if ?err
-          (put! out [?err])
-          (put! out [nil (.-size ?stat)]))))))
+              (fn [?err ?stat]
+                (if ?err
+                  (put! out [?err])
+                  (put! out [nil (.-size ?stat)]))))))
 
 (defn- afread-binary ;=> ch<readable|err>
   [fd meta-size locked-cb _env]
   (go
-   (let [[?err total-size] (<! (afsize fd))]
-     (or ?err
-         (try
-           (let [opts #js{:fd fd
-                          :encoding ""
-                          :start (+ meta-size storage-layout/header-size)}
-                 rstream (fs.createReadStream nil opts)]
-             (.on rstream "readable"
-                  #(locked-cb {:input-stream rstream :size total-size})))
-           (catch js/Error e e))))))
+    (let [[?err total-size] (<! (afsize fd))]
+      (or ?err
+          (try
+            (let [opts #js{:fd fd
+                           :encoding ""
+                           :start (+ meta-size storage-layout/header-size)}
+                  rstream (fs.createReadStream nil opts)]
+              (.on rstream "readable"
+                   #(locked-cb {:input-stream rstream :size total-size})))
+            (catch js/Error e e))))))
 
 (defn- afwrite-binary ;  => ch<?err>
   [fd meta-size blob env]
@@ -218,10 +218,10 @@
                                                   :encoding ""
                                                   :autoClose false})]
         (stream.pipeline rstream wstream
-          (fn [?err]
-            (if (some? ?err)
-              (put! out ?err)
-              (close! out)))))
+                         (fn [?err]
+                           (if (some? ?err)
+                             (put! out ?err)
+                             (close! out)))))
       (catch js/Error e
         (put! out e)))))
 
@@ -237,13 +237,13 @@
     (let [buf (js/Buffer.alloc meta-size)]
       (afread fd buf storage-layout/header-size)))
   (-read-value [this meta-size _env] ;=> ch<buf|err>
-   (go
-    (let [[?err blob-size] (<! (afsize fd))]
-      (or ?err
-          (let [size (- blob-size meta-size storage-layout/header-size)
-                pos (+ meta-size storage-layout/header-size)
-                buf (js/Buffer.alloc size)]
-            (<! (afread fd buf pos)))))))
+    (go
+      (let [[?err blob-size] (<! (afsize fd))]
+        (or ?err
+            (let [size (- blob-size meta-size storage-layout/header-size)
+                  pos (+ meta-size storage-layout/header-size)
+                  buf (js/Buffer.alloc size)]
+              (<! (afread fd buf pos)))))))
   (-read-binary [this meta-size locked-cb _env]
     (afread-binary fd meta-size locked-cb _env))
   (-write-header [this header _env]
@@ -266,17 +266,17 @@
   ([path] (open-async-file-channel path {}))
   ([path {flags :flags}]
    (go
-    (if flags
-      (let [[?err fd] (<! (iofs/aopen path flags))]
-        (or ?err (AsyncFileChannel. path fd true nil)))
-      (let [[?err fd] (<! (iofs/aopen path "wx+"))]
+     (if flags
+       (let [[?err fd] (<! (iofs/aopen path flags))]
+         (or ?err (AsyncFileChannel. path fd true nil)))
+       (let [[?err fd] (<! (iofs/aopen path "wx+"))]
         ;; if file exists expect this to fail, so we retry with append else
         ;; we clobber contents. On node this is necessary because an existence
         ;; check can create race condition between io ticks, better to fail
-        (if (nil? ?err)
-          (AsyncFileChannel. path fd true nil)
-          (let [[?err fd] (<! (iofs/aopen path "a+"))]
-            (or ?err (AsyncFileChannel. path fd true nil)))))))))
+         (if (nil? ?err)
+           (AsyncFileChannel. path fd true nil)
+           (let [[?err fd] (<! (iofs/aopen path "a+"))]
+             (or ?err (AsyncFileChannel. path fd true nil)))))))))
 
 ;;==============================================================================
 ;;  synchronous backing impl
@@ -328,9 +328,9 @@
   (let [f (io/file base)]
     (if (.exists f)
       (do (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
-        true)
+          true)
       (do (info "Store directory at " (str base) " does not exist.")
-        false))))
+          false))))
 
 (defn- sync-base
   "Helper Function to synchronize the base of the filestore"
@@ -362,18 +362,18 @@
   ([directory ephemeral?]
    (with-promise out
      (take! (iofs/areaddir directory)
-       (fn [[?err ?files :as res]]
-         (put! out (or ?err (into [] (remove ephemeral?) ?files))))))))
+            (fn [[?err ?files :as res]]
+              (put! out (or ?err (into [] (remove ephemeral?) ?files))))))))
 
 (defn- copy-async
   "Copy a blob from one key to another."
   [^string base from to env]
   (with-promise out
     (fs.copyFile (path.join base from) (path.join base to)
-      (fn [?err]
-        (if (some? ?err)
-          (put! out ?err)
-          (close! out))))))
+                 (fn [?err]
+                   (if (some? ?err)
+                     (put! out ?err)
+                     (close! out))))))
 
 (defn- atomic-move-async
   "Atomically move (rename) a blob."
@@ -381,50 +381,50 @@
   ;; https://stackoverflow.com/questions/66780210/is-fs-renamesync-an-atomic-operation-that-is-resistant-to-corruption
   (with-promise out
     (take! (iofs/arename (path.join base from) (path.join base to))
-      (fn [[?err]]
-        (if (some? ?err)
-          (put! out ?err)
-          (close! out))))))
+           (fn [[?err]]
+             (if (some? ?err)
+               (put! out ?err)
+               (close! out))))))
 
 (defn check-and-create-backing-store-async
   "Helper Function to Check if Base is not writable"
   [^string base]
   (let [test-path (path.join base (str (random-uuid)))]
     (go
-     (or (and (not (<! (iofs/aexists? base)))
-              (first (<! (iofs/amkdir base))))
-         (first (<! (iofs/awrite-file test-path "" {:flags "w"})))
-         (first (<! (iofs/aunlink test-path)))))))
+      (or (and (not (<! (iofs/aexists? base)))
+               (first (<! (iofs/amkdir base))))
+          (first (<! (iofs/awrite-file test-path "" {:flags "w"})))
+          (first (<! (iofs/aunlink test-path)))))))
 
 (defn- sync-base-async
   "Helper Function to synchronize the base of the filestore"
   [^string base]
   ;; https://www.reddit.com/r/node/comments/4r8k11/how_to_call_fsync_on_a_directory/
   (go
-   (let [fc (<! (open-async-file-channel base {:flags "r"}))]
-     (or (<! (.force fc true))
-         (<! (.close fc))))))
+    (let [fc (<! (open-async-file-channel base {:flags "r"}))]
+      (or (<! (.force fc true))
+          (<! (.close fc))))))
 
 (defn- store-exists?-async
   "Checks if path exists."
   [base]
   (with-promise out
     (take! (iofs/aexists? base)
-      (fn [yes?]
-        (if yes?
-          (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
-          (info "Store directory at " (str base) " does not exist."))
-        (put! out yes?)))))
+           (fn [yes?]
+             (if yes?
+               (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
+               (info "Store directory at " (str base) " does not exist."))
+             (put! out yes?)))))
 
 (defn delete-store-async
   "Permanently deletes the base of the store with all files."
   [^string base]
   (with-promise out
     (take! (iofs/arm-r base)
-      (fn [?err]
-        (if (some? ?err)
-          (put! out ?err)
-          (take! (sync-base-async base) #(put! out %))))))) ;; TODO pipe bad
+           (fn [?err]
+             (if (some? ?err)
+               (put! out ?err)
+               (take! (sync-base-async base) #(put! out %))))))) ;; TODO pipe bad
 
 ;;==============================================================================
 
@@ -436,10 +436,10 @@
       (iofs/unlink store-path)
       (with-promise out
         (take! (iofs/aunlink store-path)
-          (fn [[?err]]
-            (if (some? ?err)
-              (put! out ?err)
-              (close! out))))))))
+               (fn [[?err]]
+                 (if (some? ?err)
+                   (put! out ?err)
+                   (close! out))))))))
 
 (defn- _migratable
   "Check if blob exists elsewhere and return a migration key or nil."
@@ -451,7 +451,7 @@
           (@detected-old-blobs (path.join (.-base this) (str "B_" uuid-key)))))))
 
 (defrecord NodejsBackingFilestore
-  [base detected-old-blobs ephemeral?]
+           [base detected-old-blobs ephemeral?]
   storage-layout/PBackingStore
   (-create-blob [this store-key env]
     (let [store-path (path.join base store-key)]
@@ -500,7 +500,6 @@
 (defn detect-old-file-schema [& args] (throw (js/Error "TODO detect-old-file-schema")))
 ;; get-file-channel
 ;; migration
-
 
 (defn connect-fs-store
   "Create Filestore in given path.
