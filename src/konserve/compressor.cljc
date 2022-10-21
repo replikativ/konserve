@@ -18,16 +18,15 @@
     (throw (ex-info "Unsupported LZ4 compressor." {:bytes bytes}))))
 
 #?(:clj
-(defrecord Lz4Compressor [serializer]
-  PStoreSerializer
-  (-deserialize [_ read-handlers bytes]
-    (let [lz4-byte (LZ4FrameInputStream. bytes)]
-      (-deserialize serializer read-handlers lz4-byte)))
-  (-serialize [_ bytes write-handlers val]
-    (let [lz4-byte (LZ4FrameOutputStream. bytes)]
-      (-serialize serializer lz4-byte write-handlers val)
-      (.flush lz4-byte))))
-)
+   (defrecord Lz4Compressor [serializer]
+     PStoreSerializer
+     (-deserialize [_ read-handlers bytes]
+       (let [lz4-byte (LZ4FrameInputStream. bytes)]
+         (-deserialize serializer read-handlers lz4-byte)))
+     (-serialize [_ bytes write-handlers val]
+       (let [lz4-byte (LZ4FrameOutputStream. bytes)]
+         (-serialize serializer lz4-byte write-handlers val)
+         (.flush lz4-byte)))))
 
 (defn null-compressor [serializer]
   (NullCompressor. serializer))
@@ -36,10 +35,8 @@
   (UnsupportedLZ4Compressor. serializer))
 
 #?(:clj
-(defn lz4-compressor [serializer]
-  (Lz4Compressor. serializer))
-
-)
+   (defn lz4-compressor [serializer]
+     (Lz4Compressor. serializer)))
 
 #?(:clj
    (defmacro native-image-build? []

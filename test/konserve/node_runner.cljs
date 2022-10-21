@@ -10,11 +10,10 @@
   ([] (run-tests nil))
   ([opts]
    (cljs.test/run-tests (merge (cljs.test/empty-env) opts)
-      'konserve.cache-test
-      'konserve.gc-test
-      'konserve.node-filestore-test
-      'konserve.serializers-test)))
-
+                        'konserve.cache-test
+                        'konserve.gc-test
+                        'konserve.node-filestore-test
+                        'konserve.serializers-test)))
 
 ; clj -M:test -m cljs.main  -t node  -o out/runner.js -c konserve.node-runner
 (defn -main [& args]
