@@ -9,9 +9,6 @@
 
 (def ^:const header-size 20)
 
-;; deprecated, was used at some point during 0.6.0-alpha period
-(def ^:const small-header-size 8)
-
 (defn create-header
   "Return Byte Array with following content
      1th Byte = Storage layout used
@@ -77,16 +74,21 @@
            compressor-id (.get bb 2)
            encryptor-id (.get bb 3)
            meta-size (.getInt bb 4)
-           small-header-size? (and (= version 1)
-                                   ;; using rest of header
-                                   ;; requires version bump to use these bytes now
-                                   (header-not-zero-padded? header-bytes))]
+           ;; was used temporarily at some point during 0.6.0-alpha (JVM only)
+           small-header-size 8
+           actual-header-size (if (and (= version 1)
+                                       (= 20 (count header-bytes))
+                                       ;; use rest of header to detect actual 8
+                                       ;; byte size requires version bump to set
+                                       ;; these bytes to non-zero now
+                                       (header-not-zero-padded? header-bytes))
+                                small-header-size header-size)]
        [version
         (serializers (byte->key serializer-id))
         (byte->compressor compressor-id)
         (byte->encryptor encryptor-id)
         meta-size
-        small-header-size?])
+        actual-header-size])
      :cljs
      (let [version (aget header-bytes 0)
            _ (when-not (= version 1)
@@ -103,7 +105,7 @@
         (byte->compressor compressor-id)
         (byte->encryptor encryptor-id)
         meta-size
-        false])))
+        header-size])))
 
 (def ^:const default-version 1)
 
