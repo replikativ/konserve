@@ -45,6 +45,8 @@
     :else (throw (ex-info (str "Invalid konserve store key: " store-key)
                           {:key store-key}))))
 
+#?(:cljs (extend-type js/Uint8Array ICounted (-count [this] (alength this))))
+
 (defn update-blob
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."

@@ -1,281 +1,316 @@
 (ns konserve.indexeddb
-  (:require [cljs.core.async :refer [go go-loop take! <! >! put! close! chan poll!]]
-            [incognito.edn :refer [read-string-safe]]
-            [konserve.protocols :refer [PEDNKeyValueStore -exists? -update-in -assoc-in -get-meta
-                                        PBinaryKeyValueStore -bget -bassoc
-                                        PStoreSerializer -serialize -deserialize]]
-            [konserve.serializers :as ser]))
+  (:require [cljs.core.async :refer [go take! put! close!]]
+            [konserve.compressor]
+            [konserve.encryptor]
+            [konserve.impl.defaults :as defaults]
+            [konserve.impl.storage-layout :as storage-layout :refer [PBackingStore]]
+            [konserve.serializers]
+            [konserve.utils :refer [with-promise]]))
 
-#_(defrecord IndexedDBKeyValueStore [db store-name serializer read-handlers write-handlers locks version]
-    PEDNKeyValueStore
-    (-exists? [_this key]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name])
-            obj-store (.objectStore tx store-name)
-            req       (.openCursor obj-store (pr-str key))]
-        (set! (.-onerror req)
-              (fn [e]
-                (put! res (ex-info "Cannot check for existence."
-                                   {:type  :access-error
-                                    :key   key
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess req)
-              (fn [e]
-                (put! res (if (.-result (.-target e))
-                            true false))
-                (close! res)))
-        res))
-
-    (-get-meta [_this key]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name])
-            obj-store (.objectStore tx store-name)
-            req       (.get obj-store (pr-str key))]
-        (set! (.-onerror req)
-              (fn [e]
-                (put! res (ex-info "Cannot read edn value."
-                                   {:type  :read-error
-                                    :key   key
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess req)
-              (fn [e] (when-let [r (.-result req)]
-                        (put! res (-deserialize serializer read-handlers (aget r "meta"))))
-                (close! res)))
-        res))
-
-    (-get [this key]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name])
-            obj-store (.objectStore tx store-name)
-            req       (.get obj-store (pr-str key))]
-        (set! (.-onerror req)
-              (fn [e]
-                (put! res (ex-info "Cannot read edn value."
-                                   {:type  :read-error
-                                    :key   key
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess req)
-              (fn [e] (when-let [r (.-result req)]
-                        (put! res (-deserialize serializer read-handlers (aget r "edn_value"))))
-                (close! res)))
-        res))
-
-    (-assoc-in [this key-vec meta-up val] (-update-in this key-vec meta-up (fn [_] val) []))
-    (-update-in [_this key-vec meta-up up-fn args]
-      (let [[fkey & rkey] key-vec
-            res           (chan)
-            tx            (.transaction db #js [store-name] "readwrite")
-            obj-store     (.objectStore tx store-name)
-            req           (.get obj-store (pr-str fkey))]
-        (set! (.-onerror req)
-              (fn [e]
-                (put! res (ex-info "Cannot read edn value."
-                                   {:type  :read-error
-                                    :key   key-vec
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess req)
-              (fn read-old [e]
-                (try
-                  (let [[old-meta old] (when-let [r (.-result req)]
-                                         [(-deserialize serializer read-handlers (aget r "meta")) (-deserialize serializer read-handlers (aget r "edn_value"))])
-                        edn-meta       (meta-up old-meta)
-                        edn-value      (if-not (empty? rkey)
-                                         (apply update-in old rkey up-fn args)
-                                         (apply up-fn old args))]
-                    (let [up-req (.put obj-store
-                                       (clj->js {:key (pr-str fkey)
-                                                 :version version
-                                                 :meta
-                                                 (-serialize serializer nil write-handlers edn-meta)
-                                                 :edn_value
-                                                 (-serialize serializer nil write-handlers edn-value)}))]
-                      (set! (.-onerror up-req)
-                            (fn [e]
-                              (put! res (ex-info "Cannot write edn value."
-                                                 {:type  :write-error
-                                                  :key   key-vec
-                                                  :error (.-target e)}))
-                              (close! res)))
-                      (set! (.-onsuccess up-req)
-                            (fn [e]
-                              (put! res [(get-in old rkey) edn-value])
-                              (close! res)))))
-                  (catch :default e
-                    (put! res (ex-info "Cannot parse edn value."
-                                       {:type  :read-error
-                                        :key   key-vec
-                                        :error e}))
-                    (close! res)))))
-        res))
-
-    (-dissoc [_this key]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name] "readwrite")
-            obj-store (.objectStore tx store-name)
-            up-req    (.delete obj-store (pr-str key))]
-        (set! (.-onerror up-req)
-              (fn [e]
-                (put! res (ex-info "Cannot write edn value."
-                                   {:type  :write-error
-                                    :key   key
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess up-req)
-              (fn [e]
-                (close! res)))
-        res))
-
-    PBinaryKeyValueStore
-    (-bget [_this key lock-cb]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name])
-            obj-store (.objectStore tx store-name)
-            req       (.get obj-store (pr-str key))]
-        (set! (.-onerror req)
-              (fn [e]
-                (go
-                  (>! res (<!
-                           (lock-cb (ex-info "Cannot read binary value."
-                                             {:type  :read-error
-                                              :key   key
-                                              :error (.-target e)}))))
-                  (close! res))))
-        (set! (.-onsuccess req)
-              (fn [e] (when-let [r (.-result req)]
-                        (put! res (lock-cb (aget r "value"))))
-                ;; returns nil
-                (close! res)))
-        res))
-    (-bassoc [this key meta-up blob]
-      (let [res       (chan)
-            tx        (.transaction db #js [store-name] "readwrite")
-            obj-store (.objectStore tx store-name)
-            req       (.get obj-store (pr-str key))]
-        (set! (.-onerror req)
-              (fn [e]
-                (put! res (ex-info "Cannot read edn value."
-                                   {:type  :read-error
-                                    :key   key
-                                    :error (.-target e)}))
-                (close! res)))
-        (set! (.-onsuccess req)
-              (fn read-old [e]
-                (try
-                  (let [old-meta (when-let [r (.-result req)]
-                                   (-deserialize serializer read-handlers (aget r "meta")))
-                        edn-meta (meta-up old-meta)]
-                    (let [up-req (.put obj-store
-                                       (clj->js {:key   (pr-str key)
-                                                 :meta
-                                                 (-serialize serializer nil write-handlers edn-meta)
-                                                 :version version
-                                                 :value blob}))]
-                      (set! (.-onerror up-req)
-                            (fn [e]
-                              (put! res (ex-info "Cannot write binary value."
-                                                 {:type  :write-error
-                                                  :key   key
-                                                  :error (.-target e)}))
-                              (close! res)))
-                      (set! (.-onsuccess up-req)
-                            (fn [e] (close! res)))))
-                  (catch :default e
-                    (put! res (ex-info "Cannot parse edn value."
-                                       {:type  :read-error
-                                        :key   key
-                                        :error e}))
-                    (close! res)))))
-        res)))
-
-#_(defn new-indexeddb-store
-    "Create an IndexedDB backed edn store with read-handlers according to
-  incognito.
-
-  Be careful not to mix up edn and JSON values."
-    [name & {:keys [read-handlers write-handlers serializer version]
-             :or {read-handlers (atom {})
-                  write-handlers (atom {})
-                  serializer (ser/string-serializer)
-                  version 1}}]
-    (let [res (chan)
-          req (.open js/window.indexedDB name 1)]
-      (set! (.-onerror req)
-            (fn [e]
-              (put! res (ex-info "Cannot open IndexedDB store."
-                                 {:type :db-error
-                                  :error (.-target e)}))
-              (close! res)))
+(defn- connect-to-idb [db-name]
+  (let [req (js/window.indexedDB.open db-name 1)]
+    (with-promise out
+      (set! (.-onblocked req) (fn [event] (put! out [event])))
+      (set! (.-onerror req) (fn [event] (put! out [event])))
       (set! (.-onsuccess req)
-            (fn success-handler [e]
-              (put! res (map->IndexedDBKeyValueStore {:db (.-result req)
-                                                      :serializer serializer
-                                                      :store-name name
-                                                      :read-handlers read-handlers
-                                                      :write-handlers write-handlers
-                                                      :locks (atom {})
-                                                      :version version}))))
+        (fn [event] (put! out [nil (-> event .-target .-result)])))
       (set! (.-onupgradeneeded req)
-            (fn upgrade-handler [e]
-              (let [db (-> e .-target .-result)]
-                (.createObjectStore db name #js {:keyPath "key"}))))
-      res))
+        (fn [ev]
+          (if (== 1 (.-oldVersion ev))
+            (throw (js/Error. "upgrade not supported at this time"))
+            (let [db (-> ev .-target .-result)
+                  store (.createObjectStore db "")]
+              (set! (-> ev .-target .-transaction) #(put! out [nil db])))))))))
 
-(comment
-    ;;new-gc
-    ;; jack in figwheel cljs REPL
-  (require 'figwheel-sidecar.repl-api)
-  (figwheel-sidecar.repl-api/cljs-repl)
+(defn- IDBRequest->ch [req]
+  (with-promise out
+    (set! (.-onerror req) (fn [event] (put! out [event])))
+    (set! (.-onsuccess req) (fn [event] (put! out [nil event])))))
 
-  (defrecord Test [a])
-  (Test. 5)
+(defn delete-idb [db-name]
+  (IDBRequest->ch (js/window.indexedDB.deleteDatabase db-name)))
 
-  (go (def my-store (<! (new-indexeddb-store "konserve"
-                                             :read-handlers
-                                             (atom {'konserve.indexeddb.Test
-                                                    map->Test})))))
+(defn list-dbs []
+  (with-promise out
+    (let [p (js/window.indexedDB.databases)]
+      (.then p #(put! out [nil %]))
+      (.catch p #(put! out [%])))))
 
-    ;; or
-  (-jassoc-in my-store ["test" "bar"] #js {:a 3})
-  (go (println (<! (-jget-in my-store ["test"]))))
-  (go (println (<! (-exists? my-store 1))))
+(defn db-exists? [db-name]
+  (with-promise out
+    (take! (list-dbs)
+      (fn [[err ok :as res]]
+        (if err
+          (put! out false)
+          (put! out (reduce (fn [acc o]
+                          (if (= db-name (goog.object.get o "name"))
+                            (reduced true)
+                            false))
+                        false
+                        ok)))))))
 
-  (go (doseq [i (range 10)]
-        (println (<! (-get-in my-store [i])))))
+(defn- blob->arraybuf [blob]
+  (with-promise out
+    (if (nil? blob)
+      (put! out [nil])
+      (let [p (.arrayBuffer blob)]
+        (.then p #(put! out [nil %]))
+        (.catch p #(put! out [%]))))))
 
-  (go (time
-       (doseq [i (range 10)]
-         (<! (-update-in my-store [i] (fn [_] (inc i)))))
-       #_(doseq [i (range 10)]
-           (println (<! (-get-in my-store [i]))))))
-  (go (println (<! (-get my-store 999))))
+(defn read-blob [db key]
+  (with-promise out
+    (take! (IDBRequest->ch (.get (.objectStore (.transaction db #js[""]) "") key))
+      (fn [[err ok :as res]]
+        (if err
+          (put! out res)
+          (let [blob (-> ok .-target .-result)]
+            (put! out [nil blob])))))))
 
-  (go (prn (<! (-update-in my-store ["foo"] (fn [_] {:meta "META"}) (fn [_] 0) []))))
+(defn write-blob [db key blob]
+  (let [ostore (.objectStore (.transaction db #js[""] "readwrite") "")]
+    (IDBRequest->ch (.put ostore blob key))))
 
-  (go (prn (<! (-update-in my-store ["foo"] (fn [_] {:meta "META"}) inc []))))
+;;==============================================================================
 
-  (go (println (<! (-get-meta my-store "foo"))))
+(defn flush-blob
+  [^BackingBlob {:keys [db key buf header metadata value] :as bb}]
+  (let [bin (if (some? buf)
+              #js[buf]
+              #js[header metadata value])
+        blob (js/Blob. bin #js{:type "application/octet-stream"})]
+    (with-promise out
+      (take! (write-blob db key blob)
+        (fn [[err]]
+          (if err
+            (put! out (ex-info "error writing blob to objectStore"
+                               {:cause err
+                                :caller (symbol ::flush-blob)}))
+            (close! out)))))))
 
-  (go (println (<! (-get my-store "foo"))))
+(defn- get-buf
+  "this ensures that blobs are cached on BackingBlobs as ArrayBuffers and read
+   from the db only once."
+  [^BackingBlob {:keys [db key buf] :as bb}]
+  (with-promise out
+    (if (some? buf)
+      (put! out [nil buf])
+      (take! (read-blob db key)
+        (fn [[err blob :as res]]
+          (if err
+            (put! out res)
+            (take! (blob->arraybuf blob)
+              (fn [[err ok :as res]]
+                (if err
+                  (put! out res)
+                  (do
+                    (set! (.-buf bb) ok)
+                    (put! out res)))))))))))
 
-  (go (println (<! (-assoc-in my-store ["rec-test"] (Test. 5)))))
-  (go (println (<! (-get my-store "rec-test"))))
+(defn- read-header
+  [^BackingBlob {:keys [db key buf] :as this}]
+  (with-promise out
+    (take! (get-buf this)
+      (fn [[err ok :as res]]
+        (if err
+          (put! out (ex-info "error reading blob from objectStore"
+                             {:cause err
+                              :caller (symbol ::read-header)}))
+          (let [view (js/Uint8Array. ok)
+                header (.slice view 0 storage-layout/header-size)]
+            (put! out header)))))))
 
-  (go (println (<! (-assoc-in my-store ["test2"] {:a 1 :b 4.2}))))
+(defn- read-binary
+  [^BackingBlob {:keys [db key buf] :as this} meta-size locked-cb]
+  (with-promise out
+    (take! (read-blob db key)
+      (fn [[err blob :as res]]
+        (if err
+          (put! out (ex-info "error reading blob from objectStore"
+                             {:cause err
+                              :caller (symbol ::read-binary)}))
+          (do
+            (locked-cb {:input-stream (.stream blob)
+                        :size (.-size blob)
+                        :offset (+ meta-size storage-layout/header-size)})
+            (close! out)))))))
 
-  (go (println (<! (-assoc-in my-store ["test"] {:a 43}))))
+(defrecord ^{:doc "buf is cached data that has been read from the db,
+                   & {header metadata value} are bin data to be written.
+                   If a write begins, buf is discarded."}
+  BackingBlob [db key buf header metadata value]
+  storage-layout/PBackingBlob
+  (-get-lock [this _env]
+    (let [lock (reify
+                 storage-layout/PBackingLock
+                 (-release [this env] (go)))]
+      (go lock))) ;no-op but the alternative is to overwrite defaults/update-blob
+  (-sync [this _env] (.force this true))
+  (-close [this _env] (go (.close this)))
+  (-read-header [this _env] (read-header this)) ;=> ch<buf|err>
+  (-read-meta [this meta-size _env]
+    (let [view (js/Uint8Array. buf)
+          bytes (.slice view
+                        storage-layout/header-size
+                        (+ storage-layout/header-size meta-size))]
+      (go bytes)))
+  (-read-value [this meta-size _env]
+    (let [view (js/Uint8Array. buf)
+          bytes (.slice view (+ storage-layout/header-size meta-size))]
+      (go bytes)))
+  (-read-binary [this meta-size locked-cb _env]
+    (read-binary this meta-size locked-cb))
+  (-write-header [this header _env]
+    (go (set! (.-buf this) nil)
+        (set! (.-header this) header)))
+  (-write-meta [this meta-arr _env] (go (set! (.-metadata this) meta-arr)))
+  (-write-value [this value-arr meta-size _env]
+    (go (set! (.-value this) value-arr)))
+  (-write-binary [this meta-size blob env]
+    (go (set! (.-value this) blob)))
+  Object
+  (force [this metadata?] (flush-blob this))
+  (close [this]
+    (do
+      (set! (.-db this) nil)
+      (set! (.-key this) nil)
+      (set! (.-buf this) nil)
+      (set! (.-header this) nil)
+      (set! (.-metadata this) nil)
+      (set! (.-value this) nil))))
 
-  (go (println (<! (-update-in my-store ["test" :a] inc))))
-  (go (println (<! (-get my-store "test2"))))
+(defn open-backing-blob [db key] (BackingBlob. db key nil nil nil nil))
 
-  (go (println (<! (-bassoc my-store
-                            "blob-fun"
-                            (fn [_] "my meta")
-                            (new js/Blob #js ["hello worlds"], #js {"type" "text/plain"})))))
+(defrecord IndexedDBackingStore [db-name db]
+  Object
+  ;; needed to unref conn before can cycle database construction
+  (close [_] (go (when (some? db)(.close db))))
+  storage-layout/PBackingStore
+  (-create-blob [this store-key env]
+    (assert (not (:sync? env)))
+    (go (open-backing-blob db store-key)))
+  (-delete-blob [this key env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (let [tx (.transaction db #js[""] "readwrite")
+            ostore (.objectStore tx "")]
+        (take! (IDBRequest->ch (.delete ostore key))
+          (fn [[err]]
+            (if err
+              (put! out (ex-info "error deleting blob"
+                                 {:cause err
+                                  :caller (symbol ::-delete-blob)}))
+              (close! out)))))))
+  (-migratable [this key store-key env] (go false))
+  (-blob-exists? [this store-key env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (let [tx (.transaction db #js[""])
+            ostore (.objectStore tx "")]
+        (take! (IDBRequest->ch (.getKey ostore store-key))
+          (fn [[err ok]]
+            (if err
+              (put! out (ex-info "error getting key from objectStore"
+                                 {:cause err
+                                  :caller (symbol ::-blob-exists?)}))
+              (let [res (-> ok .-target .-result boolean)]
+                (put! out res))))))))
+  (-keys [this env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (let [tx (.transaction db #js[""])
+            ostore (.objectStore tx "")]
+        (take! (IDBRequest->ch (.getAllKeys ostore))
+          (fn [[err ok]]
+            (if err
+              (put! out (ex-info "error listing keys in objectStore"
+                                 {:cause err
+                                  :caller (symbol ::-keys)}))
+              (let [ks (-> ok .-target .-result)]
+                (put! out ks))))))))
+  (-copy [this from to env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (take! (read-blob db from)
+        (fn [[err blob]]
+          (if err
+            (put! out (ex-info "error reading blob from objectStore"
+                               {:cause err
+                                :caller (symbol ::-copy)}))
+            (take! (write-blob db to blob)
+             (fn [[err]]
+               (if err
+                 (put! out (ex-info "error writing blob to objectStore"
+                                    {:cause err
+                                     :caller (symbol ::-copy)}))
+                 (close! out)))))))))
+  (-create-store [this env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (take! (connect-to-idb db-name)
+        (fn [[err db]]
+          (if err
+            (put! out (ex-info "error connecting to database"
+                               {:cause err
+                                :caller (symbol ::-create-store)}))
+            (do
+              (set! (.-db this) db)
+              (put! out this)))))))
+  (-delete-store [this env]
+    (assert (not (:sync? env)))
+    (with-promise out
+      (.close db)
+      (take! (delete-idb db-name)
+        (fn [[err]]
+          (if err
+            (put! out (ex-info "error deleting database"
+                               {:cause err
+                                :caller (symbol ::-delete-store)}))
+            (close! out))))))
+  (-store-exists? [this env]
+    (assert (not (:sync? env)))
+    (db-exists? db-name))
+  (-sync-store [this env] (when-not (:sync? env) (go))))
 
-  (go (println (<! (-get-meta my-store "blob-fun"))))
+(defn connect-idb-store
+  "Connect to a IndexedDB backed KV store with the given db name.
+   Optional serializer, read-handlers, write-handlers, buffer-size and config.
 
-  (go (.log js/console (<! (-bget my-store "blob-fun" identity)))))
+   This implementation stores all values as js/Blobs in an IndexedDB
+   object store instance. The object store itself is nameless, and there
+   is no use of versioning, indexing, or cursors.
+
+   This data is stored as if indexedDB was a filesystem. Since we do not have
+   file-descriptors to write with, strategy is to build a blob from components
+   (js/Blobs have a nice api explicitly for this) and flush the blob to
+   indexeddb storage on -sync-store calls (which doesnt concern consumers)
+
+   + all store ops are asynchronous only
+
+   + the database object must be 'unref'ed by calling db.close() before database
+   instances can be deleted. You can do this easily by calling store.close()
+   object method, which is unique to this impl. If you fail to maintain access to
+   db and core.async gets into a weird state due to an unhandled error, you
+   will be unable to delete the database until the vm is restarted
+
+   + As of November 2022 firefox does not support IDBFactory.databases() so
+   expect list-dbs, db-exists?, & PBackingStore/-store-exists? to all throw. You
+   must work around this by keeping track of each db name you intend to delete
+   https://developer.mozilla.org/en-US/docs/Web/API/IDBFactory/databases#browser_compatibility
+
+   + PBackingBlob/-read-binary returns a webstream that is *not* queued to the
+   value offset in the same way that the filestore implementations are. Consumers
+   must discard the amount of bytes found in the :offset key of the locked-cb
+   arg map. See: https://developer.mozilla.org/en-US/docs/Web/API/Blob/stream"
+  [db-name & {:keys [config] :as params}]
+  (let [store-config (merge {:default-serializer :FressianSerializer
+                             :compressor         konserve.compressor/null-compressor
+                             :encryptor          konserve.encryptor/null-encryptor
+                             :read-handlers      (atom {})
+                             :write-handlers     (atom {})
+                             :config             (merge {:sync-blob? true
+                                                         :in-place? true
+                                                         :lock-blob? true}
+                                                        config)}
+                            (dissoc params :config))
+        backing            (IndexedDBackingStore. db-name nil)]
+    (defaults/connect-default-store backing store-config)))
