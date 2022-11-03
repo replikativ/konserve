@@ -10,7 +10,6 @@
 [[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
 
 
-
 [[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
@@ -51,14 +50,29 @@ write operations is also implemented.
    :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
    :END:
 
-A file-system store in Clojure and [[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] for ClojureScript are provided as
-elementary reference implementations for the two most important platforms. No
-setup and no additional dependencies are needed.
+*** In-Memory Store
+
+For simple purposes a memory store wrapping an Atom is implemented for Clojure and ClojureScript.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [new-mem-store]]
+              [konserve.core :as k]))
+
+  (def my-db (new-mem-store))
+
+#+END_SRC
 
 *** fs-store
     :PROPERTIES:
     :CUSTOM_ID: h:c88f8eb7-27b1-46ff-bc64-918dd1eb30bc
     :END:
+
+A file-system store in Clojure and for Node are provided as
+elementary reference implementations for the two most important platforms. No
+setup and no additional dependencies are needed.
 
 The file-system store currently uses [[https://github.com/clojure/data.fressian][fressian]] in Clojure and [[https://github.com/pkpkpk/fress][fress]] in
 ClojureScript and is quite efficient. Both implementations use the same on-disk
@@ -70,10 +84,25 @@ is not critical for you (e.g. for a session store). Note that the database will
 not be corrupted in this case, you can just lose some write operations before
 the crash.
 
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [connect-fs-store]]
+              [konserve.core :as k]))
+
+  (def my-folder "path/to/folder")
+  (def my-db (connect-fs-store my-folder))
+
+#+END_SRC
+
 *** IndexedDB
     :PROPERTIES:
     :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
     :END:
+
+[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
+ClojureScript browser backends.
 
 For IndexedDB there is no internal JSON-representation of the underlying
 store like [[https://github.com/cognitect/transit-clj][transit]] yet,
@@ -81,6 +110,19 @@ hence it is fairly slow for edn still. There is a JSON store protocol
 implemented for IndexedDB in case interoperability with a JavaScript
 application is wanted. Be careful not to confuse values with edn values,
 they are stored in separate locations and cannot clash.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [connect-idb-store]]
+              [konserve.core :as k])
+    (:require-macros [cljs.core.async.macros :refer [go]]))
+
+  (def dbname "example-db")
+  (go (def my-db (<! (connect-idb-store dbname))))
+
+#+END_SRC
 
 *** External Backends
     :PROPERTIES:
@@ -191,39 +233,16 @@ You can read and write custom records according to
 Add to your leiningen dependencies:
 [[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
-From a Clojure REPL run the following functions for the core.async variants of
-the code. 
+*** Synchronous Execution
+
+Run the following synchronous code if you are not using core.async in your scope:
+
 #+BEGIN_SRC clojure 
   (ns test-db
-    (:require [konserve.filestore :refer [new-fs-store]]
-              [konserve.core :as k]
-              [clojure.core.async :refer [<!]]))
-
-  (def store (<! (new-fs-store "/tmp/store")))
-
-  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-  (<! (k/get-in store ["foo"]))
-  (<! (k/exists? store "foo"))
-
-  (<! (k/assoc-in store [:bar] 42))
-  (<! (k/update-in store [:bar] inc))
-  (<! (k/get-in store [:bar]))
-  (<! (k/dissoc store :bar))
-
-  (<! (k/append store :error-log {:type :horrible}))
-  (<! (k/log store :error-log))
-
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (<! (k/bassoc store "banana" ba))))
-#+END_SRC
-
-And the following synchronous code if you are not using core.async in your scope: 
-#+BEGIN_SRC clojure 
-  (ns test-db
-    (:require [konserve.filestore :refer [new-fs-store]]
+    (:require [konserve.filestore :refer [connect-fs-store]]
               [konserve.core :as k]))
 
-  (def store (new-fs-store "/tmp/store" :opts {:sync? true}))
+  (def store (connect-fs-store "/tmp/store" :opts {:sync? true}))
 
   (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
   (k/get-in store ["foo"] nil {:sync? true})
@@ -246,64 +265,45 @@ And the following synchronous code if you are not using core.async in your scope
           {:sync? true})
 #+END_SRC
 
+*** Asynchronous Execution
 
 In a ClojureScript REPL you can evaluate the expressions from the REPL
 each wrapped in a go-block.
 
-For simple purposes a memory store wrapping an Atom is implemented as
-well: 
-
-#+BEGIN_SRC clojure 
+#+BEGIN_SRC clojure
   (ns test-db
     (:require [konserve.memory :refer [new-mem-store]]
               [konserve.core :as k]))
 
   (go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
-  (new-mem-store (atom {:foo 42}))))) 
+  (new-mem-store (atom {:foo 42})))))
 #+END_SRC
 
-In ClojureScript from a browser (you need IndexedDB available in your js
-env): 
-
+From a Clojure REPL run the following functions for the core.async variants of
+the code.
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.indexeddb :refer [new-indexeddb-store]])
-    (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
+    (:require [konserve.filestore :refer [connect-fs-store]]
+              [konserve.core :as k]
+              [clojure.core.async :refer [<!]]))
 
-  (go (def my-db (<! (new-indexeddb-store "konserve"))))
+  (def store (<! (connect-fs-store "/tmp/store")))
 
-  (go (println "get:" (<! (k/get-in my-db ["test" :a]))))
+  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+  (<! (k/get-in store ["foo"]))
+  (<! (k/exists? store "foo"))
 
-  (go (doseq [i (range 10)] (<! (k/assoc-in my-db [i] i))))
+  (<! (k/assoc-in store [:bar] 42))
+  (<! (k/update-in store [:bar] inc))
+  (<! (k/get-in store [:bar]))
+  (<! (k/dissoc store :bar))
 
-  ;; prints 0 to 9 each on a line
-  (go (doseq [i (range 10)] (println (<! (k/get-in my-db [i])))))
+  (<! (k/append store :error-log {:type :horrible}))
+  (<! (k/log store :error-log))
 
-  (go (println (<! (k/assoc-in my-db ["test"] {:a 1 :b 4.2}))))
-
-  (go (println (<! (k/update-in my-db ["test" :a] inc))))
-  ;; => "test" contains {:a 2 :b 4.2}
+  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+    (time (<! (k/bassoc store "banana" ba))))
 #+END_SRC
-
-For non-REPL code execution you have to put all channel operations in one
-top-level go-block for them to be synchronized:
-
-#+BEGIN_SRC clojure 
-  (ns test-db
-    (:require [konserve.indexeddb :refer [new-indexeddb-store]])
-    (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
-
-  (go (def my-db (<! (new-indexeddb-store "konserve")))
-
-      (println "get:" (<! (k/get-in my-db ["test" :a])))
-
-      (doseq [i (range 10)]
-         (<! (k/assoc-in my-db [i] i))))
-
-#+END_SRC
-
-For more examples have a look at the comment blocks at the end of the
-respective namespaces.
 
 ** Backend implementation guide
    :PROPERTIES:
@@ -311,7 +311,7 @@ respective namespaces.
    :END:
    
    We provide a [[file:doc/backend.org][backend implementation guide]] .
-   
+
 ** JavaScript bindings
    :PROPERTIES:
    :CUSTOM_ID: h:05f3f415-afc2-4e11-a9f6-6e25519adb12
@@ -358,7 +358,7 @@ namespace:
    :END:
 
   
-*** 1.0.0-alpha1 
+*** 0.7.274
     :PROPERTIES:
     :CUSTOM_ID: h:433a14fe-229b-4944-8beb-fd268917705c
     :END:
