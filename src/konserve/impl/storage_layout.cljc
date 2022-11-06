@@ -41,6 +41,21 @@
        (aset return-buffer 4 meta)
        return-buffer)))
 
+(defn- header-not-zero-padded? [^bytes bs]
+  ;; does not have zero padding from byte 9 to 20
+  (or (not= 0 (aget bs  8))
+      (not= 0 (aget bs  9))
+      (not= 0 (aget bs 10))
+      (not= 0 (aget bs 11))
+      (not= 0 (aget bs 12))
+      (not= 0 (aget bs 13))
+      (not= 0 (aget bs 14))
+      (not= 0 (aget bs 15))
+      (not= 0 (aget bs 16))
+      (not= 0 (aget bs 17))
+      (not= 0 (aget bs 18))
+      (not= 0 (aget bs 19))))
+
 (defn parse-header
   "Inverse function to create-header. serializers are a map of serializer-id to
   instance that are potentially initialized with custom handlers by the store
@@ -58,12 +73,22 @@
            serializer-id (.get bb 1)
            compressor-id (.get bb 2)
            encryptor-id (.get bb 3)
-           meta-size (.getInt bb 4)]
+           meta-size (.getInt bb 4)
+           ;; was used temporarily at some point during 0.6.0-alpha (JVM only)
+           small-header-size 8
+           actual-header-size (if (and (= version 1)
+                                       (= 20 (count header-bytes))
+                                       ;; use rest of header to detect actual 8
+                                       ;; byte size requires version bump to set
+                                       ;; these bytes to non-zero now
+                                       (header-not-zero-padded? header-bytes))
+                                small-header-size header-size)]
        [version
         (serializers (byte->key serializer-id))
         (byte->compressor compressor-id)
         (byte->encryptor encryptor-id)
-        meta-size])
+        meta-size
+        actual-header-size])
      :cljs
      (let [version (aget header-bytes 0)
            _ (when-not (= version 1)
@@ -79,7 +104,8 @@
         (serializers (byte->key serializer-id))
         (byte->compressor compressor-id)
         (byte->encryptor encryptor-id)
-        meta-size])))
+        meta-size
+        header-size])))
 
 (def ^:const default-version 1)
 

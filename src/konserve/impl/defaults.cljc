@@ -20,7 +20,7 @@
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
                                          default-version
-                                         parse-header create-header]]
+                                         parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
                         :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
    [superv.async :refer [go-try- <?-]]
@@ -124,7 +124,9 @@
   (async+sync
    sync? *default-sync-translation*
    (go-try-
-    (let [[_ serializer compressor encryptor meta-size] (<?- (read-header blob serializers env))
+    (let [[_ serializer compressor encryptor meta-size header-size]
+          (<?- (read-header blob serializers env))
+          env (assoc env :header-size header-size)
           fn-read (partial -deserialize
                            (compressor (encryptor serializer))
                            read-handlers)]
@@ -230,7 +232,7 @@
    (go-try-
     (let [key           (first  key-vec)
           store-key     (key->store-key key)
-          env           (assoc env :store-key store-key)
+          env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           store-key-exists? (<?- (-blob-exists? backing store-key env))
           migration-key (<?- (-migratable backing key store-key env))]

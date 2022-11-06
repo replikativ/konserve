@@ -272,7 +272,7 @@
           (.clear buffer)))
       ch))
   (-read-meta [this meta-size env]
-    (let [{:keys [msg]} env
+    (let [{:keys [msg header-size]} env
           ch (chan)
           buffer (ByteBuffer/allocate meta-size)]
       (try
@@ -287,7 +287,7 @@
           (.clear buffer)))
       ch))
   (-read-value [this meta-size env]
-    (let [{:keys [msg]} env
+    (let [{:keys [msg header-size]} env
           total-size (.size this)
           ch (chan)
           buffer (ByteBuffer/allocate (- total-size
@@ -308,7 +308,7 @@
           (.clear buffer)))
       ch))
   (-read-binary [this meta-size locked-cb env]
-    (let [{:keys [msg]} env
+    (let [{:keys [msg header-size]} env
           total-size (.size this)]
       ;; TODO use FileInputStream to not load the file in memory
       (go-try-
@@ -384,15 +384,17 @@
         (.array buffer)
         (finally
           (.clear buffer)))))
-  (-read-meta [this meta-size _env]
-    (let [buffer (ByteBuffer/allocate meta-size)]
+  (-read-meta [this meta-size env]
+    (let [{:keys [header-size]} env
+          buffer (ByteBuffer/allocate meta-size)]
       (try
         (.read this buffer header-size)
         (.array buffer)
         (finally
           (.clear buffer)))))
-  (-read-value [this meta-size _env]
-    (let [total-size (.size this)
+  (-read-value [this meta-size env]
+    (let [{:keys [header-size]} env
+          total-size (.size this)
           buffer (ByteBuffer/allocate (- total-size
                                          meta-size
                                          header-size))]
@@ -401,8 +403,9 @@
         (.array buffer)
         (finally
           (.clear buffer)))))
-  (-read-binary [this meta-size locked-cb _env]
-    (let [total-size (.size this)]
+  (-read-binary [this meta-size locked-cb env]
+    (let [{:keys [header-size]} env
+          total-size (.size this)]
       ;; TODO use FileInputStream to not load the file in memory
       (locked-cb {:input-stream (ByteArrayInputStream.
                                  (let [buffer (ByteBuffer/allocate (- total-size
