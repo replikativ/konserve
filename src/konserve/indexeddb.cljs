@@ -3,7 +3,7 @@
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
-            [konserve.impl.storage-layout :as storage-layout :refer [PBackingStore]]
+            [konserve.impl.storage-layout :as storage-layout]
             [konserve.serializers]
             [konserve.utils :refer [with-promise]]))
 
@@ -39,7 +39,7 @@
   (with-promise out
     (let [p (js/window.indexedDB.databases)]
       (.then p #(put! out %))
-      (.catch p #(put! out (ex-info (str "error listing databases")
+      (.catch p #(put! out (ex-info "error listing databases"
                                     {:cause %
                                      :caller 'konserve.indexeddb/list-dbs}))))))
 
@@ -268,7 +268,7 @@
 
 (defn connect-idb-store
   "Connect to a IndexedDB backed KV store with the given db name.
-   Optional serializer, read-handlers, write-handlers, buffer-size and config.
+   Optional serializer, read-handlers, write-handlers.
 
    This implementation stores all values as js/Blobs in an IndexedDB
    object store instance. The object store itself is nameless, and there
@@ -296,16 +296,15 @@
    value offset in the same way that the filestore implementations are. Consumers
    must discard the amount of bytes found in the :offset key of the locked-cb
    arg map. See: https://developer.mozilla.org/en-US/docs/Web/API/Blob/stream"
-  [db-name & {:keys [config] :as params}]
+  [db-name & {:as params}]
   (let [store-config (merge {:default-serializer :FressianSerializer
                              :compressor         konserve.compressor/null-compressor
                              :encryptor          konserve.encryptor/null-encryptor
                              :read-handlers      (atom {})
                              :write-handlers     (atom {})
-                             :config             (merge {:sync-blob? true
-                                                         :in-place? true
-                                                         :lock-blob? true}
-                                                        config)}
+                             :config             {:sync-blob? true
+                                                  :in-place? true
+                                                  :lock-blob? true}}
                             (dissoc params :config))
         backing            (IndexedDBackingStore. db-name nil)]
     (defaults/connect-default-store backing store-config)))
