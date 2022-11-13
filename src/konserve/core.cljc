@@ -29,7 +29,7 @@
 
 (defn wait [lock]
   #?(:clj (while (not (poll! lock))
-            (Thread/sleep (rand-int 20)))
+            (Thread/sleep (long (rand-int 20))))
      :cljs (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")))
 
 (defmacro locked [store key & code]
