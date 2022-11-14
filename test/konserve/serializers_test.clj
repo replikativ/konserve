@@ -35,3 +35,18 @@
       (is (= (<!! (k/get-in store [:foo]))
              nil))
       (delete-store folder))))
+
+(deftest cbor-serializer-test
+  (testing "Test CBOR serializer functionality."
+    (let [folder "/tmp/konserve-fs-cbor-test"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder :default-serializer :CBORSerializer))]
+      (is (= (<!! (k/get-in store [:foo]))
+             nil))
+      (<!! (k/assoc-in store [:foo] (Date.)))
+      (is (= (type (<!! (k/get-in store [:foo])))
+             java.time.Instant))
+      (<!! (k/dissoc store :foo))
+      (is (= (<!! (k/get-in store [:foo]))
+             nil))
+      (delete-store folder))))

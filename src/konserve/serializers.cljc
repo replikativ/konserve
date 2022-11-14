@@ -1,10 +1,28 @@
 (ns konserve.serializers
-  (:require #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
+  (:require [clj-cbor.core :as cbor]
+            #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
             [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
             [incognito.edn :refer [read-string-safe]])
   #?(:clj (:import ;[java.io FileOutputStream FileInputStream DataInputStream DataOutputStream]
            [org.fressian.handlers WriteHandler ReadHandler])))
+
+(defrecord CBORSerializer [codec]
+  PStoreSerializer
+  (-deserialize [_ read-handlers bytes]
+    (assert (empty? @read-handlers) "Read handlers not supported yet.")
+    (cbor/decode codec bytes))
+  (-serialize [_ bytes write-handlers val]
+    (assert (empty? @write-handlers) "Write handlers not supported yet.")
+    (cbor/encode codec bytes val)))
+
+(defn cbor-serializer
+  ([] (cbor-serializer {} {}))
+  ([read-handlers write-handlers]
+   (let [codec (cbor/cbor-codec
+                :write-handlers (merge cbor/default-write-handlers write-handlers)
+                :read-handlers (merge cbor/default-read-handlers read-handlers))]
+     (map->CBORSerializer {:codec codec}))))
 
 (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
   #?@(:cljs (INamed ;clojure.lang.Named
@@ -35,6 +53,7 @@
   ([] (fressian-serializer {} {}))
   ([read-handlers write-handlers] (map->FressianSerializer {:custom-read-handlers read-handlers
                                                             :custom-write-handlers write-handlers})))
+
 (defrecord StringSerializer []
   #?@(:cljs (INamed
              (-name [_] "StringSerializer")
@@ -57,7 +76,8 @@
 
 (def byte->serializer
   {0 (string-serializer)
-   1 (fressian-serializer)})
+   1 (fressian-serializer)
+   2 (cbor-serializer)})
 
 (def serializer-class->byte
   (construct->class byte->serializer))
