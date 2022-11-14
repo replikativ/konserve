@@ -9,20 +9,20 @@
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
         com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.332"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
-        com.taoensso/timbre {:mvn/version "5.2.1"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.19.0"}
-                               binaryage/devtools   {:mvn/version "1.0.6"}}
+        com.taoensso/timbre {:mvn/version "6.0.1"}}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.20.7"}
+                               binaryage/devtools {:mvn/version "1.0.6"}}
                   :extra-paths ["test"]}
-           :dev  {:extra-deps {criterium/criterium  {:mvn/version "0.4.6"}
-                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
-                               org.clojure/tools.cli {:mvn/version "1.0.206"}}
-                  :extra-paths ["benchmark/src"]}
+           :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
+                              metasoarous/oz {:mvn/version "2.0.0-alpha5"}
+                              org.clojure/tools.cli {:mvn/version "1.0.206"}}
+                 :extra-paths ["benchmark/src"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
-                                    org.clojure/tools.cli {:mvn/version "1.0.206"}}
+                                    org.clojure/tools.cli {:mvn/version "1.0.214"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha      {:mvn/version "1.66.1034"}
-                               org.clojure/test.check   {:mvn/version "1.1.1"}}
+           :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.71.1119"}
+                               org.clojure/test.check {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
            :node-test {:extra-paths ["test"]
@@ -41,5 +41,5 @@
                     :ns-default build}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
-           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
+           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.0"}}
                   :main-opts ["-m" "cljfmt.main" "fix"]}}}
