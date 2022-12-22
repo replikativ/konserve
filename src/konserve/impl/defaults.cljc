@@ -214,7 +214,7 @@
                  (<! (timeout (rand-int 20))))
                :clj
                (if (:sync? env)
-                 (Thread/sleep (rand-int 20))
+                 (Thread/sleep (long (rand-int 20)))
                  (<! (timeout (rand-int 20)))))
             (if (> i max-lock-attempts)
               (throw (ex-info (str "Failed to acquire lock after " i " iterations.")
