@@ -7,23 +7,23 @@
   #?(:clj (:import [org.fressian.handlers WriteHandler ReadHandler])))
 
 #?(:clj
-  (defrecord CBORSerializer [codec]
-    PStoreSerializer
-    (-deserialize [_ read-handlers bytes]
-      (assert (empty? @read-handlers) "Read handlers not supported yet.")
-      (cbor/decode codec bytes))
-    (-serialize [_ bytes write-handlers val]
-      (assert (empty? @write-handlers) "Write handlers not supported yet.")
-      (cbor/encode codec bytes val))))
+   (defrecord CBORSerializer [codec]
+     PStoreSerializer
+     (-deserialize [_ read-handlers bytes]
+       (assert (empty? @read-handlers) "Read handlers not supported yet.")
+       (cbor/decode codec bytes))
+     (-serialize [_ bytes write-handlers val]
+       (assert (empty? @write-handlers) "Write handlers not supported yet.")
+       (cbor/encode codec bytes val))))
 
 #?(:clj
-  (defn cbor-serializer
-    ([] (cbor-serializer {} {}))
-    ([read-handlers write-handlers]
-     (let [codec (cbor/cbor-codec
-                  :write-handlers (merge cbor/default-write-handlers write-handlers)
-                  :read-handlers (merge cbor/default-read-handlers read-handlers))]
-       (map->CBORSerializer {:codec codec})))))
+   (defn cbor-serializer
+     ([] (cbor-serializer {} {}))
+     ([read-handlers write-handlers]
+      (let [codec (cbor/cbor-codec
+                   :write-handlers (merge cbor/default-write-handlers write-handlers)
+                   :read-handlers (merge cbor/default-read-handlers read-handlers))]
+        (map->CBORSerializer {:codec codec})))))
 
 (defrecord FressianSerializer [custom-read-handlers custom-write-handlers]
   #?@(:cljs (INamed ;clojure.lang.Named
