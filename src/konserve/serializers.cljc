@@ -10,10 +10,12 @@
    (defrecord CBORSerializer [codec]
      PStoreSerializer
      (-deserialize [_ read-handlers bytes]
-       (assert (empty? @read-handlers) "Read handlers not supported yet.")
+       (when-not (empty? @read-handlers)
+         (throw (ex-info "Read handlers not supported yet." {:type :handlers-not-supported-yet})))
        (cbor/decode codec bytes))
      (-serialize [_ bytes write-handlers val]
-       (assert (empty? @write-handlers) "Write handlers not supported yet.")
+       (when-not (empty? @write-handlers)
+         (throw (ex-info "Write handlers not supported yet." {:type :handlers-not-supported-yet})))
        (cbor/encode codec bytes val))))
 
 #?(:clj
