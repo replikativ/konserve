@@ -1,0 +1,4 @@
+{:lint-as {superv.async/go-try-        clojure.core/try
+           konserve.utils/with-promise clj-kondo.lint-as/def-catch-all}
+ :linters {;; 'locked' is introduced by 'async+sync' macro
+           :unused-referred-var {:exclude {konserve.core [locked]}}}}
