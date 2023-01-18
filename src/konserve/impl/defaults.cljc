@@ -34,7 +34,7 @@
   (-release [_this env]
     (if (:sync? env) nil (go-try- nil))))
 
-(defn ^:dynamic key->store-key [key]
+(defn key->store-key [key]
   (str (uuid key) ".ksv"))
 
 (defn store-key->uuid-key [^String store-key]
