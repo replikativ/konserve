@@ -3,8 +3,11 @@
 set -o errexit
 set -o pipefail
 
-# Compile for browser
-npm run ci-test
+# Install for node
+[ -d "node_modules/ws" ] || npm install ws
 
-# Compile for node
-npx shadow-cljs compile node-test
+# Run for node
+TIMBRE_LEVEL=':warn' clojure -M:test -m kaocha.runner unit-node
+
+# Run for browser
+TIMBRE_LEVEL=':warn' clojure -M:test -m kaocha.runner unit-browser
