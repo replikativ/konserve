@@ -80,7 +80,7 @@
              (is (uuid? (second (<! (k/append store :foolog {:bar 43} opts)))))
              (is (= '({:bar 42} {:bar 43}) (<! (k/log store :foolog opts))))
              (is (=  [{:bar 42} {:bar 43}] (<! (k/reduce-log store :foolog conj [] opts))))
-             (let [{:keys [key type last-write] :as metadata} (<! (k/get-meta store :foolog :not-found opts))]
+             (let [{:keys [key type last-write]} (<! (k/get-meta store :foolog :not-found opts))]
                (is (= key :foolog))
                (is (= type :append-log))
                (is (inst? last-write)))

@@ -40,8 +40,9 @@
          (aset return-buffer i (aget env-array i)))
        (aset return-buffer 4 meta)
        return-buffer)))
-
-(defn- header-not-zero-padded? [^bytes bs]
+  
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]} ;; TODO: remove? function is not used currently 
+(defn header-not-zero-padded? [^bytes bs]
   ;; does not have zero padding from byte 9 to 20
   (or (not= 0 (aget bs  8))
       (not= 0 (aget bs  9))
@@ -119,7 +120,9 @@
   (-copy [this from to env] "Copy a blob from one key to another.")
   (-atomic-move [this from to env] "Atomically move (rename) a blob.")
   (-create-store [this env] "Create the underlying store.")
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-delete-store [this env] "Delete the underlying store.")
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-store-exists? [this env] "Check if underlying store already exists.")
   (-sync-store [this env] "Synchronize the store. This is only needed if your store does not guarantee durability without this synchronisation command, e.g. fsync in the file system.")
   (-keys [this env] "List all the keys representing blobs in the store.")

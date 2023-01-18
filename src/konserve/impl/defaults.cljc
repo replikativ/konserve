@@ -1,7 +1,7 @@
 (ns konserve.impl.defaults
   "Default implementation of the high level protocol given a binary backing implementation as defined in the storage-layout namespace."
   (:require
-   [clojure.core.async :refer [<! timeout]]
+   [clojure.core.async :refer [<! go timeout]]
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
@@ -23,16 +23,15 @@
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
                         :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
-   [superv.async :refer [go-try- <?-]]
+   [superv.async :refer [<?-]]
    [taoensso.timbre :refer [trace]])
   #?(:clj
-     (:import
-      [java.io ByteArrayOutputStream ByteArrayInputStream])))
+     (:import [java.io ByteArrayOutputStream ByteArrayInputStream])))
 
 (extend-protocol PBackingLock
   nil
   (-release [_this env]
-    (if (:sync? env) nil (go-try- nil))))
+    (if (:sync? env) nil (go nil))))
 
 (defn key->store-key [key]
   (str (uuid key) ".ksv"))
@@ -55,7 +54,7 @@
            config operation input sync? version] :as env} [old-meta old-value]]
   (async+sync
    sync? *default-sync-translation*
-   (go-try-
+   (go
     (let [[key & rkey] key-vec
           store-key (or store-key (key->store-key key))
           to-array #?(:cljs
@@ -114,7 +113,7 @@
 (defn read-header [ac serializers env]
   (let [{:keys [sync?]} env]
     (async+sync sync? *default-sync-translation*
-                (go-try-
+                (go
                  (let [arr (<?- (-read-header ac env))]
                    (parse-header arr serializers))))))
 
@@ -123,7 +122,7 @@
   [blob read-handlers serializers {:keys [sync? operation locked-cb] :as env}]
   (async+sync
    sync? *default-sync-translation*
-   (go-try-
+   (go
     (let [[_ serializer compressor encryptor meta-size header-size]
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
@@ -175,7 +174,7 @@
   [backing env]
   (async+sync
    (:sync? env) *default-sync-translation*
-   (go-try-
+   (go
     (let [{:keys [key-vec base]} env
           key          (first key-vec)
           store-key    (key->store-key key)
@@ -197,13 +196,11 @@
   (async+sync
    (:sync? env)
    *default-sync-translation*
-   (go-try-
+   (go
     (loop [i 0]
-      (let [[l e :as res] (try
-                            [(<?- (-get-lock this env)) nil]
-                            (catch #?(:clj Exception :cljs js/Error) e
-                              (trace "Failed to acquire lock: " e)
-                              [nil e]))]
+      (let [[l e] (try [(<?- (-get-lock this env)) nil] 
+                       (catch #?(:clj Exception :cljs js/Error) e 
+                         (trace "Failed to acquire lock: " e) [nil e]))]
 
         (if-not (nil? l)
           l
@@ -229,7 +226,7 @@
    {:keys [key-vec operation default-serializer sync? overwrite? config] :as env}]
   (async+sync
    sync? *default-sync-translation*
-   (go-try-
+   (go
     (let [key           (first  key-vec)
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key :header-size header-size)
@@ -263,7 +260,7 @@
    serializers read-handlers write-handlers {:keys [sync? config] :as env}]
   (async+sync
    sync? *default-sync-translation*
-   (go-try-
+   (go
     (let [serializer (get serializers (:default-serializer env))
           store-keys (<?- (-keys backing env))]
       (loop [keys  #{}
@@ -300,7 +297,7 @@
   (-exists? [_ key env]
     (async+sync
      (:sync? env) *default-sync-translation*
-     (go-try-
+     (go
       (let [store-key (key->store-key key)]
         (or (<?- (-blob-exists? backing store-key env))
             (<?- (-migratable backing key store-key env))
@@ -310,7 +307,7 @@
       (async+sync
        sync?
        *default-sync-translation*
-       (go-try-
+       (go
         (if (<?- (-exists? this (first key-vec) opts))
           (let [a (<?-
                    (io-operation this serializers read-handlers write-handlers
@@ -460,7 +457,7 @@
                                config)]
     (async+sync
      (:sync? opts) *default-sync-translation*
-     (go-try-
+     (go
       (if (and (:in-place? complete-config) (not (:lock-blob? complete-config)))
         (throw (ex-info "You need to activate file-locking for in-place mode."
                         {:type :store-configuration-error

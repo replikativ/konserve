@@ -46,6 +46,7 @@
     go-try- try
     <!- do
     <?- do
+    go do
     go-locked locked})
 
 (defmacro with-promise [sym & body]

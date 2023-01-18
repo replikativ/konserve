@@ -4,15 +4,15 @@
   accessing the store, otherwise you should implement your own caching strategy."
   (:refer-clojure :exclude [assoc-in assoc exists? dissoc get get-in
                             keys update-in update])
-  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
+  (:require [konserve.protocols :refer [-get-in -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
             [konserve.core #?@(:clj (:refer [go-locked locked])) :as core]
             [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [taoensso.timbre :refer [trace]]
-            [superv.async :refer [go-try- <?-]]
-            [clojure.core.async])
+            [superv.async :refer [<?-]]
+            [clojure.core.async :refer [go]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
 
 (defn ensure-cache
@@ -27,7 +27,7 @@
   (async+sync
    (:sync? opts)
    *default-sync-translation*
-   (go-try-
+   (go
     (let [cache         (:cache store)]
       (if (cache/has? @cache key)
         (let [v (cache/lookup @cache key)]
@@ -123,7 +123,7 @@
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
-                      [old-val new-val :as res] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
+                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict (first key-vec))
                   (when had-key?
