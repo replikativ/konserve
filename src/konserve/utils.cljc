@@ -47,7 +47,7 @@
     <!- do
     <?- do
     go do
-    go-locked locked})
+    go-locked konserve.core/locked})
 
 (defmacro with-promise [sym & body]
   `(let [~sym (cljs.core.async/promise-chan)]

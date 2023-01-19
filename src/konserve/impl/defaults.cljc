@@ -23,7 +23,7 @@
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
                         :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
-   [superv.async :refer [<?-]]
+   [superv.async :refer [go-try- <?-]]
    [taoensso.timbre :refer [trace]])
   #?(:clj
      (:import [java.io ByteArrayOutputStream ByteArrayInputStream])))
@@ -31,7 +31,7 @@
 (extend-protocol PBackingLock
   nil
   (-release [_this env]
-    (if (:sync? env) nil (go nil))))
+    (if (:sync? env) nil (go-try- nil))))
 
 (defn key->store-key [key]
   (str (uuid key) ".ksv"))
@@ -297,7 +297,7 @@
   (-exists? [_ key env]
     (async+sync
      (:sync? env) *default-sync-translation*
-     (go
+     (go-try-
       (let [store-key (key->store-key key)]
         (or (<?- (-blob-exists? backing store-key env))
             (<?- (-migratable backing key store-key env))

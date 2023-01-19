@@ -22,7 +22,7 @@
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
-   (java.util Date UUID)))
+   [java.util Date UUID]))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -716,7 +716,6 @@
   (defn reader-helper [start-byte stop-byte store-key]
     (let [path      (Paths/get store-key (into-array String []))
           ac        (AsynchronousFileChannel/open path (into-array StandardOpenOption [StandardOpenOption/READ]))
-          file-size (.size ac)
           bb        (ByteBuffer/allocate (- stop-byte start-byte))]
       (.read
        ac
