@@ -3,7 +3,7 @@
   (:require [clojure.core.async :as async :refer [go <!]]
             [konserve.protocols :refer [PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable]]
-            [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
+            [konserve.utils :refer[async+sync]]))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
   PEDNKeyValueStore

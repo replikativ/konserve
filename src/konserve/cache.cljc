@@ -101,6 +101,7 @@
                     (swap! cache cache/miss key new-val))
                   [old-val new-val])))))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
@@ -154,9 +155,11 @@
                   (<?- (-dissoc store key opts)))))))
 
 ;; alias core functions without caching for convenience
-
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def append core/append)
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def log core/log)
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def reduce-log core/reduce-log)
 
 (def bassoc core/bassoc)

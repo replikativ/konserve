@@ -1,14 +1,14 @@
 (ns konserve.gc
-  (:require [clojure.core.async]
+  (:require [clojure.core.async :refer [go]]
             [konserve.core :as k]
-            [superv.async :refer [go-try- <?- reduce<?-]])
+            [superv.async :refer [<?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
 (defn sweep! [store whitelist ts]
-  (go-try-
+  (go
    (<?- (reduce<?-
          (fn [deleted-files {:keys [key last-write] :as meta}]
-           (go-try-
+           (go
             (if (or (contains? whitelist key)
                     (<= (.getTime ^Date ts)
                         (.getTime (if last-write

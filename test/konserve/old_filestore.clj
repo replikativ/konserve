@@ -87,7 +87,7 @@
     (.delete f)
     (try
       (sync-folder folder)
-      (catch Exception e
+      (catch Exception _e
         nil))))
 
 (defn filestore-schema-update
@@ -119,7 +119,7 @@
 
 (defrecord FileSystemStoreV1 [folder serializer read-handlers write-handlers locks config]
   PEDNAsyncKeyValueStoreV1
-  (-exists? [this key]
+  (-exists? [_this key]
     (let [fn (uuid key)
           bfn (str "B_" (uuid key))
           f (io/file (str folder "/" fn))
@@ -130,7 +130,7 @@
       res))
 
     ;; non-blocking async version
-  (-get-in [this key-vec]
+  (-get-in [_this key-vec]
     (let [[fkey & rkey] key-vec
           fn (uuid fkey)
           f (io/file (str folder "/" fn))
@@ -177,7 +177,7 @@
       res-ch))
 
   (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
-  (-update-in [this key-vec up-fn up-fn-args]
+  (-update-in [_this key-vec up-fn up-fn-args]
     (async/thread
       (let [[fkey & rkey] key-vec
             fn (uuid fkey)
@@ -226,7 +226,7 @@
 
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
 
-  (-dissoc [this key]
+  (-dissoc [_this key]
     (async/thread
       (let [fn (uuid key)
             f (io/file (str folder "/" fn))]
@@ -236,7 +236,7 @@
         nil)))
 
   PBinaryAsyncKeyValueStoreV1
-  (-bget [this key locked-cb]
+  (-bget [_this key locked-cb]
     (let [fn (str "B_" (uuid key))
           f (io/file (str folder "/" fn))
           res-ch (chan)]
@@ -282,7 +282,7 @@
                                    :exception e})))))
       res-ch))
 
-  (-bassoc [this key input]
+  (-bassoc [_this key input]
     (let [fn (uuid key)
           f (io/file (str folder "/B_" fn))
           new-file (io/file (str folder "/B_" fn ".new"))]
@@ -381,12 +381,12 @@
     (.delete f)
     (try
       (sync-folder parent-folder)
-      (catch Exception e
+      (catch Exception _e
         nil))))
 
 (defn- read-key
   "help function for -update-in"
-  [folder ^File f fkey serializer read-handlers]
+  [_folder ^File f fkey serializer read-handlers]
   (when (.exists f)
     (let [fis (DataInputStream. (FileInputStream. f))]
       (try
@@ -439,7 +439,7 @@
 
 (defn- write-edn-key
   "help function for -update-in"
-  [serializer write-handlers read-handlers folder fn {:keys [key] :as key-meta} config]
+  [serializer write-handlers _read-handlers folder fn {:keys [key] :as key-meta} config]
   (let [f             (io/file (str folder fn))
         new-file      (io/file (str folder fn ".new"))
         fos           (FileOutputStream. new-file)
@@ -634,7 +634,7 @@
 (defrecord FileSystemStoreV2 [folder serializer read-handlers write-handlers locks config
                               stale-binaries?]
   PEDNAsyncKeyValueStoreV1
-  (-exists? [this key]
+  (-exists? [_this key]
     (let [fn  (uuid key)
           f   (io/file (str folder "/data/" fn))
           res (chan)]
@@ -642,7 +642,7 @@
       (close! res)
       res))
   ;; non-blocking async version
-  (-get-in [this key-vec]
+  (-get-in [_this key-vec]
     (let [[fkey & rkey] key-vec
           fn            (uuid fkey)
           f             (io/file (str folder "/data/" fn))
@@ -650,7 +650,7 @@
       (read-edn f res-ch folder fn fkey rkey serializer read-handlers)
       res-ch))
   (-update-in [this key-vec up-fn] (-update-in this key-vec up-fn []))
-  (-update-in [this key-vec up-fn args]
+  (-update-in [_this key-vec up-fn args]
     (async/thread
       (try
         (let [file-name   (uuid (first key-vec))
@@ -663,7 +663,7 @@
 
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
 
-  (-dissoc [this key]
+  (-dissoc [_this key]
     (async/thread
       (let [fn          (uuid key)
             key-folder  (str folder "/meta")
@@ -672,7 +672,7 @@
         (delete-entry fn data-folder config))))
 
   PBinaryAsyncKeyValueStoreV1
-  (-bget [this key locked-cb]
+  (-bget [_this key locked-cb]
     (let [fn (str (uuid key))
           f         (io/file (str folder "/data/" fn))
           res-ch    (chan)]
@@ -687,7 +687,7 @@
         (read-binary f res-ch folder fn key locked-cb))
       res-ch))
 
-  (-bassoc [this key input]
+  (-bassoc [_this key input]
     (let [file-name  (uuid key)
           key-folder (str folder "/meta/")]
       (async/thread
