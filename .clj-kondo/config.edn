@@ -1,4 +1,4 @@
-{:hooks {:macroexpand {superv.async/go-try- superv.async/go-try-}}
+{:hooks {:macroexpand {superv.async/go-try- hooks.superv.async/go-try-}}
  :lint-as {konserve.utils/with-promise clj-kondo.lint-as/def-catch-all}
  :linters {:unresolved-symbol {:exclude [(konserve.utils/async+sync [locked do])]}}}
  
