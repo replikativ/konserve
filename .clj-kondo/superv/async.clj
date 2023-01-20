@@ -1,6 +1,12 @@
 (ns superv.async)
 
-(defmacro go-try- [_op & args] 
+#_(defmacro go-try- [_op & args] 
     `(try 
        ~@args
        (finally)))
+
+(defmacro go-try- [_op & args]
+  `(go 
+     (try
+       ~@args
+       (finally))))

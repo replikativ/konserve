@@ -1,4 +1,8 @@
-{:hooks {:macroexpand {superv.async/go-try- superv.async/go-try-}}
- :lint-as {konserve.utils/with-promise clj-kondo.lint-as/def-catch-all}
+{:hooks {:analyze-call {superv.async/go-try- hooks.go-try-/go-try-}
+         ;:macroexpand {superv.async/go-try- superv.async/go-try-}
+         }
+ :lint-as {konserve.utils/with-promise clj-kondo.lint-as/def-catch-all
+           ;superv.async/go-try- clojure.core/do
+           }
  :linters {:unresolved-symbol {:exclude [(konserve.utils/async+sync [do])]}}}
  
