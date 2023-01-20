@@ -1,13 +1,12 @@
 (ns konserve.indexeddb-test
-  (:require [cljs.core.async :refer [go take! <! >! put! take! close!]]
+  (:require [cljs.core.async :refer [<!] :refer-macros [go]]
             [cljs.test :refer-macros [deftest is testing async]]
-            [fress.api :as fress]
             [konserve.core :as k]
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p])
-  (:import [goog.userAgent]))
+  (:import [goog userAgent]))
 
-(when-not ^boolean goog.userAgent.GECKO
+(when-not ^boolean userAgent.GECKO
   (deftest lifecycle-test
     (async done
            (go

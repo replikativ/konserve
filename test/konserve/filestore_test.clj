@@ -1,8 +1,8 @@
 (ns konserve.filestore-test
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!! go chan put! close!] :as async]
-            [konserve.core :refer :all]
+            [konserve.core :refer [bassoc bget keys]]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]))
 

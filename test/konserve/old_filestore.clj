@@ -1,13 +1,11 @@
-(ns konserve.old-filestore
+(ns konserve.old-filestore ;; TODO: Do we still need this? 
   "Bare file-system implementation."
   (:require [konserve.serializers :as ser]
             [konserve.core :refer [go-locked]]
             [clojure.java.io :as io]
             [hasch.core :refer [uuid]]
-            [konserve.protocols :refer [PStoreSerializer
-                                        -serialize -deserialize]]
-            [clojure.core.async :as async
-             :refer [<!! <! >! timeout chan alt! go go-loop close! put!]]
+            [konserve.protocols :refer [-serialize -deserialize]]
+            [clojure.core.async :as async :refer [<! >! chan go close! put!]]
             [taoensso.timbre :refer [debug]])
   (:import [java.io
             DataInputStream DataOutputStream
@@ -25,19 +23,24 @@
 ;; Protocols
 (defprotocol PEDNAsyncKeyValueStoreV1
   "Allows to access a store similar to hash-map in EDN."
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-exists? [this key] "Checks whether value is in the store.")
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-get-in [this key-vec] "Returns the value stored described by key-vec or nil if the path is not resolvable.")
   (-update-in [this key-vec up-fn] [this key-vec up-fn up-fn-args] "Updates a position described by key-vec by applying up-fn and storing the result atomically. Returns a vector [old new] of the previous value and the result of applying up-fn (the newly stored value).")
   (-assoc-in [this key-vec val])
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-dissoc [this key]))
 
 (defprotocol PBinaryAsyncKeyValueStoreV1
   "Allows binary data byte array storage."
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-bget [this key locked-cb] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
   (-bassoc [this key val] "Copies given value (InputStream, Reader, File, byte[] or String on JVM, Blob in JavaScript) under key in the store."))
 
 (defprotocol PKeyIterableV1
   "Allows lazy iteration of keys in this store."
+  #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
   (-keys [this]
     "Return a channel that will continuously yield keys in this store."))
                                         ;Filestore V1 < Konserve 0.4
@@ -78,6 +81,7 @@
                  (async/into #{}))]
     fns))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn delete-store
   "Permanently deletes the folder of the store with all files."
   [folder]
@@ -89,33 +93,6 @@
       (sync-folder folder)
       (catch Exception _e
         nil))))
-
-(defn filestore-schema-update
-  "Lists all keys in this binary store. This operation *does not block concurrent operations* and might return an outdated key set. Keys of binary blobs are not tracked atm."
-  [{:keys [folder serializer read-handlers] :as store}]
-  (let [fns (->> (io/file folder)
-                 .list
-                 seq
-                 (filter #(re-matches #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-                                      %))
-                 (map (fn [fn]
-                        (go-locked
-                         store fn
-                         (let [f (io/file (str folder "/" fn))]
-                           (when (.exists f)
-                             (let [fis (DataInputStream. (FileInputStream. f))]
-                               (try
-                                 (first (-deserialize serializer read-handlers fis))
-                                 (catch Exception e
-                                   (ex-info "Could not read key."
-                                            {:type :read-error
-                                             :key fn
-                                             :exception e}))
-                                 (finally
-                                   (.close fis)))))))))
-                 async/merge
-                 (async/into #{}))]
-    fns))
 
 (defrecord FileSystemStoreV1 [folder serializer read-handlers write-handlers locks config]
   PEDNAsyncKeyValueStoreV1
@@ -182,47 +159,47 @@
       (let [[fkey & rkey] key-vec
             fn (uuid fkey)
             f (io/file (str folder "/" fn))
-            new-file (io/file (str folder "/" fn ".new"))]
-        (let [old (when (.exists f)
-                    (let [fis (DataInputStream. (FileInputStream. f))]
-                      (try
-                        (second (-deserialize serializer read-handlers fis))
-                        (catch Exception e
-                          (ex-info "Could not read key."
-                                   {:type :read-error
-                                    :key fkey
-                                    :exception e}))
-                        (finally
-                          (.close fis)))))
-              fos (FileOutputStream. new-file)
-              dos (DataOutputStream. fos)
-              fd (.getFD fos)
-              new (if-not (empty? rkey)
-                    (apply update-in old rkey up-fn up-fn-args)
-                    (apply up-fn old up-fn-args))]
-          (if (instance? Throwable old)
-            old ;; return read error
-            (try
-              (-serialize serializer dos write-handlers [key-vec new])
-              (.flush dos)
-              (when (:fsync config)
-                (.sync fd))
-              (.close dos)
-              (Files/move (.toPath new-file) (.toPath f)
-                          (into-array [StandardCopyOption/ATOMIC_MOVE]))
-              (when (:fsync config)
-                (sync-folder folder))
-              [(get-in old rkey)
-               (get-in new rkey)]
-              (catch Exception e
-                (.delete new-file)
+            new-file (io/file (str folder "/" fn ".new"))
+            old (when (.exists f)
+                  (let [fis (DataInputStream. (FileInputStream. f))]
+                    (try
+                      (second (-deserialize serializer read-handlers fis))
+                      (catch Exception e
+                        (ex-info "Could not read key."
+                                 {:type :read-error
+                                  :key fkey
+                                  :exception e}))
+                      (finally
+                        (.close fis)))))
+fos (FileOutputStream. new-file)
+dos (DataOutputStream. fos)
+fd (.getFD fos)
+new (if-not (empty? rkey)
+      (apply update-in old rkey up-fn up-fn-args)
+      (apply up-fn old up-fn-args))]
+        (if (instance? Throwable old)
+          old ;; return read error
+          (try
+            (-serialize serializer dos write-handlers [key-vec new])
+            (.flush dos)
+            (when (:fsync config)
+              (.sync fd))
+            (.close dos)
+            (Files/move (.toPath new-file) (.toPath f)
+                        (into-array [StandardCopyOption/ATOMIC_MOVE]))
+            (when (:fsync config)
+              (sync-folder folder))
+            [(get-in old rkey)
+             (get-in new rkey)]
+            (catch Exception e
+              (.delete new-file)
                   ;; TODO maybe need fsync new-file here?
-                (ex-info "Could not write key."
-                         {:type :write-error
-                          :key fkey
-                          :exception e}))
-              (finally
-                (.close dos))))))))
+              (ex-info "Could not write key."
+                       {:type :write-error
+                        :key fkey
+                        :exception e}))
+            (finally
+              (.close dos)))))))
 
   (-assoc-in [this key-vec val] (-update-in this key-vec (fn [_] val)))
 
@@ -370,6 +347,7 @@
                  (async/into #{}))]
     fns))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn delete-store-v2
   "Permanently deletes the folder of the store with all files."
   [folder]
@@ -700,7 +678,7 @@
       (async/take!
        (list-keys this)
        (fn [ks]
-         (async/onto-chan ch (map :key ks))))
+         (async/onto-chan! ch (map :key ks))))
       ch)))
 
 (defmethod print-method FileSystemStoreV2
@@ -781,9 +759,8 @@
                                                  :locks           (atom {})
                                                  :config          config})]
     (if-not stale-edn?
-      (do
-        (go
-          (<! (filestore-schema-update store))
-          store))
+      (go
+        (<! (filestore-schema-update store))
+        store)
       (go store))))
 

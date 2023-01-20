@@ -40,7 +40,7 @@
          (aset return-buffer i (aget env-array i)))
        (aset return-buffer 4 meta)
        return-buffer)))
-  
+
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]} ;; TODO: remove? function is not used currently 
 (defn header-not-zero-padded? [^bytes bs]
   ;; does not have zero padding from byte 9 to 20

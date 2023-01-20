@@ -32,6 +32,7 @@
             (Thread/sleep (long (rand-int 20))))
      :cljs (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
   `(let [l# (get-lock ~store ~key)]
      (try
@@ -200,17 +201,17 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go
-                (let [head (<?- (get store key nil opts))
-                      [append-log? _last-id first-id] head]
-                  (when (and head (not= append-log? :append-log))
-                    (throw (ex-info "This is not an append-log." {:key key})))
-                  (when first-id
-                    (loop [{:keys [next elem]} (<?- (get store first-id nil opts))
-                           hist []]
-                      (if next
-                        (recur (<?- (get store next nil opts))
-                               (conj hist elem))
-                        (conj hist elem)))))))))
+                 (let [head (<?- (get store key nil opts))
+                       [append-log? _last-id first-id] head]
+                   (when (and head (not= append-log? :append-log))
+                     (throw (ex-info "This is not an append-log." {:key key})))
+                   (when first-id
+                     (loop [{:keys [next elem]} (<?- (get store first-id nil opts))
+                            hist []]
+                       (if next
+                         (recur (<?- (get store next nil opts))
+                                (conj hist elem))
+                         (conj hist elem)))))))))
 
 (defn reduce-log
   "Loads the append log and applies reduce-fn over it."
@@ -221,18 +222,18 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go
-                (let [head (<?- (get store key nil opts))
-                      [append-log? last-id first-id] head]
-                  (when (and head (not= append-log? :append-log))
-                    (throw (ex-info "This is not an append-log." {:key key})))
-                  (if first-id
-                    (loop [id first-id
-                           acc acc]
-                      (let [{:keys [next elem]} (<?- (get store id nil opts))]
-                        (if (and next (not= id last-id))
-                          (recur next (reduce-fn acc elem))
-                          (reduce-fn acc elem))))
-                    acc))))))
+                 (let [head (<?- (get store key nil opts))
+                       [append-log? last-id first-id] head]
+                   (when (and head (not= append-log? :append-log))
+                     (throw (ex-info "This is not an append-log." {:key key})))
+                   (if first-id
+                     (loop [id first-id
+                            acc acc]
+                       (let [{:keys [next elem]} (<?- (get store id nil opts))]
+                         (if (and next (not= id last-id))
+                           (recur next (reduce-fn acc elem))
+                           (reduce-fn acc elem))))
+                     acc))))))
 
 (defn bget
   "Calls locked-cb with a platform specific binary representation inside

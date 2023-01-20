@@ -1,7 +1,5 @@
 (ns konserve.node-filestore-test
-  (:require [cljs.core.async :refer [go take! <! >! put! take! close! chan timeout]]
-            [cljs.nodejs :as node]
-            [cljs-node-io.core :as io]
+  (:require [cljs.core.async :refer [go <! put! chan timeout]]
             [cljs-node-io.fs :as fs]
             [cljs.test :refer-macros [deftest is testing async use-fixtures]]
             [fress.api :as fress]
@@ -86,7 +84,7 @@
                data [:this/is 'some/fressian "data 😀😀😀" (js/Date.) #{true false nil}]
                bytes (fress/write data)
                test-data (chan)
-               locked-cb (fn [{readable :input-stream size :size}]
+               locked-cb (fn [{readable :input-stream}]
                            (put! test-data (fress/read (.read readable)))
                            (.destroy readable))]
            (go
@@ -125,7 +123,7 @@
     (k/append store :foolog {:bar 43} opts)
     (is (= '({:bar 42} {:bar 43}) (k/log store :foolog opts)))
     (is (= [{:bar 42} {:bar 43}] (k/reduce-log store :foolog conj [] opts)))
-    (let [{:keys [key type last-write] :as metadata} (k/get-meta store :foolog :not-found opts)]
+    (let [{:keys [key type last-write]} (k/get-meta store :foolog :not-found opts)]
       (is (= key :foolog))
       (is (= type :append-log))
       (is (inst? last-write)))))
@@ -139,7 +137,7 @@
              (is (uuid? (second (<! (k/append store :foolog {:bar 43} opts)))))
              (is (= '({:bar 42} {:bar 43}) (<! (k/log store :foolog opts))))
              (is (=  [{:bar 42} {:bar 43}] (<! (k/reduce-log store :foolog conj [] opts))))
-             (let [{:keys [key type last-write] :as metadata} (<! (k/get-meta store :foolog :not-found opts))]
+             (let [{:keys [key type last-write]} (<! (k/get-meta store :foolog :not-found opts))]
                (is (= key :foolog))
                (is (= type :append-log))
                (is (inst? last-write)))

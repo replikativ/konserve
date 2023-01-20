@@ -1,6 +1,6 @@
 (ns konserve.gc-test
-  (:require [clojure.core.async :refer [<! go chan put! close! timeout]]
-            [cljs.test :refer [deftest testing is are async]]
+  (:require [clojure.core.async :refer [<! go timeout]]
+            [cljs.test :refer [deftest testing is async]]
             [konserve.gc :as gc]
             [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]

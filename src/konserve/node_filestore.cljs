@@ -1,6 +1,6 @@
 (ns konserve.node-filestore
   (:require
-   [cljs.core.async :refer [go take! <!  put! take! close! chan promise-chan]]
+   [cljs.core.async :refer [go take! <! put! take! close!]]
    [cljs.nodejs :as node]
    [cljs-node-io.core :as io]
    [cljs-node-io.fs :as iofs]
@@ -8,10 +8,10 @@
    [konserve.compressor]
    [konserve.encryptor]
    [konserve.impl.defaults :as defaults]
-   [konserve.impl.storage-layout :as storage-layout :refer [PBackingStore]]
+   [konserve.impl.storage-layout :as storage-layout]
    [konserve.serializers]
-   [konserve.utils :refer [async+sync with-promise]]
-   [taoensso.timbre :refer [info trace]]))
+   [konserve.utils :refer [with-promise]]
+   [taoensso.timbre :refer [info]]))
 
 (def stream (node/require "stream"))
 (def path (node/require "path"))
@@ -45,17 +45,17 @@
   (-sync [this _env] (.force this true))
   (-close [this _env] (.close this))
   (-get-lock [this _env] (.lock this))
-  (-read-header [this _env]
+  (-read-header [_this _env]
     (let [buf (js/Buffer.alloc storage-layout/header-size)
           bytes-read (iofs/read fd buf {:position 0})]
       (assert (== bytes-read storage-layout/header-size))
       buf))
-  (-read-meta [this meta-size _env]
+  (-read-meta [_this meta-size _env]
     (let [buf (js/Buffer.alloc meta-size)
           bytes-read (iofs/read fd buf {:position storage-layout/header-size})]
       (assert (== bytes-read meta-size))
       buf))
-  (-read-value [this meta-size _env]
+  (-read-value [_this meta-size _env]
     (let [blob-size ^number (.-size (fs.fstatSync fd))
           value-size (- blob-size meta-size storage-layout/header-size)
           buf (js/Buffer.alloc value-size)
@@ -69,27 +69,27 @@
           rstream (fs.createReadStream nil #js{:fd (.-fd this) :start pos})]
       (.on rstream "readable"
            #(locked-cb {:input-stream rstream :size blob-size}))))
-  (-write-header [this header _env]
+  (-write-header [_this header _env]
     (let [buffer (js/Buffer.from header)
           bytes-written (iofs/write fd buffer {:position 0})]
       (assert (== bytes-written (alength header)))))
-  (-write-meta [this meta-arr _env]
+  (-write-meta [_this meta-arr _env]
     (let [buffer (js/Buffer.from meta-arr)
           pos storage-layout/header-size
           bytes-written (iofs/write fd buffer {:position pos})]
       (assert (== bytes-written (alength buffer)))))
-  (-write-value [this value-arr meta-size _env]
+  (-write-value [_this value-arr meta-size _env]
     (let [buffer (js/Buffer.from value-arr)
           pos (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
       (assert (== bytes-written (alength buffer)))))
-  (-write-binary [this meta-size blob env]
+  (-write-binary [_this meta-size blob _env]
     (let [buffer  (js/Buffer.from blob)
           pos     (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
       (assert (== bytes-written (alength buffer)))))
   Object
-  (force [this _] (fs.fsyncSync fd))
+  (force [_this _] (fs.fsyncSync fd))
   (close [this]
     (when (.-open? this)
       (fs.closeSync (.-fd this))
@@ -208,7 +208,7 @@
             (catch js/Error e e))))))
 
 (defn- afwrite-binary ;  => ch<?err>
-  [fd meta-size blob env]
+  [fd meta-size blob _env]
   (with-promise out
     (try
       (let [pos     (+ storage-layout/header-size meta-size)
@@ -230,13 +230,13 @@
   (-sync [this _env] (.force this true))
   (-close [this _env] (.close this))
   (-get-lock [this _env] (.lock this))
-  (-read-header [this _env] ;=> ch<buf|err>
+  (-read-header [_this _env] ;=> ch<buf|err>
     (let [buf (js/Buffer.alloc storage-layout/header-size)]
       (afread fd buf 0)))
-  (-read-meta [this meta-size _env] ;=> ch<buf|err>
+  (-read-meta [_this meta-size _env] ;=> ch<buf|err>
     (let [buf (js/Buffer.alloc meta-size)]
       (afread fd buf storage-layout/header-size)))
-  (-read-value [this meta-size _env] ;=> ch<buf|err>
+  (-read-value [_this meta-size _env] ;=> ch<buf|err>
     (go
       (let [[?err blob-size] (<! (afsize fd))]
         (or ?err
@@ -244,18 +244,18 @@
                   pos (+ meta-size storage-layout/header-size)
                   buf (js/Buffer.alloc size)]
               (<! (afread fd buf pos)))))))
-  (-read-binary [this meta-size locked-cb _env]
+  (-read-binary [_this meta-size locked-cb _env]
     (afread-binary fd meta-size locked-cb _env))
-  (-write-header [this header _env]
+  (-write-header [_this header _env]
     (afwrite fd header 0))
-  (-write-meta [this meta-arr _env]
+  (-write-meta [_this meta-arr _env]
     (let [buffer (js/Buffer.from meta-arr)]
       (afwrite fd buffer storage-layout/header-size)))
-  (-write-value [this value-arr meta-size _env] ;=> ch<?err>
+  (-write-value [_this value-arr meta-size _env] ;=> ch<?err>
     (let [buffer (js/Buffer.from value-arr)
           pos (+ storage-layout/header-size meta-size)]
       (afwrite fd buffer pos)))
-  (-write-binary [this meta-size blob env]
+  (-write-binary [_this meta-size blob env]
     (afwrite-binary fd meta-size blob env)) ;=> ch<?err>
   Object
   (force [this metadata?] (_force-async this metadata?))
@@ -299,12 +299,12 @@
 
 (defn- copy
   "Copy a blob from one key to another."
-  [base from to env]
+  [base from to _env]
   (fs.copyFileSync (path.join base from) (path.join base to)))
 
 (defn- atomic-move
   "Atomically move (rename) a blob."
-  [^string base from to env]
+  [^string base from to _env]
   ;; https://stackoverflow.com/questions/66780210/is-fs-renamesync-an-atomic-operation-that-is-resistant-to-corruption
   (let [current-path (path.join base from)
         next-path (path.join base to)]
@@ -367,7 +367,7 @@
 
 (defn- copy-async
   "Copy a blob from one key to another."
-  [^string base from to env]
+  [^string base from to _env]
   (with-promise out
     (fs.copyFile (path.join base from) (path.join base to)
                  (fn [?err]
@@ -377,7 +377,7 @@
 
 (defn- atomic-move-async
   "Atomically move (rename) a blob."
-  [^string base from to env]
+  [^string base from to _env]
   ;; https://stackoverflow.com/questions/66780210/is-fs-renamesync-an-atomic-operation-that-is-resistant-to-corruption
   (with-promise out
     (take! (iofs/arename (path.join base from) (path.join base to))
@@ -443,7 +443,7 @@
 
 (defn- _migratable
   "Check if blob exists elsewhere and return a migration key or nil."
-  [^NodejsBackingFilestore this key store-key _]
+  [^NodejsBackingFilestore this _key store-key _]
   (when-let [detected-old-blobs (.-detected-old-blobs this)]
     (let [uuid-key (defaults/store-key->uuid-key store-key)]
       (or (@detected-old-blobs (path.join (.-base this) "meta" uuid-key))
@@ -453,7 +453,7 @@
 (defrecord NodejsBackingFilestore
            [base detected-old-blobs ephemeral?]
   storage-layout/PBackingStore
-  (-create-blob [this store-key env]
+  (-create-blob [_this store-key env]
     (let [store-path (path.join base store-key)]
       (if (:sync? env)
         (open-file-channel store-path)
@@ -466,8 +466,8 @@
         (iofs/aexists? store-path))))
   (-migratable [this key store-key env]
     (cond-> (_migratable this key store-key env) (not (:sync? env)) go))
-  (-migrate [this migration-key key-vec serializer read-handlers write-handlers env] (throw (js/Error "TODO")))
-  (-handle-foreign-key [this migration-key serializer read-handlers write-handlers env] (throw (js/Error "TODO")))
+  (-migrate [_this _migration-key _key-vec _serializer _read-handlers _write-handlers _env] (throw (js/Error "TODO")))
+  (-handle-foreign-key [_this _migration-key _serializer _read-handlers _write-handlers _env] (throw (js/Error "TODO")))
   (-keys [this env]
     (if (:sync? env)
       (list-files base (.-ephemeral? this))
@@ -476,28 +476,28 @@
     (if (:sync? env)
       (copy this from to env)
       (copy-async this from to env)))
-  (-atomic-move [this from to env]
+  (-atomic-move [_this from to env]
     (if (:sync? env)
       (atomic-move base from to env)
       (atomic-move-async base from to env)))
-  (-create-store [this env]
+  (-create-store [_this env]
     (if (:sync? env)
       (check-and-create-backing-store base)
       (check-and-create-backing-store-async base)))
-  (-delete-store [this env]
+  (-delete-store [_this env]
     (if (:sync? env)
       (delete-store (:base env))
       (delete-store-async (:base env))))
-  (-store-exists? [this env]
+  (-store-exists? [_this env]
     (if (:sync? env)
       (store-exists? base)
       (store-exists?-async base)))
-  (-sync-store [this env]
+  (-sync-store [_this env]
     (if (:sync? env)
       (sync-base base)
       (sync-base-async base))))
 
-(defn detect-old-file-schema [& args] (throw (js/Error "TODO detect-old-file-schema")))
+(defn detect-old-file-schema [& _args] (throw (js/Error "TODO detect-old-file-schema")))
 ;; get-file-channel
 ;; migration
 

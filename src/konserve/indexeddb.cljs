@@ -7,7 +7,7 @@
             [konserve.serializers]
             [konserve.utils :refer [with-promise]]))
 
-(defn- connect-to-idb [db-name]
+(defn connect-to-idb [db-name]
   (let [req (js/window.indexedDB.open db-name 1)]
     (with-promise out
       (set! (.-onblocked req)
@@ -81,7 +81,7 @@
 ;;==============================================================================
 
 (defn flush-blob
-  [^BackingBlob {:keys [db key buf header metadata value] :as bb}]
+  [^BackingBlob {:keys [db key buf header metadata value]}]
   (let [bin (if (some? buf)
               #js[buf]
               #js[header metadata value])
@@ -113,7 +113,7 @@
                                (put! out %))))))))))
 
 (defn- read-header
-  [^BackingBlob {:keys [db key buf] :as this}]
+  [^BackingBlob this]
   (with-promise out
     (take! (get-buf this)
            (fn [res]
@@ -126,7 +126,7 @@
                  (put! out header)))))))
 
 (defn- read-binary
-  [^BackingBlob {:keys [db key buf] :as this} meta-size locked-cb]
+  [^BackingBlob {:keys [db key]} meta-size locked-cb]
   (with-promise out
     (take! (read-blob db key)
            (fn [res]
@@ -145,21 +145,21 @@
                    If a write begins, buf is discarded."}
  BackingBlob [db key buf header metadata value]
   storage-layout/PBackingBlob
-  (-get-lock [this _env]
+  (-get-lock [_this _env]
     (let [lock (reify
                  storage-layout/PBackingLock
-                 (-release [this env] (go)))]
+                 (-release [_this _env] (go)))]
       (go lock))) ;no-op but the alternative is to overwrite defaults/update-blob
   (-sync [this _env] (.force this true))
   (-close [this _env] (go (.close this)))
   (-read-header [this _env] (read-header this)) ;=> ch<buf|err>
-  (-read-meta [this meta-size _env]
+  (-read-meta [_this meta-size _env]
     (let [view (js/Uint8Array. buf)
           bytes (.slice view
                         storage-layout/header-size
                         (+ storage-layout/header-size meta-size))]
       (go bytes)))
-  (-read-value [this meta-size _env]
+  (-read-value [_this meta-size _env]
     (let [view (js/Uint8Array. buf)
           bytes (.slice view (+ storage-layout/header-size meta-size))]
       (go bytes)))
@@ -169,12 +169,12 @@
     (go (set! (.-buf this) nil)
         (set! (.-header this) header)))
   (-write-meta [this meta-arr _env] (go (set! (.-metadata this) meta-arr)))
-  (-write-value [this value-arr meta-size _env]
+  (-write-value [this value-arr _meta-size _env]
     (go (set! (.-value this) value-arr)))
-  (-write-binary [this meta-size blob env]
+  (-write-binary [this _meta-size blob _env]
     (go (set! (.-value this) blob)))
   Object
-  (force [this metadata?] (flush-blob this))
+  (force [this _metadata?] (flush-blob this))
   (close [this]
     (do
       (set! (.-db this) nil)
@@ -191,10 +191,10 @@
   ;; needed to unref conn before can cycle database construction
   (close [_] (go (when (some? db) (.close db))))
   storage-layout/PBackingStore
-  (-create-blob [this store-key env]
+  (-create-blob [_this store-key env]
     (assert (not (:sync? env)))
     (go (open-backing-blob db store-key)))
-  (-delete-blob [this key env]
+  (-delete-blob [_this key env]
     (assert (not (:sync? env)))
     (let [req (.delete (.objectStore (.transaction db #js[""] "readwrite") "") key)]
       (with-promise out
@@ -203,8 +203,8 @@
               #(put! out (ex-info (str "error deleting blob at key '" key "'")
                                   {:cause %
                                    :caller 'konserve.indexeddb/-delete-blob}))))))
-  (-migratable [this key store-key env] (go false))
-  (-blob-exists? [this key env]
+  (-migratable [_this _key _store-key _env] (go false))
+  (-blob-exists? [_this key env]
     (assert (not (:sync? env)))
     (let [req (.getKey (.objectStore (.transaction db #js[""]) "") key)]
       (with-promise out
@@ -213,7 +213,7 @@
               #(put! out (ex-info (str "error getting key in objectStore '" key "'")
                                   {:cause %
                                    :caller 'konserve.indexeddb/-blob-exists?}))))))
-  (-keys [this env]
+  (-keys [_this env]
     (assert (not (:sync? env)))
     (let [req (.getAllKeys (.objectStore (.transaction db #js[""]) ""))]
       (with-promise out
@@ -222,7 +222,7 @@
               #(put! out (ex-info "error listing keys in objectStore"
                                   {:cause %
                                    :caller 'konserve.indexeddb/-keys}))))))
-  (-copy [this from to env]
+  (-copy [_this from to env]
     (assert (not (:sync? env)))
     (with-promise out
       (take! (read-blob db from)
@@ -250,7 +250,7 @@
                  (do
                    (set! (.-db this) res)
                    (put! out this)))))))
-  (-delete-store [this env]
+  (-delete-store [_this env]
     (assert (not (:sync? env)))
     (with-promise out
       (.close db)
@@ -261,10 +261,10 @@
                                     {:cause ?err
                                      :caller 'konserve.indexeddb/-delete-store}))
                  (close! out))))))
-  (-store-exists? [this env]
+  (-store-exists? [_this env]
     (assert (not (:sync? env)))
     (db-exists? db-name))
-  (-sync-store [this env] (when-not (:sync? env) (go))))
+  (-sync-store [_this env] (when-not (:sync? env) (go))))
 
 (defn connect-idb-store
   "Connect to a IndexedDB backed KV store with the given db name.

@@ -1,6 +1,6 @@
 (ns konserve.cache-test
-  (:require [cljs.core.async :refer [<! >! go promise-chan put!]]
-            [cljs.test :refer [deftest testing is are async]]
+  (:require [cljs.core.async :refer [<! go promise-chan put!]]
+            [cljs.test :refer [deftest is async]]
             [fress.api :as fress]
             [konserve.cache :as k]
             [konserve.node-filestore :as fstore]))
