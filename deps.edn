@@ -26,6 +26,12 @@
                                org.clojure/test.check {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
                   :main-opts ["-e" "(set! *warn-on-reflection* true)"]} 
+           :run-cljs-tests {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.0"}}
+                            :extra-paths ["test"]
+                            :main-opts ["-m" "cljs-test-runner.main" 
+                                        "-o" "target/cljs" 
+                                        "--exclude" "browser" 
+                                        "--env" "node"]}
            :idb-c {:extra-paths ["test"]
                    :main-opts ["-m" "cljs.main" "-c" "konserve.indexeddb-test"]}
            :idb-r {:extra-paths ["test"]
