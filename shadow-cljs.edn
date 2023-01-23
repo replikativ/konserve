@@ -1,0 +1,7 @@
+{:deps {:aliases [:cljs]}
+ :source-paths ["src"]
+ :builds
+ {:app
+  {:target :browser
+   :output-dir "public/js"
+   :modules {:main {:entries [konserve.core]}}}}}
