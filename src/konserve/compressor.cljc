@@ -42,7 +42,7 @@
    (defmacro native-image-build? []
      (try
        ;(and 
-        (Class/forName "org.graalvm.nativeimage.ImageInfo")  
+       (Class/forName "org.graalvm.nativeimage.ImageInfo")
         ;(eval '(org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode))) ;; TODO: when will this be uncommented?
        (catch Exception _
          false))))
