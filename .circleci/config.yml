@@ -95,7 +95,6 @@ workflows:
     jobs:
       - setup:
           context: clojars-deploy
-          setup_cljs: false
       - build:
           context: clojars-deploy
           requires:
