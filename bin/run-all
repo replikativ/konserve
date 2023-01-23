@@ -1,0 +1,3 @@
+
+./run-cljs-tests
+./run-unit-tests
