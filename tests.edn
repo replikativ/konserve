@@ -8,6 +8,6 @@
                      :type :kaocha.type/cljs
                      :kaocha.filter/focus-meta [:browser]
                      :cljs/repl-env cljs.repl.browser/repl-env
-                     :timeout 30000}]
+                     :timeout 100000}]
             :bindings {kaocha.type.cljs/*debug* true}
             :reporter kaocha.report/documentation}

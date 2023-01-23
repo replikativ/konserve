@@ -1,3 +1,11 @@
+#!/usr/bin/env bash
 
-./run-cljs-tests
-./run-unit-tests
+set -o errexit
+set -o pipefail
+
+./bin/run-cljstests
+
+echo
+echo
+
+./bin/run-unittests

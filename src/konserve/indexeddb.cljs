@@ -7,7 +7,7 @@
             [konserve.serializers]
             [konserve.utils :refer [with-promise]]))
 
-(defn- connect-to-idb [db-name]
+(defn connect-to-idb [db-name]
   (let [req (js/window.indexedDB.open db-name 1)]
     (with-promise out
       (set! (.-onblocked req)
