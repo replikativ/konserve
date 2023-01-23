@@ -62,12 +62,12 @@
                       (fn [value]
                         (-> serializer
                             compressor
-                            (encryptor (:encryptor config))
+                            (encryptor store-key (:encryptor config))
                             (-serialize nil write-handlers value)))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
-                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
+                          (try (-serialize ((encryptor store-key (:encryptor config)) (compressor serializer))
                                            bos write-handlers value)
                                (.toByteArray bos)
                                (finally
@@ -120,7 +120,7 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [blob read-handlers serializers {:keys [sync? operation locked-cb config] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -128,7 +128,7 @@
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
           fn-read (partial -deserialize
-                           (compressor ((encryptor (:encryptor config)) serializer))
+                           (compressor ((encryptor store-key (:encryptor config)) serializer))
                            read-handlers)]
       (case operation
         :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
@@ -277,6 +277,7 @@
             (ends-with? store-key ".ksv")
             (let [blob        (<?- (-create-blob backing store-key env))
                   env         (update-in env [:msg :keys] (fn [_] store-key))
+                  env    (assoc env :store-key store-key)
                   lock   (when (and (:in-place? config) (:lock-blob? config))
                            (trace "Acquiring blob lock for: " store-key (str blob))
                            (<?- (-get-lock blob env)))

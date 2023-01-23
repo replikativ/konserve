@@ -11,7 +11,7 @@
   (-serialize [_ bytes write-handlers val]
     (-serialize serializer bytes write-handlers val)))
 
-(defn null-encryptor [_config]
+(defn null-encryptor [_store-key _config]
   (fn [serializer]
     (NullEncryptor. serializer)))
 
@@ -28,14 +28,14 @@
                   encrypted ^bytes (encrypt key ba)]
               (.write ^ByteArrayOutputStream bytes encrypted)))))
 
-(defn aes-encryptor [config]
+(defn aes-encryptor [store-key config]
   (let [{:keys [key]} config]
     (if (nil? key)
       (throw (ex-info "AES key not provided."
                       {:type   :aes-encryptor-key-missing
                        :config config}))
       (fn [serializer]
-        (AESEncryptor. serializer key)))))
+        (AESEncryptor. serializer [store-key key])))))
 
 (def byte->encryptor
   {0 null-encryptor
