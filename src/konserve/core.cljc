@@ -1,13 +1,13 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [clojure.core.async :refer [chan put! poll!]]
+  (:require [clojure.core.async :refer [chan put! #?(:clj poll!)]]
             [hasch.core :as hasch]
             [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
-            [konserve.utils :refer [meta-update async+sync #?(:clj *default-sync-translation*)]]
+            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
             [superv.async :refer [go-try- <?-]]
-            [taoensso.timbre :refer [trace debug]])
+            [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
 
 ;; ACID
@@ -27,11 +27,13 @@
                                              (clojure.core/assoc old key c))))
                           key))))
 
-(defn wait [lock]
+(defn wait [#?(:clj lock :cljs _)]
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (long (rand-int 20))))
      :cljs (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")))
 
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
   `(let [l# (get-lock ~store ~key)]
      (try
@@ -122,6 +124,7 @@
                 store (first key-vec)
                 (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
