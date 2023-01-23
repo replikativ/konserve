@@ -1,10 +1,9 @@
 (ns konserve.serializers
   (:require #?(:clj [clj-cbor.core :as cbor])
             #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
-            [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
+            [konserve.protocols :refer [PStoreSerializer]]
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
-            [incognito.edn :refer [read-string-safe]])
-  #?(:clj (:import [org.fressian.handlers WriteHandler ReadHandler])))
+            [incognito.edn :refer [read-string-safe]]))
 
 #?(:clj
    (defrecord CBORSerializer [codec]
@@ -39,7 +38,7 @@
                                       (incognito-read-handlers read-handlers))
                                fress/associative-lookup))]
       (fress/read bytes :handlers handlers)))
-  (-serialize [_ bytes write-handlers val]
+  (-serialize [_ #?(:clj bytes :cljs _) write-handlers val]
     (let [handlers #?(:clj (-> (merge
                                 fress/clojure-write-handlers
                                 custom-write-handlers
@@ -64,7 +63,7 @@
   PStoreSerializer
   (-deserialize [_ read-handlers s]
     (read-string-safe @read-handlers s))
-  (-serialize [_ output-stream _ val]
+  (-serialize [_ #?(:clj output-stream :cljs _) _ val]
     #?(:cljs (pr-str val)
        :clj (binding [clojure.core/*out* output-stream]
               (pr val)))))
@@ -95,7 +94,7 @@
   (construct->keys byte->serializer))
 
 (defn construct->byte [m n]
-  (->> (map (fn [[k0 v0] [k1 v1]] [k0 k1]) m n)
+  (->> (map (fn [[k0 _v0] [k1 _v1]] [k0 k1]) m n)
        (into {})))
 
 (def byte->key

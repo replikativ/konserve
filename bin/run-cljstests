@@ -3,8 +3,17 @@
 set -o errexit
 set -o pipefail
 
-# Compile for browser
-npm run ci-test
+echo "Running tests for node"
+# olical version:
+clojure -M:run-cljs-tests
+# kaocha version:
+#[ -d "node_modules/ws" ] || npm install ws
+#clojure -M:test -m kaocha.runner unit-node
 
-# Compile for node
-npx shadow-cljs compile node-test
+echo
+echo
+
+echo "Running tests for browser"
+# kaocha version:
+clojure -M:test -m kaocha.runner unit-browser
+# olical version requires karma

@@ -1,14 +1,15 @@
 (ns konserve.indexeddb-test
-  (:require [cljs.core.async :refer [go take! <! >! put! take! close!]]
+  (:require-macros [cljs.core.async.macros :refer [go]])
+  (:require [cljs.core.async :refer [<!]]
             [cljs.test :refer-macros [deftest is testing async]]
-            [fress.api :as fress]
             [konserve.core :as k]
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p])
-  (:import [goog.userAgent]))
+  (:import [goog userAgent]))
 
-(when-not ^boolean goog.userAgent.GECKO
-  (deftest lifecycle-test
+(deftest ^:browser lifecycle-test
+  (if ^boolean userAgent.GECKO
+    (is (true? true))
     (async done
            (go
              (let [db-name "lifecycle-db"]
@@ -24,7 +25,7 @@
                (<! (idb/delete-idb db-name))
                (done))))))
 
-(deftest PEDNKeyValueStore-async-test
+(deftest ^:browser PEDNKeyValueStore-async-test
   (async done
          (go
            (let [db-name "pednkv-test"
@@ -52,7 +53,7 @@
              (<! (idb/delete-idb db-name))
              (done)))))
 
-(deftest PKeyIterable-async-test
+(deftest ^:browser PKeyIterable-async-test
   (async done
          (go
            (let [db-name "pkeyiterable-test"
@@ -69,7 +70,7 @@
              (<! (idb/delete-idb db-name))
              (done)))))
 
-(deftest append-store-async-test
+(deftest ^:browser append-store-async-test
   (async done
          (go
            (let [db-name "append-test"
@@ -80,7 +81,7 @@
              (is (uuid? (second (<! (k/append store :foolog {:bar 43} opts)))))
              (is (= '({:bar 42} {:bar 43}) (<! (k/log store :foolog opts))))
              (is (=  [{:bar 42} {:bar 43}] (<! (k/reduce-log store :foolog conj [] opts))))
-             (let [{:keys [key type last-write] :as metadata} (<! (k/get-meta store :foolog :not-found opts))]
+             (let [{:keys [key type last-write]} (<! (k/get-meta store :foolog :not-found opts))]
                (is (= key :foolog))
                (is (= type :append-log))
                (is (inst? last-write)))

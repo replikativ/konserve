@@ -199,11 +199,11 @@
    *default-sync-translation*
    (go-try-
     (loop [i 0]
-      (let [[l e :as res] (try
-                            [(<?- (-get-lock this env)) nil]
-                            (catch #?(:clj Exception :cljs js/Error) e
-                              (trace "Failed to acquire lock: " e)
-                              [nil e]))]
+      (let [[l e] (try
+                    [(<?- (-get-lock this env)) nil]
+                    (catch #?(:clj Exception :cljs js/Error) e
+                      (trace "Failed to acquire lock: " e)
+                      [nil e]))]
 
         (if-not (nil? l)
           l

@@ -7,13 +7,10 @@
    [konserve.encryptor :refer [null-encryptor]]
    [konserve.impl.defaults :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.impl.storage-layout :refer [PBackingStore
-                                         -keys
-                                         PBackingBlob -close -get-lock -sync
-                                         -read-header -read-meta -read-value -read-binary
-                                         -write-header -write-meta -write-value -write-binary
-                                         PBackingLock -release header-size]]
+                                         PBackingBlob -close
+                                         PBackingLock header-size]]
    [konserve.nio-helpers :refer [blob->channel]]
-   [konserve.protocols :refer [-deserialize]]
+   [konserve.protocols :as kp]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
    [taoensso.timbre :refer [info trace]])
@@ -22,7 +19,7 @@
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
-   (java.util Date UUID)))
+   [java.util Date UUID]))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -73,8 +70,9 @@
      (.close ds)
      files)))
 
-(defn count-konserve-keys [dir]
+(defn count-konserve-keys
   "Counts konserve files in the directory."
+  [dir]
   (reduce (fn [c path] (if (.endsWith ^String path ".ksv") (inc c) c))
           0
           (list-files dir)))
@@ -479,7 +477,7 @@
                                                      :path data-path}
                                                     env))
                                         (ByteArrayInputStream.)
-                                        (-deserialize serializer read-handlers)))
+                                        (kp/-deserialize serializer read-handlers)))
                        [meta old]    (if binary?
                                        [{:key key :type :binary :last-write (Date.)}
                                         {:operation :write-binary
@@ -544,7 +542,7 @@
                                                               :path meta-path}
                                                              env))
                                                  (ByteArrayInputStream.)
-                                                 (-deserialize serializer read-handlers))
+                                                 (kp/-deserialize serializer read-handlers))
                        store-key (key->store-key key)
                        data         (when (= :edn format)
                                       (->> (<?- (-read c-data-file 0 size-data
@@ -552,7 +550,7 @@
                                                         :path data-path}
                                                        env))
                                            (ByteArrayInputStream.)
-                                           (-deserialize serializer read-handlers)))
+                                           (kp/-deserialize serializer read-handlers)))
                        [meta old]   (if (= :binary format)
                                       [{:key key :type :binary :last-write (Date.)}
                                        {:operation :write-binary
@@ -615,7 +613,6 @@
                   [meta-key & meta-store-keys] (list-files meta-base)]
              (if meta-key
                (let [old-path (str meta-base "/" meta-key)
-                     store-key     (str meta-key ".ksv")
                      env           (assoc-in env [:msg :keys] old-path)
                      env           (assoc env :operation :read-meta)]
                  (recur
@@ -691,32 +688,9 @@
     (connect-default-store backing store-config)))
 
 (comment
-
-  (require '[konserve.protocols :as p :refer [-assoc-in -get-in -get-meta -bget -bassoc]])
-  (require '[konserve.core :as k])
-  (require '[clojure.core.async :refer [<!]])
-
-  (do
-    (delete-store "/tmp/konserve")
-    (def store (<! (connect-fs-store "/tmp/konserve"))))
-
-  (<! (-assoc-in store ["bar"] (fn [e] {:foo "OoO"}) 1123123123123123123123123 {:sync? false}))
-  (<! (k/exists? store "bar" {:sync? false}))
-
-  (-get-in store ["bar"] :not-found {:sync? true})
-
-  (-assoc-in store ["bar"] (fn [e] {:foo "foo"}) 42 {:sync? true})
-
-  (p/-keys store {:sync? true})
-
-  (<! (-bassoc store "baz" (fn [e] {:foo "baz"}) (byte-array [1 2 3]) {:sync? false}))
-
-  (-bget store "baz" (fn [input] (println input)) {:sync? true})
-
   (defn reader-helper [start-byte stop-byte store-key]
     (let [path      (Paths/get store-key (into-array String []))
           ac        (AsynchronousFileChannel/open path (into-array StandardOpenOption [StandardOpenOption/READ]))
-          file-size (.size ac)
           bb        (ByteBuffer/allocate (- stop-byte start-byte))]
       (.read
        ac
@@ -727,17 +701,16 @@
          (completed [res att]
            (let [arr-bb    (.array bb)
                  buff-meta (ByteBuffer/wrap arr-bb)
-                 meta-size (.getInt buff-meta)
                  _         (.clear buff-meta)]
              (prn (map #(get arr-bb %) (range 0 4)))))
          (failed [t att]
            (prn "fail"))))))
 
-  (reader-helper 0 4 "/tmp/konserve/2c8e57a6-ed4e-5746-9f7e-af7ff2ac25c5.ksv"))
-
-(comment
+  (reader-helper 0 4 "/tmp/konserve/2c8e57a6-ed4e-5746-9f7e-af7ff2ac25c5.ksv")
 
   (require '[konserve.core :as k])
+
+  ;; sync
 
   (def store (connect-fs-store "/tmp/store" :opts {:sync? true}))
 
@@ -756,26 +729,23 @@
   (k/bassoc store :binbar (byte-array (range 10)) {:sync? true})
   (k/bget store :binbar (fn [{:keys [input-stream]}]
                           (map byte (slurp input-stream)))
-          {:sync? true}))
+          {:sync? true})
 
-(comment
+  ;; async
 
-  (require '[konserve.core :as k])
-  (require '[clojure.core.async :refer [<!]])
+  (def store (<!! (connect-fs-store "/tmp/store")))
 
-  (def store (<! (connect-fs-store "/tmp/store")))
+  (<!! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+  (<!! (k/get-in store ["foo"]))
+  (<!! (k/exists? store "foo"))
 
-  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-  (<! (k/get-in store ["foo"]))
-  (<! (k/exists? store "foo"))
+  (<!! (k/assoc-in store [:bar] 42))
+  (<!! (k/update-in store [:bar] inc))
+  (<!! (k/get-in store [:bar]))
+  (<!! (k/dissoc store :bar))
 
-  (<! (k/assoc-in store [:bar] 42))
-  (<! (k/update-in store [:bar] inc))
-  (<! (k/get-in store [:bar]))
-  (<! (k/dissoc store :bar))
-
-  (<! (k/append store :error-log {:type :horrible}))
-  (<! (k/log store :error-log))
+  (<!! (k/append store :error-log {:type :horrible}))
+  (<!! (k/log store :error-log))
 
   (<!! (k/bassoc store :binbar (byte-array (range 10)) {:sync? false}))
   (<!! (k/bget store :binbar (fn [{:keys [input-stream]}]

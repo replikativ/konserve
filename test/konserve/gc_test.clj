@@ -1,10 +1,10 @@
 (ns konserve.gc-test
   (:require [konserve.gc :refer [sweep!]]
-            [clojure.test :refer :all]
+            [clojure.test :refer [deftest is testing]]
             [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
-            [clojure.core.async :refer [<!! <! go chan put! close!] :as async]))
+            [clojure.core.async :refer [<!!] :as async]))
 
 (deftest memory-store-gc-test
   (testing "Test the GC."

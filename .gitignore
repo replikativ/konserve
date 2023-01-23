@@ -1,3 +1,5 @@
+.clj-kondo/.cache/
+.vscode/
 /resources
 /target
 /classes

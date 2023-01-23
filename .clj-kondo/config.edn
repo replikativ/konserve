@@ -1,0 +1,4 @@
+{:hooks {:analyze-call {superv.async/go-try- hooks.go-try-/go-try-}}
+ :lint-as {konserve.utils/with-promise clj-kondo.lint-as/def-catch-all}
+ :linters {:unresolved-symbol {:exclude [(konserve.utils/async+sync [do])]}
+           :unused-referred-var {:exclude {konserve.core [locked]}}}}

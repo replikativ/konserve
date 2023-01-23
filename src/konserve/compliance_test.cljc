@@ -1,15 +1,13 @@
 (ns konserve.compliance-test
-  (:require [clojure.core.async :refer [#?(:clj <!!) go chan <!]]
+  (:require [clojure.core.async :refer [#?(:clj <!! :cljs <!) go]]
             [konserve.core :as k]
-            #?(:cljs [cljs.test :refer [deftest is testing async]])
-            #?(:clj [clojure.test :refer :all])
-            #?(:clj [konserve.serializers :refer [key->serializer]])
-            #?(:clj [konserve.utils :refer [async+sync]])
-            [konserve.memory :refer [new-mem-store]]))
+            #?(:cljs [cljs.test :refer [deftest is async]])
+            #?(:clj [clojure.test :refer [are is testing]])
+            #?(:cljs [konserve.memory :refer [new-mem-store]])))
 
-(deftype UnknownType [])
+#_(deftype UnknownType [])
 
-#?(:clj (defn exception? [thing]
+#_(:clj (defn exception? [thing]
           (instance? Throwable thing)))
 
 #?(:clj

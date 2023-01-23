@@ -22,12 +22,17 @@
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.71.1119"}
+           :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.73.1175"}
+                               lambdaisland/kaocha-cljs {:mvn/version "1.4.130"}
                                org.clojure/test.check {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
-                  :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
-           :node-test {:extra-paths ["test"]
-                       :main-opts ["-m" "cljs.main" "-t" "node" "-m" "konserve.node-runner"]}
+                  :main-opts ["-e" "(set! *warn-on-reflection* true)"]} 
+           :run-cljs-tests {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.0"}}
+                            :extra-paths ["test"]
+                            :main-opts ["-m" "cljs-test-runner.main" 
+                                        "-o" "target/cljs" 
+                                        "--exclude" "browser" 
+                                        "--env" "node"]}
            :idb-c {:extra-paths ["test"]
                    :main-opts ["-m" "cljs.main" "-c" "konserve.indexeddb-test"]}
            :idb-r {:extra-paths ["test"]
