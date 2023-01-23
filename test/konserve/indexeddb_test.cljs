@@ -7,8 +7,11 @@
             [konserve.protocols :as p])
   (:import [goog.userAgent]))
 
-(when-not ^boolean goog.userAgent.GECKO
-  (deftest ^:browser lifecycle-test
+  
+(deftest ^:browser lifecycle-test 
+  (if ^boolean goog.userAgent.GECKO
+      (testing "dummy assertion"
+        (is (true? true)))
     (async done
            (go
              (let [db-name "lifecycle-db"]
