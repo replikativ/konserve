@@ -1,8 +1,7 @@
 (ns konserve.serializers-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!!]]
             [konserve.core :as k]
-            [konserve.memory :refer [new-mem-store]]
             [konserve.serializers :refer [fressian-serializer]]
             [konserve.filestore :refer [connect-fs-store delete-store]])
   (:import [org.fressian.handlers WriteHandler ReadHandler]
@@ -12,7 +11,7 @@
 
 (def custom-read-handler
   {custom-tag (reify ReadHandler
-                (read [_ reader tag component-count]
+                (read [_ reader _tag _component-count]
                   (Date. ^long (.readObject reader))))})
 
 (def custom-write-handler

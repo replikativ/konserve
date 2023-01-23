@@ -1,6 +1,6 @@
 (ns benchmark.common
   (:require [konserve.core :as k]
-            [konserve.filestore :refer [new-fs-store delete-store]]
+            [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.memory :refer [new-mem-store]]
             [clojure.core.async :refer [<!!] :as async]))
 
@@ -13,7 +13,7 @@
 
 (defmethod get-store :file [_]
   (delete-store fs-store-path)
-  (<!! (new-fs-store fs-store-path)))
+  (<!! (connect-fs-store fs-store-path)))
 
 (defmethod get-store :memory [_]
   (<!! (new-mem-store)))

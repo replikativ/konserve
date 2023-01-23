@@ -1,5 +1,5 @@
 (ns konserve.core-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest]]
             [clojure.core.async :refer [<!!] :as async]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.memory :refer [new-mem-store]]))

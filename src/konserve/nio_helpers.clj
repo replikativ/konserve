@@ -20,17 +20,17 @@
 
 (extend-protocol BlobToChannel
   InputStream
-  (blob->channel [input buffer-size]
+  (blob->channel [input _buffer-size]
     [(Channels/newChannel input)
      (fn [bis buffer]  (.read ^ReadableByteChannel bis ^ByteBuffer buffer))])
 
   File
-  (blob->channel [input buffer-size]
+  (blob->channel [input _buffer-size]
     [(Channels/newChannel (FileInputStream. ^String input))
      (fn [bis buffer]  (.read ^ReadableByteChannel bis buffer))])
 
   String
-  (blob->channel [input buffer-size]
+  (blob->channel [input _buffer-size]
     [(Channels/newChannel (ByteArrayInputStream. (.getBytes input)))
      (fn [bis buffer]  (.read ^ReadableByteChannel bis buffer))])
 
