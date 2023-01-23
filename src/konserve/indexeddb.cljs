@@ -1,12 +1,12 @@
 (ns konserve.indexeddb
+  (:require-macros [cljs.core.async.macros :refer [go]])
   (:require [cljs.core.async :refer [take! put! close!]]
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.serializers]
-            [konserve.utils :refer [with-promise]])
-  (:require-macros [cljs.core.async.macros :refer [go]]))
+            [konserve.utils :refer [with-promise]]))
 
 (defn connect-to-idb [db-name]
   (let [req (js/window.indexedDB.open db-name 1)]

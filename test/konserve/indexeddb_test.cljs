@@ -1,10 +1,10 @@
 (ns konserve.indexeddb-test
-  (:require [cljs.core.async :refer [<!]] 
+  (:require-macros [cljs.core.async.macros :refer [go]])
+  (:require [cljs.core.async :refer [<!]]
             [cljs.test :refer-macros [deftest is testing async]]
             [konserve.core :as k]
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p])
-  (:require-macros [cljs.core.async.macros :refer [go]])
   (:import [goog userAgent]))
 
 (deftest ^:browser lifecycle-test
