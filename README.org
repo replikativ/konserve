@@ -45,6 +45,12 @@ write operations is also implemented.
   thread on reading. Fully asynchronous support for writing and other
   stores is in the pipeline.
 
+*** Garbage Collector
+
+Konserve has a garbage collector that can be called manually when the store gets 
+to crowded. For that, the function /konserve.gc/sweep!/ allows you to provide a 
+cut-off date to evict old keys and a whitelist for keys that should be kept.
+
 ** Supported Backends
    :PROPERTIES:
    :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
@@ -122,9 +128,18 @@ Usage:
     :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
     :END:
 
-These are partially outdated and not actively maintained by us, but should not
-be hard to pick up.
+We recently updated konserve not only to provide the option to choose between 
+synchronous and asynchronous execution, but also to provide protocols that simplify
+the implementation of external backends. Unfortunately most of the external backends 
+are deprecated now because of this. 
 
+The only compatible backend implementation at the moment is 
+[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as 
+reference project for future backend implementation.
+
+Please let us know if you are interested in other backends or if you need help with implementing one.
+
+The following projects are incompatible with the latest konserve release:
 - LevelDB:
   [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
 - CouchDB:
@@ -133,12 +148,11 @@ be hard to pick up.
   [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
 - Riak:
   [[https://github.com/replikativ/konserve-welle][konserve-welle]].
-- PostgreSQL: [[https://github.com/retro/konserve-pg][konserve-pg]].
+- PostgreSQL:
+  [[https://github.com/retro/konserve-pg][konserve-pg]].
+- System component for internal backends:
+  [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
 
-New storage backends, e.g. MongoDB, JDBC, WebSQL, Local-Storage are
-welcome.
-
-There is also a [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]] for the internal backends.
 
 ** Projects building on konserve
    :PROPERTIES:
