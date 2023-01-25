@@ -104,13 +104,6 @@ Usage:
 [[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
 ClojureScript browser backends.
 
-For IndexedDB there is no internal JSON-representation of the underlying
-store like [[https://github.com/cognitect/transit-clj][transit]] yet,
-hence it is fairly slow for edn still. There is a JSON store protocol
-implemented for IndexedDB in case interoperability with a JavaScript
-application is wanted. Be careful not to confuse values with edn values,
-they are stored in separate locations and cannot clash.
-
 Usage:
 
 #+BEGIN_SRC clojure
