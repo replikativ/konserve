@@ -19,21 +19,32 @@
 ;; Following advise at
 ;; https://crypto.stackexchange.com/questions/84439/is-it-dangerous-to-encrypt-lots-of-small-files-with-the-same-key
 
-(defn store-key->iv [store-key]
-  (subvec (vec (edn-hash store-key)) 0 16))
+(defn get-iv [salt store-key key]
+  (subvec (vec (edn-hash ["initial-value" salt store-key key])) 0 16))
 
+(defn get-key [salt store-key key]
+  ["key" salt store-key key])
+
+;; TODO cljs support incomplete, prepending of salt is missing
 (defrecord AESEncryptor [serializer store-key key]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-    (let [decrypted (decrypt [store-key key] #?(:clj (.readAllBytes ^ByteArrayInputStream bytes) :cljs bytes)
-                             :iv (store-key->iv store-key))]
+    (let [salt-array (byte-array 64)
+          _ (.read ^ByteArrayInputStream bytes salt-array)
+          salt (map int salt-array)
+          decrypted (decrypt (get-key salt store-key key)
+                             #?(:clj (.readAllBytes ^ByteArrayInputStream bytes) :cljs bytes)
+                             :iv (get-iv salt store-key key))]
       (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
-       :clj (let [bos (ByteArrayOutputStream.)
+       :clj (let [salt (map #(int (- % 128)) (edn-hash (uuid)))
+                  bos (ByteArrayOutputStream. (* 16 1024))
+                  _ (.write ^ByteArrayOutputStream bytes (byte-array salt))
                   _ (-serialize serializer bos write-handlers val)
                   ba (.toByteArray bos)
-                  encrypted ^bytes (encrypt [store-key key] ba :iv (store-key->iv store-key))]
+                  encrypted ^bytes (encrypt (get-key salt store-key key)
+                                            ba :iv (get-iv salt store-key key))]
               (.write ^ByteArrayOutputStream bytes encrypted)))))
 
 (defn aes-encryptor [store-key config]
