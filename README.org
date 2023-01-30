@@ -67,195 +67,12 @@ macros that properly handle the errors. =<?= needs to check for an exception and
 rethrow and =go-try= needs to catch and pass it along as a return value such
 that it does not get lost.
 
-** Supported Backends
-   :PROPERTIES:
-   :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
-   :END:
-
-*** In-Memory Store
-:PROPERTIES:
-:CUSTOM_ID: h:63d979c0-4c4b-41fd-b1e2-e447adee3908
-:END:
-
-For simple purposes a memory store wrapping an Atom is implemented for Clojure and ClojureScript.
-
-Usage:
-
-#+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.memory :refer [new-mem-store]]
-              [konserve.core :as k]))
-
-  (def my-db (new-mem-store))
-
-#+END_SRC
-
-*** fs-store
-    :PROPERTIES:
-    :CUSTOM_ID: h:c88f8eb7-27b1-46ff-bc64-918dd1eb30bc
-    :END:
-
-A file-system store in Clojure and for Node are provided as
-elementary reference implementations for the two most important platforms. No
-setup and no additional dependencies are needed.
-
-The file-system store currently uses [[https://github.com/clojure/data.fressian][fressian]] in Clojure and [[https://github.com/pkpkpk/fress][fress]] in
-ClojureScript and is quite efficient. Both implementations use the same on-disk
-format and can load the same store (but not concurrently). It also allows to
-access values as a normal file-system file, e.g. to open it with a native
-database like HDF5 in Java. You can decide not to fsync on every write by a
-configuration of ={:sync-blob? false}=, if a potential, but unlikely data loss
-is not critical for you (e.g. for a session store). Note that the database will
-not be corrupted in this case, you can just lose some write operations before
-the crash.
-
-Usage:
-
-#+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.memory :refer [connect-fs-store]]
-              [konserve.core :as k]))
-
-  (def my-folder "path/to/folder")
-  (def my-db (connect-fs-store my-folder))
-
-#+END_SRC
-
-*** IndexedDB
-    :PROPERTIES:
-    :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
-    :END:
-
-[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
-ClojureScript browser backends.
-
-Usage:
-
-#+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.memory :refer [connect-idb-store]]
-              [konserve.core :as k])
-    (:require-macros [cljs.core.async.macros :refer [go]]))
-
-  (def dbname "example-db")
-  (go (def my-db (<! (connect-idb-store dbname))))
-
-#+END_SRC
-
-*** External Backends
-    :PROPERTIES:
-    :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
-    :END:
-
-We recently updated konserve not only to provide the option to choose between
-synchronous and asynchronous execution, but also to provide protocols that simplify
-the implementation of external backends. Unfortunately most of the external backends
-are deprecated now because of this.
-
-The only compatible backend implementation at the moment is
-[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as
-reference project for future backend implementation.
-
-Please let us know if you are interested in other backends or if you need help with implementing one.
-
-The following projects are incompatible with the latest konserve release:
-- LevelDB:
-  [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
-- CouchDB:
-  [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
-- Redis:
-  [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
-- Riak:
-  [[https://github.com/replikativ/konserve-welle][konserve-welle]].
-- PostgreSQL:
-  [[https://github.com/retro/konserve-pg][konserve-pg]].
-- System component for internal backends:
-  [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
-
-
-** Projects building on konserve
-   :PROPERTIES:
-   :CUSTOM_ID: h:79876ac1-414b-4180-8d65-63737cb3bc53
-   :END:
-
-- The protocol is used in production and originates as an elementary
-  storage protocol for [[https://github.com/replikativ/replikativ][replikativ]] and [[https://github.com/replikativ/datahike][datahike]].
-- [[https://github.com/danielsz/kampbell][kampbell]] maps collections of
-  entities to konserve and enforces specs.
-
-** Benchmarks
-   :PROPERTIES:
-   :CUSTOM_ID: h:8079f55f-9f2a-47d3-8254-2a4fe0d894f8
-   :END:
-
-Due to its simplicity it is also fairly fast as it directly serializes
-Clojure, e.g. with fressian, to durable storage. The file-store is CPU
-bound atm. More detailed benchmarks are welcome :).
-
-#+BEGIN_SRC clojure
-      (let [numbers (doall (range 1024))]
-        (time
-         (doseq [i (range 1000)]
-           (<!! (assoc-in store [i] numbers)))))
-      ;; fs-store: ~7.2 secs on my old laptop
-      ;; mem-store: ~0.186 secs
-
-      (let [numbers (doall (range (* 1024 1024)))]
-        (time
-         (doseq [i (range 10)]
-           (<!! (assoc-in store [i] numbers)))))
-      ;; fs-store: ~46 secs, large files: 1 million ints each
-      ;; mem-store: ~0.003 secs
-#+END_SRC
-
-It is not necessarily fast depending on the usage pattern. The general
-idea is to write most values once (e.g. in form of index fragments) and
-only update one place once all data is written, similar to Clojure's
-persistent datastructures and balanced trees. To store values under
-non-conflicting keys, have a look at
-[[https://github.com/replikativ/hasch][hasch]].
-
-** Combined usage with other writers
-   :PROPERTIES:
-   :CUSTOM_ID: h:8a1b4a06-4b9f-496b-9eb2-52ac953a8e35
-   :END:
-
-konserve assumes currently that it accesses its keyspace in the store
-exclusively. It uses [[https://github.com/replikativ/hasch][hasch]] to
-support arbitrary edn keys and hence does not normally clash with
-outside usage even when the same keys are used. To support multiple
-konserve clients in the store the backend has to support locking and
-proper transactions on keys internally, which is the case for backends
-like CouchDB, Redis and Riak.
-
-** Serialization formats
-   :PROPERTIES:
-   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
-   :END:
-
-Different formats for =edn= serialization like
-[[https://github.com/clojure/data.fressian][fressian]],
-[[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a
-simple =pr-str= version are supported and can be combined with different
-stores. Stores have a reasonable default setting. You can also extend
-the serialization protocol to other formats if you need it. You can
-provide [[https://github.com/replikativ/incognito][incognito]] support
-for records, if you need them.
-
-*** Tagged Literals
-    :PROPERTIES:
-    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
-    :END:
-
-You can read and write custom records according to
-[[https://github.com/replikativ/incognito][incognito]].
-
 ** Usage
    :PROPERTIES:
    :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
    :END:
 
-Add to your leiningen dependencies:
+Add to your dependencies:
 [[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
 *** Synchronous Execution
@@ -307,7 +124,6 @@ each wrapped in a go-block.
               [konserve.core :as k]))
 
   (go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
-  (new-mem-store (atom {:foo 42})))))
 #+END_SRC
 
 From a Clojure REPL run the following functions for the core.async variants of
@@ -335,6 +151,151 @@ the code.
   (let [ba (byte-array (* 10 1024 1024) (byte 42))]
     (time (<! (k/bassoc store "banana" ba))))
 #+END_SRC
+
+** Supported Backends
+   :PROPERTIES:
+   :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
+   :END:
+
+*** In-Memory Store
+:PROPERTIES:
+:CUSTOM_ID: h:63d979c0-4c4b-41fd-b1e2-e447adee3908
+:END:
+
+For simple purposes a memory store wrapping an Atom is implemented for Clojure and ClojureScript.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [new-mem-store]]
+              [konserve.core :as k]))
+
+  (def my-db (new-mem-store))
+#+END_SRC
+
+*** fs-store
+    :PROPERTIES:
+    :CUSTOM_ID: h:c88f8eb7-27b1-46ff-bc64-918dd1eb30bc
+    :END:
+
+A file-system store in Clojure and for Node are provided as
+elementary reference implementations for the two most important platforms. No
+setup and no additional dependencies are needed.
+
+The file-system store currently uses [[https://github.com/clojure/data.fressian][fressian]] in Clojure and [[https://github.com/pkpkpk/fress][fress]] in
+ClojureScript and is quite efficient. Both implementations use the same on-disk
+format and can load the same store (but not concurrently). It also allows to
+access values as a normal file-system file, e.g. to open it with a native
+database like HDF5 in Java. You can decide not to fsync on every write by a
+configuration of ={:sync-blob? false}=, if a potential, but unlikely data loss
+is not critical for you (e.g. for a session store). Note that the database will
+not be corrupted in this case, you can just lose some write operations before
+the crash.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [connect-fs-store]]
+              [konserve.core :as k]))
+
+  (def my-folder "path/to/folder")
+  (def my-db (connect-fs-store my-folder))
+#+END_SRC
+
+*** IndexedDB
+    :PROPERTIES:
+    :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
+    :END:
+
+[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
+ClojureScript browser backends.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.memory :refer [connect-idb-store]]
+              [konserve.core :as k])
+    (:require-macros [cljs.core.async.macros :refer [go]]))
+
+  (def dbname "example-db")
+  (go (def my-db (<! (connect-idb-store dbname))))
+#+END_SRC
+
+*** External Backends
+    :PROPERTIES:
+    :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
+    :END:
+
+We recently updated konserve not only to provide the option to choose between
+synchronous and asynchronous execution, but also to provide protocols that simplify
+the implementation of external backends. Unfortunately most of the external backends
+are deprecated now because of this.
+
+The only compatible backend implementation at the moment is
+[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as
+reference project for future backend implementation.
+
+Please let us know if you are interested in other backends or if you need help with implementing one.
+
+The following projects are incompatible with the latest konserve release:
+- LevelDB:
+  [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
+- CouchDB:
+  [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
+- Redis:
+  [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
+- Riak:
+  [[https://github.com/replikativ/konserve-welle][konserve-welle]].
+- PostgreSQL:
+  [[https://github.com/retro/konserve-pg][konserve-pg]].
+- System component for internal backends:
+  [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
+
+
+** Projects building on konserve
+   :PROPERTIES:
+   :CUSTOM_ID: h:79876ac1-414b-4180-8d65-63737cb3bc53
+   :END:
+
+- The protocol is used in production and originates as an elementary
+  storage protocol for [[https://github.com/replikativ/replikativ][replikativ]] and [[https://github.com/replikativ/datahike][datahike]].
+- [[https://github.com/danielsz/kampbell][kampbell]] maps collections of
+  entities to konserve and enforces specs.
+
+** Combined usage with other writers
+   :PROPERTIES:
+   :CUSTOM_ID: h:8a1b4a06-4b9f-496b-9eb2-52ac953a8e35
+   :END:
+
+konserve assumes currently that it accesses its keyspace in the store
+exclusively. It uses [[https://github.com/replikativ/hasch][hasch]] to
+support arbitrary edn keys and hence does not normally clash with
+outside usage even when the same keys are used. To support multiple
+konserve clients in the store the backend has to support locking and
+proper transactions on keys internally, which is the case for backends
+like CouchDB, Redis and Riak.
+
+** Serialization formats
+   :PROPERTIES:
+   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
+   :END:
+
+Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
+=pr-str= version are supported and can be combined with different stores. Stores
+have a reasonable default setting. You can also extend the serialization
+protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
+records, if you need them.
+
+*** Tagged Literals
+    :PROPERTIES:
+    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
+    :END:
+
+You can read and write custom records according to
+[[https://github.com/replikativ/incognito][incognito]].
 
 ** Backend implementation guide
    :PROPERTIES:
@@ -374,20 +335,18 @@ namespace:
    :CUSTOM_ID: h:e35d9570-46e0-4750-8b98-cc3f27b19ac1
    :END:
 
-- add stress tests with https://github.com/madthanu/alice (for
-  filestore)
+- add more backends
+- add stress tests, e.g. with https://github.com/madthanu/alice
 - implement https://github.com/maxogden/abstract-blob-store for cljs
 - verify proper directory fsync for filestore
   http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
 - evaluate bytearrays for binary values
 - add transit cljs support (once it is declared stable)
-- more backends
 
 ** Changelog
    :PROPERTIES:
    :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
    :END:
-
 
 *** 0.7.274
     :PROPERTIES:
@@ -617,7 +576,7 @@ namespace:
    :CUSTOM_ID: h:8153b6f6-d253-4863-86b4-038dd383b6fe
    :END:
 
-Copyright © 2014-2019 Christian Weilbach and contributors
+Copyright © 2014-2023 Christian Weilbach and contributors
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
