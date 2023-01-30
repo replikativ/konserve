@@ -46,10 +46,26 @@ write operations is also implemented.
   stores is in the pipeline.
 
 *** Garbage Collector
+:PROPERTIES:
+:CUSTOM_ID: h:5529aa34-11b1-4499-bf62-7fc7be2b8a12
+:END:
 
-Konserve has a garbage collector that can be called manually when the store gets 
-to crowded. For that, the function /konserve.gc/sweep!/ allows you to provide a 
+Konserve has a garbage collector that can be called manually when the store gets
+too crowded. For that, the function =konserve.gc/sweep!= allows you to provide a
 cut-off date to evict old keys and a whitelist for keys that should be kept.
+
+*** Error handling
+:PROPERTIES:
+:CUSTOM_ID: h:10edb2cf-b2fc-4cc5-8854-77e6e8a1d82d
+:END:
+
+For synchronous execution normal exceptions will be thrown. For asynchronous
+error handling we follow the semantics of =go-try= and =<?= introduced [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][here]]. We
+have the [[https://github.com/replikativ/superv.async/][superv.async]] library around the error handling in core.async, but since
+there is no need to push it onto the users of konserve, you just need these two
+macros that properly handle the errors. =<?= needs to check for an exception and
+rethrow and =go-try= needs to catch and pass it along as a return value such
+that it does not get lost.
 
 ** Supported Backends
    :PROPERTIES:
@@ -57,6 +73,9 @@ cut-off date to evict old keys and a whitelist for keys that should be kept.
    :END:
 
 *** In-Memory Store
+:PROPERTIES:
+:CUSTOM_ID: h:63d979c0-4c4b-41fd-b1e2-e447adee3908
+:END:
 
 For simple purposes a memory store wrapping an Atom is implemented for Clojure and ClojureScript.
 
@@ -128,13 +147,13 @@ Usage:
     :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
     :END:
 
-We recently updated konserve not only to provide the option to choose between 
+We recently updated konserve not only to provide the option to choose between
 synchronous and asynchronous execution, but also to provide protocols that simplify
-the implementation of external backends. Unfortunately most of the external backends 
-are deprecated now because of this. 
+the implementation of external backends. Unfortunately most of the external backends
+are deprecated now because of this.
 
-The only compatible backend implementation at the moment is 
-[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as 
+The only compatible backend implementation at the moment is
+[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as
 reference project for future backend implementation.
 
 Please let us know if you are interested in other backends or if you need help with implementing one.
@@ -160,8 +179,7 @@ The following projects are incompatible with the latest konserve release:
    :END:
 
 - The protocol is used in production and originates as an elementary
-  storage protocol for
-  [[https://github.com/replikativ/replikativ][replikativ]].
+  storage protocol for [[https://github.com/replikativ/replikativ][replikativ]] and [[https://github.com/replikativ/datahike][datahike]].
 - [[https://github.com/danielsz/kampbell][kampbell]] maps collections of
   entities to konserve and enforces specs.
 
@@ -241,10 +259,13 @@ Add to your leiningen dependencies:
 [[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
 
 *** Synchronous Execution
+:PROPERTIES:
+:CUSTOM_ID: h:e290028c-78d8-4af6-8742-18b6d46680e3
+:END:
 
 Run the following synchronous code if you are not using core.async in your scope:
 
-#+BEGIN_SRC clojure 
+#+BEGIN_SRC clojure
   (ns test-db
     (:require [konserve.filestore :refer [connect-fs-store]]
               [konserve.core :as k]))
@@ -273,6 +294,9 @@ Run the following synchronous code if you are not using core.async in your scope
 #+END_SRC
 
 *** Asynchronous Execution
+:PROPERTIES:
+:CUSTOM_ID: h:929c501d-2a31-4f05-b231-132f79ee6cb5
+:END:
 
 In a ClojureScript REPL you can evaluate the expressions from the REPL
 each wrapped in a go-block.
@@ -316,7 +340,7 @@ the code.
    :PROPERTIES:
    :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
    :END:
-   
+
    We provide a [[file:doc/backend.org][backend implementation guide]] .
 
 ** JavaScript bindings
@@ -364,7 +388,7 @@ namespace:
    :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
    :END:
 
-  
+
 *** 0.7.274
     :PROPERTIES:
     :CUSTOM_ID: h:433a14fe-229b-4944-8beb-fd268917705c
