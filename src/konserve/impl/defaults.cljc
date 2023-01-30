@@ -67,7 +67,7 @@
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
-                          (try (-serialize ((encryptor store-key (:encryptor config)) (compressor serializer))
+                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
                                            bos write-handlers value)
                                (.toByteArray bos)
                                (finally
@@ -128,7 +128,7 @@
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
           fn-read (partial -deserialize
-                           (compressor ((encryptor store-key (:encryptor config)) serializer))
+                           (compressor ((encryptor (:encryptor config)) serializer))
                            read-handlers)]
       (case operation
         :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
