@@ -72,8 +72,7 @@ that it does not get lost.
    :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
    :END:
 
-Add to your dependencies:
-[[http://clojars.org/io.replikativ/konserve]][[http://clojars.org/io.replikativ/konserve/latest-version.svg]]]]
+Add to your dependencies: [[http://clojars.org/io.replikativ/konserve][http://clojars.org/io.replikativ/konserve/latest-version.svg]]
 
 *** Synchronous Execution
 :PROPERTIES:
