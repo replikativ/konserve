@@ -303,32 +303,6 @@ You can read and write custom records according to
 
    We provide a [[file:doc/backend.org][backend implementation guide]] .
 
-** JavaScript bindings
-   :PROPERTIES:
-   :CUSTOM_ID: h:05f3f415-afc2-4e11-a9f6-6e25519adb12
-   :END:
-
-There are experimental javascript bindings in the =konserve.js=
-namespace:
-
-#+BEGIN_SRC javascript
-    goog.require("konserve.js");
-
-    konserve.js.new_mem_store(function(s) { store = s; });
-    # or
-    konserve.js.new_indexeddb_store("test_store", function(s) { store = s; })
-
-    konserve.js.exists(store, ["foo"], function(v) { console.log(v); });
-    konserve.js.assoc_in(store, ["foo"], 42, function(v) {});
-    konserve.js.get_in(store,
-                       ["foo"],
-                       function(v) { console.log(v); });
-    konserve.js.update_in(store,
-                          ["foo"],
-                          function(v) { return v+1; },
-                          function(res) { console.log("Result:", res); });
-#+END_SRC
-
 ** TODO
    :PROPERTIES:
    :CUSTOM_ID: h:e35d9570-46e0-4750-8b98-cc3f27b19ac1
