@@ -19,7 +19,7 @@
 ;; Following advise at
 ;; https://crypto.stackexchange.com/questions/84439/is-it-dangerous-to-encrypt-lots-of-small-files-with-the-same-key
 
-(defn get-iv [salt key]
+(defn get-initial-vector [salt key]
   (subvec (vec (edn-hash ["initial-value" salt key])) 0 16))
 
 (defn get-key [salt key]
@@ -34,7 +34,7 @@
           salt (map int salt-array)
           decrypted (decrypt (get-key salt key)
                              #?(:clj (.readAllBytes ^ByteArrayInputStream bytes) :cljs bytes)
-                             :iv (get-iv salt key))]
+                             :iv (get-initial-vector salt key))]
       (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
@@ -45,7 +45,7 @@
                   _ (-serialize serializer bos write-handlers val)
                   ba (.toByteArray bos)
                   encrypted ^bytes (encrypt (get-key salt key)
-                                            ba :iv (get-iv salt key))]
+                                            ba :iv (get-initial-vector salt key))]
               (.write ^ByteArrayOutputStream bytes encrypted)))))
 
 (defn aes-encryptor [config]
