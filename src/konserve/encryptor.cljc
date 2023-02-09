@@ -40,7 +40,8 @@
     #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
        :clj (let [unsigned-byte-offset 128
                   salt (map #(int (- % unsigned-byte-offset)) (edn-hash (uuid)))
-                  bos (ByteArrayOutputStream. (* 16 1024))
+                  buffer-size (* 16 1024)
+                  bos (ByteArrayOutputStream. buffer-size)
                   _ (.write ^ByteArrayOutputStream bytes (byte-array salt))
                   _ (-serialize serializer bos write-handlers val)
                   ba (.toByteArray bos)
