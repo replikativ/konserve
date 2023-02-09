@@ -301,9 +301,9 @@ You can read and write custom records according to
    :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
    :END:
 
-   We provide a [[file:doc/backend.org][backend implementation guide]] .
+   We provide a [[file:doc/backend.org][backend implementation guide]].
 
-** TODO
+** Todo
    :PROPERTIES:
    :CUSTOM_ID: h:e35d9570-46e0-4750-8b98-cc3f27b19ac1
    :END:
