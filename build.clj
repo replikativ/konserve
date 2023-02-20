@@ -5,8 +5,8 @@
             [deps-deploy.deps-deploy :as dd])
   (:import [clojure.lang ExceptionInfo]))
 
-(def org "timokramer")
-(def lib 'org.clojars.timokramer/konserve)
+(def org "replikativ")
+(def lib 'io.replikativ/konserve)
 (def version (format "0.7.%s" (b/git-count-revs nil)))
 (def current-commit (b/git-process {:git-args "rev-parse HEAD"}))
 (def class-dir "target/classes")
