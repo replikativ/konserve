@@ -7,8 +7,8 @@
 
 (def org "replikativ")
 (def lib 'io.replikativ/konserve)
-(def version (format "0.7.%s" (b/git-count-revs nil)))
 (def current-commit (b/git-process {:git-args "rev-parse HEAD"}))
+(def version (format "0.7.%s" (b/git-count-revs nil)))
 (def class-dir "target/classes")
 (def basis (b/create-basis {:project "deps.edn"}))
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
