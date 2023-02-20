@@ -33,13 +33,12 @@
                    :main-opts ["-m" "cljs.main" "-c" "konserve.indexeddb-test"]}
            :idb-r {:extra-paths ["test"]
                    :main-opts ["-m" "cljs.main" "-r"]}
-           :build  {:deps       {io.github.seancorfield/build-clj {:git/tag "v0.8.2"
-                                                                   :git/sha "0ffdb4c"}
-                                 borkdude/gh-release-artifact     {:git/url "https://github.com/borkdude/gh-release-artifact"
-                                                                   :sha     "cf082df46a648178d1904e9cbcb787d8136a35c6"}
-                                 babashka/babashka.curl           {:mvn/version "0.1.2"}
-                                 babashka/fs                      {:mvn/version "0.1.6"}
-                                 cheshire/cheshire                {:mvn/version "5.10.2"}}
+           :build  {:deps       {io.github.seancorfield/build-clj       {:git/tag "v0.8.2"
+                                                                         :git/sha "0ffdb4c"}
+                                 io.github.borkdude/gh-release-artifact {:git/sha "05f8d8659e6805d513c59447ff41dc8497878462"}
+                                 babashka/babashka.curl                 {:mvn/version "0.1.2"}
+                                 babashka/fs                            {:mvn/version "0.1.6"}
+                                 cheshire/cheshire                      {:mvn/version "5.10.2"}}
                     :ns-default build}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
