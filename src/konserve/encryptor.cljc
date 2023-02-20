@@ -3,7 +3,7 @@
             [konserve.utils :refer [invert-map]]
             [geheimnis.aes :refer [encrypt decrypt]]
             [hasch.core :refer [edn-hash]])
-  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]))
+  #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 (defrecord NullEncryptor [serializer]
   PStoreSerializer
@@ -25,9 +25,11 @@
 (defrecord AESEncryptor [serializer store-key key]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-    (let [decrypted (decrypt [store-key key] #?(:clj (.readAllBytes ^ByteArrayInputStream bytes) :cljs bytes)
+    #?(:cljs (-deserialize serializer read-handlers (decrypt key bytes))
+       :clj (let [decrypted (decrypt [store-key key] (.readAllBytes ^ByteArrayInputStream bytes)
                              :iv (store-key->iv store-key))]
-      (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
+      (-deserialize serializer read-handlers #?(:clj (ByteArrayInputStream. decrypted)
+                                                     :cljs decrypted)))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
        :clj (let [bos (ByteArrayOutputStream.)

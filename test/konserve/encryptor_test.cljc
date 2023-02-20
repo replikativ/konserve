@@ -1,6 +1,6 @@
 (ns konserve.encryptor-test
   (:require [clojure.test :refer [deftest]]
-            [konserve.filestore :refer [connect-fs-store delete-store]]
+            [#?(:clj konserve.filestore :cljs konserve.node-filestore) :refer [connect-fs-store delete-store]]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.encryptor :refer [aes-encryptor]]))
 
