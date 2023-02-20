@@ -43,11 +43,12 @@
   (loop [idle-times (take retries (fib 1 2))]
     (let [result (exec-fn)]
       (if (test-fn result)
-        (when-let [sleep-ms (first idle-times)]
-          (println "Returned: " result)
-          (println "Retrying with remaining back-off times (in s): " idle-times)
-          (Thread/sleep (* 1000 sleep-ms))
-          (recur (rest idle-times)))
+        (do (println "Returned: " result)
+            (if-let [sleep-ms (first idle-times)]
+              (do (println "Retrying with remaining back-off times (in s): " idle-times)
+                  (Thread/sleep (* 1000 sleep-ms))
+                  (recur (rest idle-times)))
+              result))
         result))))
 
 (defn try-release []
@@ -63,9 +64,12 @@
 
 (defn release
   [_]
-  (-> (retry-with-fib-backoff 10 try-release :failure?)
-      :url
-      println))
+  (println "Trying to release artifact...")
+  (let [ret (retry-with-fib-backoff 10 try-release :failure?)]
+    (if (:failure? ret)
+      (do (println "GitHub release failed!")
+          (System/exit 1))
+      (println (:url ret)))))
 
 (defn install
   [_]
