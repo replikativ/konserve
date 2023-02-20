@@ -54,7 +54,7 @@
   (try (gh/overwrite-asset {:org org
                             :repo (name lib)
                             :tag version
-                            :commit (current-commit)
+                            :commit current-commit
                             :file jar-file
                             :content-type "application/java-archive"
                             :draft false})
