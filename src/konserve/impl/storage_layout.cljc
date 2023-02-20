@@ -82,11 +82,27 @@
                                        ;; byte size requires version bump to set
                                        ;; these bytes to non-zero now
                                        (header-not-zero-padded? header-bytes))
-                                small-header-size header-size)]
+                                small-header-size header-size)
+           serializer (serializers (byte->key serializer-id))
+           compressor (byte->compressor compressor-id)
+           encryptor (byte->encryptor encryptor-id)]
+       (when-not serializer
+         (throw (ex-info "Serializer not found."
+                         {:type        :serializer-not-found
+                          :serializers serializers
+                          :serializer-id serializer-id})))
+       (when-not compressor
+         (throw (ex-info "Compressor not found."
+                         {:type          :compressor-not-found
+                          :compressor-id compressor-id})))
+       (when-not encryptor
+         (throw (ex-info "Encryptor not found."
+                         {:type          :encryptor-not-found
+                          :encryptor-id encryptor-id})))
        [version
-        (serializers (byte->key serializer-id))
-        (byte->compressor compressor-id)
-        (byte->encryptor encryptor-id)
+        serializer
+        compressor
+        encryptor
         meta-size
         actual-header-size])
      :cljs
@@ -99,11 +115,27 @@
            serializer-id (aget header-bytes 1)
            compressor-id (aget header-bytes 2)
            encryptor-id (aget header-bytes 3)
-           meta-size (aget header-bytes 4)]
+           meta-size (aget header-bytes 4)
+           serializer (serializers (byte->key serializer-id))
+           compressor (byte->compressor compressor-id)
+           encryptor (byte->encryptor encryptor-id)]
+       (when-not serializer
+         (throw (ex-info "Serializer not found."
+                         {:type          :serializer-not-found
+                          :serializers   serializers
+                          :serializer-id serializer-id})))
+       (when-not compressor
+         (throw (ex-info "Compressor not found."
+                         {:type          :compressor-not-found
+                          :compressor-id compressor-id})))
+       (when-not encryptor
+         (throw (ex-info "Encryptor not found."
+                         {:type         :encryptor-not-found
+                          :encryptor-id encryptor-id})))
        [version
-        (serializers (byte->key serializer-id))
-        (byte->compressor compressor-id)
-        (byte->encryptor encryptor-id)
+        serializer
+        compressor
+        encryptor
         meta-size
         header-size])))
 
