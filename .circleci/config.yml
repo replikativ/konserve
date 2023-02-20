@@ -44,4 +44,4 @@ workflows:
             branches:
               only: main
           requires:
-            - deploy
+            - tools/deploy
