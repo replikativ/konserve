@@ -5,7 +5,6 @@
             [hasch.core :refer [edn-hash uuid]])
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
-
 (defrecord NullEncryptor [serializer]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
@@ -35,9 +34,9 @@
                   _ (.read ^ByteArrayInputStream bytes salt-array)
                   salt (map int salt-array)
                   decrypted (decrypt (get-key salt key)
-                                     (.readAllBytes ^ByteArrayInputStream bytes) 
+                                     (.readAllBytes ^ByteArrayInputStream bytes)
                                      :iv (get-initial-vector salt key))]
-      (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted)))))
+              (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted)))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
        :clj (let [unsigned-byte-offset 128
