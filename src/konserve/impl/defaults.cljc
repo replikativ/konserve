@@ -5,8 +5,8 @@
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
-   [konserve.compressor :refer [null-compressor]]
-   [konserve.encryptor :refer [null-encryptor]]
+   [konserve.compressor :refer [get-compressor]]
+   [konserve.encryptor :refer [get-encryptor]]
    [konserve.protocols :refer [PEDNKeyValueStore -exists?
                                PBinaryKeyValueStore
                                -serialize -deserialize
@@ -60,14 +60,12 @@
           store-key (or store-key (key->store-key key))
           to-array #?(:cljs
                       (fn [value]
-                        (-> serializer
-                            compressor
-                            encryptor
-                            (-serialize nil write-handlers value)))
+                        (-serialize ((encryptor store-key (:encryptor config)) (compressor serializer))
+                                    nil write-handlers value))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
-                          (try (-serialize (encryptor (compressor serializer))
+                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
                                            bos write-handlers value)
                                (.toByteArray bos)
                                (finally
@@ -120,7 +118,7 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [blob read-handlers serializers {:keys [sync? operation locked-cb] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -128,7 +126,7 @@
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
           fn-read (partial -deserialize
-                           (compressor (encryptor serializer))
+                           (compressor ((encryptor (:encryptor config)) serializer))
                            read-handlers)]
       (case operation
         :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
@@ -277,6 +275,7 @@
             (ends-with? store-key ".ksv")
             (let [blob        (<?- (-create-blob backing store-key env))
                   env         (update-in env [:msg :keys] (fn [_] store-key))
+                  env    (assoc env :store-key store-key)
                   lock   (when (and (:in-place? config) (:lock-blob? config))
                            (trace "Acquiring blob lock for: " store-key (str blob))
                            (<?- (-get-lock blob env)))
@@ -442,13 +441,10 @@
 (defn connect-default-store
   "Create general store in given base of backing store."
   [backing
-   {:keys [default-serializer serializers compressor encryptor
+   {:keys [default-serializer serializers
            read-handlers write-handlers
            buffer-size config opts]
     :or   {default-serializer :FressianSerializer
-           compressor         null-compressor
-           ;; lz4-compressor
-           encryptor          null-encryptor
            read-handlers      (atom {})
            write-handlers     (atom {})
            buffer-size        (* 1024 1024)
@@ -457,7 +453,9 @@
   (let [complete-config (merge {:sync-blob? true
                                 :in-place? false
                                 :lock-blob? true}
-                               config)]
+                               config)
+        compressor (get-compressor (get-in config [:compressor :type]))
+        encryptor (get-encryptor (get-in config [:encryptor :type]))]
     (async+sync
      (:sync? opts) *default-sync-translation*
      (go-try-

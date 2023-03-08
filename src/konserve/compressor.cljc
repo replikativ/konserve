@@ -60,3 +60,8 @@
 
 (def compressor->byte
   (invert-map byte->compressor))
+
+(defn get-compressor [type]
+  (case type
+    :lz4 lz4-compressor
+    null-compressor))

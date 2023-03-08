@@ -1,4 +1,4 @@
-.clj-kondo/.cache/
+.cache/
 .vscode/
 /resources
 /target
