@@ -5,6 +5,8 @@
             [hasch.core :refer [edn-hash uuid]])
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
+(def ^:const salt-size 64)
+
 (defrecord NullEncryptor [serializer]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
