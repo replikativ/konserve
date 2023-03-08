@@ -44,8 +44,8 @@
     #?(:cljs (let [salt (edn-hash (uuid))
                    bytes (encrypt (get-key key salt) (-serialize serializer bytes write-handlers val))
                    output (js/Uint8Array. (+ salt-size (count bytes)))]
-               (.set output (js/Uint8Array.from (into-array salt)))
-               (.set output (js/Uint8Array.from bytes))
+               (.set output (js/Uint8Array.from (into-array salt)) 0)
+               (.set output (js/Uint8Array.from bytes) salt-size)
                output)
        :clj (let [unsigned-byte-offset 128
                   salt (map #(int (- % unsigned-byte-offset)) (edn-hash (uuid)))
