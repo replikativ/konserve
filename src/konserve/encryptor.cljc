@@ -41,8 +41,11 @@
       (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (let [salt (edn-hash (uuid))
-                   bytes (-serialize serializer bytes write-handlers val)]
-               (encrypt (get-key key salt) bytes))
+                   bytes (encrypt (get-key key salt) (-serialize serializer bytes write-handlers val))
+                   output (js/Uint8Array. (+ salt-size (count bytes)))]
+               (.set output (js/Uint8Array.from (into-array salt)))
+               (.set output (js/Uint8Array.from bytes))
+               output)
        :clj (let [unsigned-byte-offset 128
                   salt (map #(int (- % unsigned-byte-offset)) (edn-hash (uuid)))
                   buffer-size (* 16 1024)
