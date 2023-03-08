@@ -38,7 +38,8 @@
                              #?(:clj (.readAllBytes ^ByteArrayInputStream bytes)
                                 :cljs (.slice bytes salt-size))
                              :iv (get-initial-vector salt key))]
-      (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
+      (-deserialize serializer read-handlers #?(:clj (ByteArrayInputStream. decrypted)
+                                                :cljs decrypted))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (let [salt (edn-hash (uuid))
                    bytes (encrypt (get-key key salt) (-serialize serializer bytes write-handlers val))
