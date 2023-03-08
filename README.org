@@ -233,13 +233,16 @@ synchronous and asynchronous execution, but also to provide protocols that simpl
 the implementation of external backends. Unfortunately most of the external backends
 are deprecated now because of this.
 
-The only compatible backend implementation at the moment is
-[[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]], which can be used as
-reference project for future backend implementation.
+Supported backend implementations are:
+- [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
+- [[https://github.com/replikativ/konserve-s3][konserve-s3]]
 
-Please let us know if you are interested in other backends or if you need help with implementing one.
+Please let us know if you are interested in other backends or if you need help
+with implementing one.
 
-The following projects are incompatible with the latest konserve release:
+The following projects are incompatible with the latest konserve release, but
+describe the usage of the underlying store API and can be helpful to implement
+new backends for the underlying store:
 - LevelDB:
   [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
 - CouchDB:
