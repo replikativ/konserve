@@ -1,9 +1,8 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :refer [#?(:clj <!! :cljs <!) go]]
             [konserve.core :as k]
-            #?(:cljs [cljs.test :refer [deftest is async]])
-            #?(:clj [clojure.test :refer [are is testing]])
-            #?(:cljs [konserve.memory :refer [new-mem-store]])))
+            #?(:cljs [cljs.test :refer [is async]])
+            #?(:clj [clojure.test :refer [are is testing]])))
 
 #_(deftype UnknownType [])
 

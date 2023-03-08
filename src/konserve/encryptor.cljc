@@ -2,7 +2,7 @@
   (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
             [konserve.utils :refer [invert-map]]
             [geheimnis.aes :refer [encrypt decrypt]]
-            [hasch.core :refer [edn-hash uuid]])
+            [hasch.core :refer [edn-hash #?(:clj uuid)]])
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 (defrecord NullEncryptor [serializer]

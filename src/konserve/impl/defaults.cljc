@@ -118,7 +118,7 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb config _store-key] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
