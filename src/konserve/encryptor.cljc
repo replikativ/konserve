@@ -25,20 +25,22 @@
 (defn get-key [salt key]
   ["key" salt key])
 
-;; TODO cljs support incomplete, prepending of salt is missing
 (defrecord AESEncryptor [serializer key]
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-    #?(:cljs (-deserialize serializer read-handlers (decrypt key bytes))
-       :clj (let [salt-array (byte-array 64)
-                  _ (.read ^ByteArrayInputStream bytes salt-array)
-                  salt (map int salt-array)
-                  decrypted (decrypt (get-key salt key)
-                                     (.readAllBytes ^ByteArrayInputStream bytes)
-                                     :iv (get-initial-vector salt key))]
-              (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted)))))
+    (let [salt #?(:clj (let [salt-array (byte-array salt-size)]
+                         (.read ^ByteArrayInputStream bytes salt-array)
+                         (map int salt-array))
+                  :cljs (seq (.slice bytes 0 salt-size)))
+          decrypted (decrypt (get-key salt key)
+                             #?(:clj (.readAllBytes ^ByteArrayInputStream bytes)
+                                :cljs (.slice bytes salt-size))
+                             :iv (get-initial-vector salt key))]
+      (-deserialize serializer read-handlers (ByteArrayInputStream. decrypted))))
   (-serialize [_ bytes write-handlers val]
-    #?(:cljs (encrypt key (-serialize serializer bytes write-handlers val))
+    #?(:cljs (let [salt (edn-hash (uuid))
+                   bytes (-serialize serializer bytes write-handlers val)]
+               (encrypt (get-key key salt) bytes))
        :clj (let [unsigned-byte-offset 128
                   salt (map #(int (- % unsigned-byte-offset)) (edn-hash (uuid)))
                   buffer-size (* 16 1024)
