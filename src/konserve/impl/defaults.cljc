@@ -60,8 +60,7 @@
           store-key (or store-key (key->store-key key))
           to-array #?(:cljs
                       (fn [value]
-                        (-serialize ((encryptor store-key (:encryptor config)) (compressor serializer))
-                                    nil write-handlers value))
+                        (-serialize ((encryptor  (:encryptor config)) (compressor serializer)) nil write-handlers value))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
