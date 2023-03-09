@@ -62,5 +62,6 @@
 
 (defn get-compressor [type]
   (case type
-    :lz4 lz4-compressor
+    :lz4 #?(:clj lz4-compressor
+            :cljs unsupported-lz4-compressor)
     null-compressor))
