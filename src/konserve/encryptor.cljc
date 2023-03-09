@@ -34,18 +34,19 @@
                          (.read ^ByteArrayInputStream bytes salt-array)
                          (map int salt-array))
                   :cljs (seq (.slice bytes 0 salt-size)))
-          decrypted (decrypt (get-key salt key)
-                             #?(:clj (.readAllBytes ^ByteArrayInputStream bytes)
-                                :cljs (.slice bytes salt-size))
-                             :iv (get-initial-vector salt key))]
+          data #?(:clj (.readAllBytes ^ByteArrayInputStream bytes)
+                  :cljs (.slice bytes salt-size))
+          decrypted (decrypt (get-key salt key) data :iv (get-initial-vector salt key))]
       (-deserialize serializer read-handlers #?(:clj (ByteArrayInputStream. decrypted)
                                                 :cljs decrypted))))
   (-serialize [_ bytes write-handlers val]
     #?(:cljs (let [salt (edn-hash (uuid))
-                   bytes (encrypt (get-key key salt) (-serialize serializer bytes write-handlers val))
+                   data (-serialize serializer bytes write-handlers val)
+                   bytes (encrypt (get-key key salt) (.from js/Array data))
                    output (js/Uint8Array. (+ salt-size (count bytes)))]
                (.set output (js/Uint8Array.from (into-array salt)) 0)
                (.set output (js/Uint8Array.from bytes) salt-size)
+
                output)
        :clj (let [unsigned-byte-offset 128
                   salt (map #(int (- % unsigned-byte-offset)) (edn-hash (uuid)))
