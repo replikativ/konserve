@@ -34,7 +34,8 @@
                                         "-o" "target/cljs" 
                                         "--exclude" "browser" 
                                         "--env" "node"]}
-           :build  {:deps       {io.github.seancorfield/build-clj       {:git/tag "v0.9.2"}
+           :build  {:deps       {io.github.seancorfield/build-clj       {:git/tag "v0.8.2"
+                                                                         :git/sha "0ffdb4c"}
                                  io.github.borkdude/gh-release-artifact {:git/sha "db5e79559fdbfa009ed4a0921079e20e1e76b269"}
                                  babashka/babashka.curl                 {:mvn/version "0.1.2"}
                                  babashka/fs                            {:mvn/version "0.3.17"}
