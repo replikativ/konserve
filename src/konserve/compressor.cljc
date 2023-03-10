@@ -48,13 +48,9 @@
 
 (def byte->compressor
   {0 null-compressor
-   1 #?(:clj (try
-              ;; LZ4 requires native code that breaks the native-image executable atm.
-               (if (native-image-build?)
-                 unsupported-lz4-compressor
-                 lz4-compressor)
-               (catch Exception _
-                 lz4-compressor))
+   1 #?(:clj (if (native-image-build?)
+               unsupported-lz4-compressor
+               lz4-compressor)
         :cljs unsupported-lz4-compressor)})
 
 (def compressor->byte
