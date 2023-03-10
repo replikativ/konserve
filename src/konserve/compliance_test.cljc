@@ -1,7 +1,7 @@
 (ns konserve.compliance-test
-  (:require [clojure.core.async :refer [#?(:clj <!! :cljs <!) go]]
+  (:require [clojure.core.async :refer [#?(:clj <!!) <! go]]
             [konserve.core :as k]
-            #?(:cljs [cljs.test :refer [is async]])
+            #?(:cljs [cljs.test :refer [is]])
             #?(:clj [clojure.test :refer [are is testing]])))
 
 #_(deftype UnknownType [])
