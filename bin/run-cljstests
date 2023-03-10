@@ -10,8 +10,6 @@ clojure -M:run-cljs-tests
 #[ -d "node_modules/ws" ] || npm install ws
 #clojure -M:test -m kaocha.runner unit-node
 
-echo
-echo
 
 echo "Running tests for browser"
 # kaocha version:

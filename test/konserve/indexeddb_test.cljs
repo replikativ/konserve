@@ -8,7 +8,7 @@
   (:import [goog userAgent]))
 
 (deftest ^:browser lifecycle-test
-  (if ^boolean userAgent.GECKO
+  (if ^boolean goog.userAgent.GECKO
     (is (true? true))
     (async done
            (go

@@ -5,25 +5,25 @@
         fress/fress {:mvn/version "0.4.0"}
         mvxcvi/clj-cbor {:mvn/version "1.1.1"}
         io.replikativ/incognito {:mvn/version "0.3.66"}
-        io.replikativ/hasch {:mvn/version "0.3.7"}
-        io.replikativ/superv.async {:mvn/version "0.3.43"}
+        io.replikativ/hasch {:mvn/version "0.3.94"}
+        io.replikativ/superv.async {:mvn/version "0.3.46"}
         io.replikativ/geheimnis {:mvn/version "0.1.1"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}
         com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.332"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "6.0.1"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.20.7"}
+ :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.22.0"}
                                binaryage/devtools {:mvn/version "1.0.6"}}
                   :extra-paths ["test"]}
            :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
-                              org.clojure/tools.cli {:mvn/version "1.0.206"}}
+                              org.clojure/tools.cli {:mvn/version "1.0.214"}}
                  :extra-paths ["benchmark/src"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}
                        :extra-paths ["benchmark/src"]
                        :main-opts ["-m" "benchmark.core"]}
-           :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.73.1175"}
+           :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.80.1274"}
                                lambdaisland/kaocha-cljs {:mvn/version "1.4.130"}
                                org.clojure/test.check {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
@@ -34,18 +34,16 @@
                                         "-o" "target/cljs" 
                                         "--exclude" "browser" 
                                         "--env" "node"]}
-           :idb-c {:extra-paths ["test"]
-                   :main-opts ["-m" "cljs.main" "-c" "konserve.indexeddb-test"]}
-           :idb-r {:extra-paths ["test"]
-                   :main-opts ["-m" "cljs.main" "-r"]}
            :build  {:deps       {io.github.seancorfield/build-clj       {:git/tag "v0.8.2"
                                                                          :git/sha "0ffdb4c"}
-                                 io.github.borkdude/gh-release-artifact {:git/sha "05f8d8659e6805d513c59447ff41dc8497878462"}
+                                 io.github.borkdude/gh-release-artifact {:git/sha "db5e79559fdbfa009ed4a0921079e20e1e76b269"}
                                  babashka/babashka.curl                 {:mvn/version "0.1.2"}
-                                 babashka/fs                            {:mvn/version "0.1.6"}
-                                 cheshire/cheshire                      {:mvn/version "5.10.2"}}
+                                 babashka/fs                            {:mvn/version "0.3.17"}
+                                 cheshire/cheshire                      {:mvn/version "5.11.0"}}
                     :ns-default build}
-           :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.8.0"}}
+           :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
-           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.0"}}
-                  :main-opts ["-m" "cljfmt.main" "fix"]}}}
+           :ffix {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
+                  :main-opts ["-m" "cljfmt.main" "fix"]}
+           :outdated {:extra-deps {com.github.liquidz/antq {:mvn/version "2.2.983"}}
+                      :main-opts ["-m" "antq.core"]}}}
