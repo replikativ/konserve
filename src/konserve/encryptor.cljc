@@ -44,13 +44,13 @@
     (let [unsigned-byte-offset 128
           salt (map #(int (- (#?(:cljs inc :clj identity) %) unsigned-byte-offset)) (edn-hash (uuid)))]
       #?(:cljs
-          (let [data (-serialize serializer bytes write-handlers val)
-                iv (get-initial-vector salt key)
-                bytes (encrypt (get-key salt key) (.from js/Array data) :iv iv)
-                output (js/Uint8Array. (+ salt-size (count bytes)))]
-            (.set output (js/Uint8Array.from (into-array salt)) 0)
-            (.set output (js/Uint8Array.from bytes) salt-size)
-            output)
+         (let [data (-serialize serializer bytes write-handlers val)
+               iv (get-initial-vector salt key)
+               bytes (encrypt (get-key salt key) (.from js/Array data) :iv iv)
+               output (js/Uint8Array. (+ salt-size (count bytes)))]
+           (.set output (js/Uint8Array.from (into-array salt)) 0)
+           (.set output (js/Uint8Array.from bytes) salt-size)
+           output)
          :clj
          (let [buffer-size (* 16 1024)
                bos (ByteArrayOutputStream. buffer-size)
@@ -59,7 +59,7 @@
                ba (.toByteArray bos)
                iv (get-initial-vector salt key)
                encrypted ^bytes (encrypt (get-key salt key) ba :iv iv)]
-          (.write ^ByteArrayOutputStream bytes encrypted))))))
+           (.write ^ByteArrayOutputStream bytes encrypted))))))
 
 (defn aes-encryptor [config]
   (let [{:keys [key]} config]

@@ -103,21 +103,21 @@
 
 (defn async-compliance-test [store]
   (go
-   (and
-      (is (= nil (<! (k/get store :foo))))
-      (is (= [nil :bar] (<! (k/assoc store :foo :bar))))
-      (is (= :bar (<! (k/get store :foo))))
-      (is (= [nil :bar2] (<! (k/assoc-in store [:foo] :bar2))))
-      (is (= :bar2 (<! (k/get store :foo))))
-      (is (= :default (<! (k/get-in store [:fuu] :default))))
-      (<! (k/update-in store [:foo] name))
-      (is (= "bar2" (<! (k/get store :foo))))
-      (<! (k/assoc-in store [:baz] {:bar 42}))
-      (is (= (<! (k/get-in store [:baz :bar])) 42))
-      (<! (k/update-in store [:baz :bar] inc))
-      (is (= (<! (k/get-in store [:baz :bar])) 43))
-      (<! (k/update-in store [:baz :bar] #(+ % 2 3)))
-      (is (= (<! (k/get-in store [:baz :bar])) 48))
-      (<! (k/dissoc store :foo))
-      (is (= (<! (k/get-in store [:foo])) nil)))))
+    (and
+     (is (= nil (<! (k/get store :foo))))
+     (is (= [nil :bar] (<! (k/assoc store :foo :bar))))
+     (is (= :bar (<! (k/get store :foo))))
+     (is (= [nil :bar2] (<! (k/assoc-in store [:foo] :bar2))))
+     (is (= :bar2 (<! (k/get store :foo))))
+     (is (= :default (<! (k/get-in store [:fuu] :default))))
+     (<! (k/update-in store [:foo] name))
+     (is (= "bar2" (<! (k/get store :foo))))
+     (<! (k/assoc-in store [:baz] {:bar 42}))
+     (is (= (<! (k/get-in store [:baz :bar])) 42))
+     (<! (k/update-in store [:baz :bar] inc))
+     (is (= (<! (k/get-in store [:baz :bar])) 43))
+     (<! (k/update-in store [:baz :bar] #(+ % 2 3)))
+     (is (= (<! (k/get-in store [:baz :bar])) 48))
+     (<! (k/dissoc store :foo))
+     (is (= (<! (k/get-in store [:foo])) nil)))))
 

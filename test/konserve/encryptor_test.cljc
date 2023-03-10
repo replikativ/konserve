@@ -2,8 +2,7 @@
   (:require [clojure.test :refer [deftest]]
             [clojure.core.async :refer [go <!]]
             [#?(:clj konserve.filestore :cljs konserve.node-filestore) :refer [connect-fs-store delete-store]]
-            [konserve.compliance-test :refer [compliance-test async-compliance-test]]))
-
+            [konserve.compliance-test :refer [#?(:clj compliance-test) async-compliance-test]]))
 
 (deftest encryptor-test
   (let [folder "/tmp/konserve-fs-encryptor-test"
@@ -17,8 +16,8 @@
          (compliance-test store)
          (delete-store folder))
        :cljs
-        (cljs.test/async done
-         (go
-          (<! (async-compliance-test store))
-          (delete-store folder)
-          (done))))))
+       (cljs.test/async done
+                        (go
+                          (<! (async-compliance-test store))
+                          (delete-store folder)
+                          (done))))))
