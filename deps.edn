@@ -34,12 +34,12 @@
                                         "-o" "target/cljs" 
                                         "--exclude" "browser" 
                                         "--env" "node"]}
-           :build  {:deps       {io.github.seancorfield/build-clj       {:git/tag "v0.8.2"
-                                                                         :git/sha "0ffdb4c"}
-                                 io.github.borkdude/gh-release-artifact {:git/sha "db5e79559fdbfa009ed4a0921079e20e1e76b269"}
-                                 babashka/babashka.curl                 {:mvn/version "0.1.2"}
-                                 babashka/fs                            {:mvn/version "0.3.17"}
-                                 cheshire/cheshire                      {:mvn/version "5.11.0"}}
+           :build  {:deps {io.github.clojure/tools.build          {:mvn/version "0.9.3"}
+                           slipset/deps-deploy                    {:mvn/version "0.2.0"}
+                           io.github.borkdude/gh-release-artifact {:git/sha "b946558225a7839f6a0f644834e838e190dc2262"}
+                           babashka/babashka.curl                 {:mvn/version "0.1.2"}
+                           babashka/fs                            {:mvn/version "0.3.17"}
+                           cheshire/cheshire                      {:mvn/version "5.11.0"}}
                     :ns-default build}
            :format {:extra-deps {cljfmt/cljfmt {:mvn/version "0.9.2"}}
                     :main-opts ["-m" "cljfmt.main" "check"]}
