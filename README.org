@@ -10,7 +10,7 @@
 [[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
 
 
-[[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
+[[https://whilo.github.io/articles/16/unified-storage-io][Simple durability, made flexible.]]
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
 semantics to allow Clojuresque collection operations on associative key-value
@@ -257,6 +257,53 @@ new backends for the underlying store:
   [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
 
 
+** Serialization formats
+   :PROPERTIES:
+   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
+   :END:
+
+Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
+=pr-str= version are supported and can be combined with different stores. Stores
+have a reasonable default setting. You can also extend the serialization
+protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
+records, if you need them.
+
+*** Tagged Literals
+    :PROPERTIES:
+    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
+    :END:
+
+You can read and write custom records according to
+[[https://github.com/replikativ/incognito][incognito]].
+
+** Compression and encryption
+:PROPERTIES:
+:CUSTOM_ID: h:98bf90fd-4778-49da-80d7-58f89f00aec5
+:END:
+
+Compression and encryption are supported by the default store implementation
+that is used by all current backends. They can be activated in the store
+configuration as follows:
+
+#+BEGIN_SRC clojure
+{:encryptor {:type :aes
+             :key "s3cr3t"}
+ :compressor {:type :lz4}}
+#+END_SRC
+
+LZ4 compression is currently only supported on the JVM. AES encryption is
+supported on both JVM and JS targets with the same cold storage format, i.e. the
+same store can be read and written from Clojure and ClojureScript runtimes. We
+use AES/CBC/PKCS{5/7}Padding with 256 bit and a different salt for each written
+value.
+
+** Backend implementation guide
+   :PROPERTIES:
+   :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
+   :END:
+
+   We provide a [[file:doc/backend.org][backend implementation guide]].
+
 ** Projects building on konserve
    :PROPERTIES:
    :CUSTOM_ID: h:79876ac1-414b-4180-8d65-63737cb3bc53
@@ -279,32 +326,6 @@ outside usage even when the same keys are used. To support multiple
 konserve clients in the store the backend has to support locking and
 proper transactions on keys internally, which is the case for backends
 like CouchDB, Redis and Riak.
-
-** Serialization formats
-   :PROPERTIES:
-   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
-   :END:
-
-Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
-=pr-str= version are supported and can be combined with different stores. Stores
-have a reasonable default setting. You can also extend the serialization
-protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
-records, if you need them.
-
-*** Tagged Literals
-    :PROPERTIES:
-    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
-    :END:
-
-You can read and write custom records according to
-[[https://github.com/replikativ/incognito][incognito]].
-
-** Backend implementation guide
-   :PROPERTIES:
-   :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
-   :END:
-
-   We provide a [[file:doc/backend.org][backend implementation guide]].
 
 ** Todo
    :PROPERTIES:
