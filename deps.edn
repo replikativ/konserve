@@ -1,6 +1,5 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
-        org.clojure/clojurescript {:mvn/version "1.11.60"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         fress/fress {:mvn/version "0.4.0"}
         mvxcvi/clj-cbor {:mvn/version "1.1.1"}
@@ -12,7 +11,8 @@
         com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.332"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "6.0.1"}}
- :aliases {:cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.22.0"}
+ :aliases {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.60"}
+                               thheller/shadow-cljs {:mvn/version "2.22.0"}
                                binaryage/devtools {:mvn/version "1.0.6"}}
                   :extra-paths ["test"]}
            :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
