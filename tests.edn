@@ -1,1 +1,13 @@
-#kaocha/v1 {}
+#kaocha/v1 {:tests [{:id :unit}
+                    #_{:id :unit-node ;; Throws known kaocha error
+                       :type :kaocha.type/cljs
+                       :kaocha.filter/skip-meta [:browser]
+                       :cljs/repl-env cljs.repl.node/repl-env
+                       :timeout 30000}
+                    {:id :unit-browser
+                     :type :kaocha.type/cljs
+                     :kaocha.filter/focus-meta [:browser]
+                     :cljs/repl-env cljs.repl.browser/repl-env
+                     :timeout 30000}]
+            :bindings {kaocha.type.cljs/*debug* true}
+            :reporter kaocha.report/documentation}

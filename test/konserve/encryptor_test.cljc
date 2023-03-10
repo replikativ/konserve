@@ -1,7 +1,8 @@
 (ns konserve.encryptor-test
   (:require [clojure.test :refer [deftest]]
-            [konserve.filestore :refer [connect-fs-store delete-store]]
-            [konserve.compliance-test :refer [compliance-test]]))
+            [clojure.core.async :refer [go <!]]
+            [#?(:clj konserve.filestore :cljs konserve.node-filestore) :refer [connect-fs-store delete-store]]
+            [konserve.compliance-test :refer [#?(:clj compliance-test) async-compliance-test]]))
 
 (deftest encryptor-test
   (let [folder "/tmp/konserve-fs-encryptor-test"
@@ -10,5 +11,13 @@
                                  :config {:encryptor {:type :aes
                                                       :key "s3cr3t"}}
                                  :opts {:sync? true})]
-    (compliance-test store)
-    (delete-store folder)))
+    #?(:clj
+       (do
+         (compliance-test store)
+         (delete-store folder))
+       :cljs
+       (cljs.test/async done
+                        (go
+                          (<! (async-compliance-test store))
+                          (delete-store folder)
+                          (done))))))

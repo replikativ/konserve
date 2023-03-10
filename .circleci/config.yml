@@ -22,10 +22,10 @@ workflows:
           context: docker-deploy
           requires:
             - tools/build
-      #- tools/cljstest:
-      #   context: docker-deploy
-      #   requires:
-      #     - tools/build
+      - tools/cljstest:
+         context: docker-deploy
+         requires:
+           - tools/build
       - tools/deploy:
           context:
             - clojars-deploy

@@ -7,8 +7,9 @@
             [konserve.protocols :as p])
   (:import [goog.userAgent]))
 
-(when-not ^boolean goog.userAgent.GECKO
-  (deftest lifecycle-test
+(deftest ^:browser lifecycle-test
+  (if ^boolean goog.userAgent.GECKO
+    (is (true? true))
     (async done
            (go
              (let [db-name "lifecycle-db"]
@@ -24,7 +25,7 @@
                (<! (idb/delete-idb db-name))
                (done))))))
 
-(deftest PEDNKeyValueStore-async-test
+(deftest ^:browser PEDNKeyValueStore-async-test
   (async done
          (go
            (let [db-name "pednkv-test"
@@ -52,7 +53,7 @@
              (<! (idb/delete-idb db-name))
              (done)))))
 
-(deftest PKeyIterable-async-test
+(deftest ^:browser PKeyIterable-async-test
   (async done
          (go
            (let [db-name "pkeyiterable-test"
@@ -69,7 +70,7 @@
              (<! (idb/delete-idb db-name))
              (done)))))
 
-(deftest append-store-async-test
+(deftest ^:browser append-store-async-test
   (async done
          (go
            (let [db-name "append-test"
