@@ -10,7 +10,7 @@
 [[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
 
 
-[[https://whilo.github.io/articles/16/unified-storage-io][Simple durability, made flexible.]]
+[[https://whilo.github.io/old/articles/16/unified-storage-io][Simple durability, made flexible.]]
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
 semantics to allow Clojuresque collection operations on associative key-value
