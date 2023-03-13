@@ -237,23 +237,20 @@ are deprecated now because of this.
 Supported backend implementations are:
 - [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
 - [[https://github.com/replikativ/konserve-s3][konserve-s3]]
+- [[https://github.com/replikativ/konserve-redis][konserve-redis]]
 
 Please let us know if you are interested in other backends or if you need help
 with implementing one.
 
 The following projects are incompatible with the latest konserve release, but
-describe the usage of the underlying store API and can be helpful to implement
-new backends for the underlying store:
+describe the usage of the underlying store API and could still be helpful to
+implement new backends for the underlying store:
 - LevelDB:
   [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
 - CouchDB:
   [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
-- Redis:
-  [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
 - Riak:
   [[https://github.com/replikativ/konserve-welle][konserve-welle]].
-- PostgreSQL:
-  [[https://github.com/retro/konserve-pg][konserve-pg]].
 - System component for internal backends:
   [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
 
