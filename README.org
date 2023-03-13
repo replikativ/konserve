@@ -120,7 +120,7 @@ each wrapped in a go-block.
 #+BEGIN_SRC clojure
   (ns test-db
     (:require [konserve.memory :refer [new-mem-store]]
-              [konserve.core :as k]))
+              [clojure.core.async :refer [go <!]]))
 
   (go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
 #+END_SRC
@@ -131,24 +131,25 @@ the code.
   (ns test-db
     (:require [konserve.filestore :refer [connect-fs-store]]
               [konserve.core :as k]
-              [clojure.core.async :refer [<!]]))
+              [clojure.core.async :refer [go <!]]))
 
-  (def store (<! (connect-fs-store "/tmp/store")))
+  (go
+    (def store (<! (connect-fs-store "/tmp/store")))
 
-  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-  (<! (k/get-in store ["foo"]))
-  (<! (k/exists? store "foo"))
+    (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+    (<! (k/get-in store ["foo"]))
+    (<! (k/exists? store "foo"))
 
-  (<! (k/assoc-in store [:bar] 42))
-  (<! (k/update-in store [:bar] inc))
-  (<! (k/get-in store [:bar]))
-  (<! (k/dissoc store :bar))
+    (<! (k/assoc-in store [:bar] 42))
+    (<! (k/update-in store [:bar] inc))
+    (<! (k/get-in store [:bar]))
+    (<! (k/dissoc store :bar))
 
-  (<! (k/append store :error-log {:type :horrible}))
-  (<! (k/log store :error-log))
+    (<! (k/append store :error-log {:type :horrible}))
+    (<! (k/log store :error-log))
 
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (<! (k/bassoc store "banana" ba))))
+    (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+      (time (<! (k/bassoc store "banana" ba)))))
 #+END_SRC
 
 ** Supported Backends
