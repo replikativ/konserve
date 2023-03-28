@@ -10,7 +10,7 @@
 [[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
 
 
-[[https://whilo.github.io/articles/16/unified-storage-io][/Simple durability, made flexible./]]
+[[https://whilo.github.io/old/articles/16/unified-storage-io][Simple durability, made flexible.]]
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
 semantics to allow Clojuresque collection operations on associative key-value
@@ -120,7 +120,7 @@ each wrapped in a go-block.
 #+BEGIN_SRC clojure
   (ns test-db
     (:require [konserve.memory :refer [new-mem-store]]
-              [konserve.core :as k]))
+              [clojure.core.async :refer [go <!]]))
 
   (go (def my-db (<! (new-mem-store)))) ;; or (go (def my-db (<!
 #+END_SRC
@@ -131,24 +131,25 @@ the code.
   (ns test-db
     (:require [konserve.filestore :refer [connect-fs-store]]
               [konserve.core :as k]
-              [clojure.core.async :refer [<!]]))
+              [clojure.core.async :refer [go <!]]))
 
-  (def store (<! (connect-fs-store "/tmp/store")))
+  (go
+    (def store (<! (connect-fs-store "/tmp/store")))
 
-  (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-  (<! (k/get-in store ["foo"]))
-  (<! (k/exists? store "foo"))
+    (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
+    (<! (k/get-in store ["foo"]))
+    (<! (k/exists? store "foo"))
 
-  (<! (k/assoc-in store [:bar] 42))
-  (<! (k/update-in store [:bar] inc))
-  (<! (k/get-in store [:bar]))
-  (<! (k/dissoc store :bar))
+    (<! (k/assoc-in store [:bar] 42))
+    (<! (k/update-in store [:bar] inc))
+    (<! (k/get-in store [:bar]))
+    (<! (k/dissoc store :bar))
 
-  (<! (k/append store :error-log {:type :horrible}))
-  (<! (k/log store :error-log))
+    (<! (k/append store :error-log {:type :horrible}))
+    (<! (k/log store :error-log))
 
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (<! (k/bassoc store "banana" ba))))
+    (let [ba (byte-array (* 10 1024 1024) (byte 42))]
+      (time (<! (k/bassoc store "banana" ba)))))
 #+END_SRC
 
 ** Supported Backends
@@ -236,26 +237,70 @@ are deprecated now because of this.
 Supported backend implementations are:
 - [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
 - [[https://github.com/replikativ/konserve-s3][konserve-s3]]
+- [[https://github.com/replikativ/konserve-redis][konserve-redis]]
 
 Please let us know if you are interested in other backends or if you need help
 with implementing one.
 
 The following projects are incompatible with the latest konserve release, but
-describe the usage of the underlying store API and can be helpful to implement
-new backends for the underlying store:
+describe the usage of the underlying store API and could still be helpful to
+implement new backends for the underlying store:
 - LevelDB:
   [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
 - CouchDB:
   [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
-- Redis:
-  [[https://github.com/replikativ/konserve-carmine][konserve-carmine]].
 - Riak:
   [[https://github.com/replikativ/konserve-welle][konserve-welle]].
-- PostgreSQL:
-  [[https://github.com/retro/konserve-pg][konserve-pg]].
 - System component for internal backends:
   [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
 
+
+** Serialization formats
+   :PROPERTIES:
+   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
+   :END:
+
+Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
+=pr-str= version are supported and can be combined with different stores. Stores
+have a reasonable default setting. You can also extend the serialization
+protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
+records, if you need them.
+
+*** Tagged Literals
+    :PROPERTIES:
+    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
+    :END:
+
+You can read and write custom records according to
+[[https://github.com/replikativ/incognito][incognito]].
+
+** Compression and encryption
+:PROPERTIES:
+:CUSTOM_ID: h:98bf90fd-4778-49da-80d7-58f89f00aec5
+:END:
+
+Compression and encryption are supported by the default store implementation
+that is used by all current backends. They can be activated in the store
+configuration as follows:
+
+#+BEGIN_SRC clojure
+{:encryptor {:type :aes
+             :key "s3cr3t"}
+ :compressor {:type :lz4}}
+#+END_SRC
+
+LZ4 compression is currently only supported on the JVM. AES encryption is
+supported on both JVM and JS targets with the same cold storage format, i.e. the
+same store can be read and written from Clojure and ClojureScript runtimes. We
+use AES/CBC/PKCS{5/7}Padding with 256 bit and a different salt for each written
+value.
+
+** Backend implementation guide
+   :PROPERTIES:
+   :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
+   :END:
+
+   We provide a [[file:doc/backend.org][backend implementation guide]].
 
 ** Projects building on konserve
    :PROPERTIES:
@@ -279,32 +324,6 @@ outside usage even when the same keys are used. To support multiple
 konserve clients in the store the backend has to support locking and
 proper transactions on keys internally, which is the case for backends
 like CouchDB, Redis and Riak.
-
-** Serialization formats
-   :PROPERTIES:
-   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
-   :END:
-
-Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
-=pr-str= version are supported and can be combined with different stores. Stores
-have a reasonable default setting. You can also extend the serialization
-protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
-records, if you need them.
-
-*** Tagged Literals
-    :PROPERTIES:
-    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
-    :END:
-
-You can read and write custom records according to
-[[https://github.com/replikativ/incognito][incognito]].
-
-** Backend implementation guide
-   :PROPERTIES:
-   :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
-   :END:
-
-   We provide a [[file:doc/backend.org][backend implementation guide]].
 
 ** Todo
    :PROPERTIES:

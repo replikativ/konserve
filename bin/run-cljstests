@@ -8,12 +8,12 @@ echo "Running tests for node"
 clojure -M:run-cljs-tests
 # kaocha version:
 #[ -d "node_modules/ws" ] || npm install ws
-#clojure -M:test -m kaocha.runner unit-node
+#clojure -M:test:cljs -m kaocha.runner unit-node
 
 echo
 echo
 
 echo "Running tests for browser"
 # kaocha version:
-clojure -M:test -m kaocha.runner unit-browser
+clojure -M:test:cljs -m kaocha.runner unit-browser
 # olical version requires karma
