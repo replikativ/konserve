@@ -1,4 +1,4 @@
-(ns konserve.old-filestore ;; TODO: Do we still need this? 
+(ns konserve.old-filestore
   "Bare file-system implementation."
   (:require [konserve.serializers :as ser]
             [konserve.core :refer [go-locked]]
