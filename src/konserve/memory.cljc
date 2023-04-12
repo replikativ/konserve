@@ -75,7 +75,7 @@
                     (swap! state
                            (fn [old]
                              (update old key
-                                     (fn [[meta data]]
+                                     (fn [[meta _data]]
                                        [(meta-up-fn meta) {:input-stream input
                                                            :size         :unknown}]))))
                     nil))))

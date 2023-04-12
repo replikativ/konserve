@@ -1,7 +1,7 @@
 (ns konserve.serializers-test
   (:require-macros [cljs.core.async.macros :refer [go]])
-  (:require   [cljs.core.async :as async :refer [<! >!]]
-              [cljs.test :refer-macros [deftest is testing async use-fixtures]]
+  (:require   [cljs.core.async :as async :refer [<!]]
+              [cljs.test :refer-macros [deftest is async]]
               [fress.api :as fress]
               [konserve.core :as k]
               [konserve.serializers :refer [fressian-serializer]]
@@ -9,13 +9,13 @@
 
 (deftype MyType [field0 field1]
   IEquiv
-  (-equiv [this o]
+  (-equiv [_this o]
     (and (instance? MyType o)
          (= field0 (.-field0 o))
          (= field1 (.-field1 o)))))
 
 (def custom-read-handler
-  {"my-type" (fn [reader tag field-count]
+  {"my-type" (fn [reader _tag _field-count]
                (let [field0 (fress.api/read-object reader)
                      field1 (fress.api/read-object reader)]
                  (MyType. field0 field1)))})

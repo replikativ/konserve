@@ -4,7 +4,7 @@
   accessing the store, otherwise you should implement your own caching strategy."
   (:refer-clojure :exclude [assoc-in assoc exists? dissoc get get-in
                             keys update-in update])
-  (:require [konserve.protocols :refer [-exists? -get-in -assoc-in
+  (:require [konserve.protocols :refer [-get-in -assoc-in
                                         -update-in -dissoc]]
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
@@ -101,6 +101,7 @@
                     (swap! cache cache/miss key new-val))
                   [old-val new-val])))))
 
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
   "Updates a position described by key by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
@@ -123,7 +124,7 @@
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
-                      [old-val new-val :as res] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
+                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict (first key-vec))
                   (when had-key?
@@ -154,9 +155,11 @@
                   (<?- (-dissoc store key opts)))))))
 
 ;; alias core functions without caching for convenience
-
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def append core/append)
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def log core/log)
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (def reduce-log core/reduce-log)
 
 (def bassoc core/bassoc)

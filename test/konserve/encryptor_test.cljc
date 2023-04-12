@@ -1,8 +1,9 @@
 (ns konserve.encryptor-test
   (:require [clojure.test :refer [deftest]]
-            [clojure.core.async :refer [go <!]]
+            #?(:cljs [clojure.core.async :refer [go <!]])
             [#?(:clj konserve.filestore :cljs konserve.node-filestore) :refer [connect-fs-store delete-store]]
-            [konserve.compliance-test :refer [#?(:clj compliance-test) async-compliance-test]]))
+            [konserve.compliance-test :refer [#?(:clj compliance-test
+                                                 :cljs async-compliance-test)]]))
 
 (deftest encryptor-test
   (let [folder "/tmp/konserve-fs-encryptor-test"

@@ -12,9 +12,9 @@
 
 (defrecord UnsupportedLZ4Compressor [serializer]
   PStoreSerializer
-  (-deserialize [_ read-handlers bytes]
+  (-deserialize [_ _read-handlers bytes]
     (throw (ex-info "Unsupported LZ4 compressor." {:bytes bytes})))
-  (-serialize [_ bytes write-handlers val]
+  (-serialize [_ bytes _write-handlers _val]
     (throw (ex-info "Unsupported LZ4 compressor." {:bytes bytes}))))
 
 #?(:clj
@@ -41,8 +41,9 @@
 #?(:clj
    (defmacro native-image-build? []
      (try
-       (and (Class/forName "org.graalvm.nativeimage.ImageInfo")
-            #_(eval '(org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode)))
+       ;(and 
+       (Class/forName "org.graalvm.nativeimage.ImageInfo")
+        ;(eval '(org.graalvm.nativeimage.ImageInfo/inImageBuildtimeCode))) ;; TODO: when will this be uncommented?
        (catch Exception _
          false))))
 

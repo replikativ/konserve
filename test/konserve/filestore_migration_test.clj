@@ -47,9 +47,8 @@
           new-store (<!! (connect-fs-store "/tmp/konserve-fs-migration-test-v1-3" :detect-old-file-schema? true))
           _         (dotimes [x 10]
                       (<!! (bget new-store x
-                                 (fn [{:keys [input-stream]}]
-                                   (go
-                                     true)))))
+                                 (fn [_]
+                                   (go true)))))
 
           list-keys (<!! (keys new-store))]
       (are [x y] (= x y)

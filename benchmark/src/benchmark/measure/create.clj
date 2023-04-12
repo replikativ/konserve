@@ -2,7 +2,7 @@
   (:require [benchmark.common :refer [setup-store statistics timed plots benchmark fs-store-path]]
             [benchmark.plot :refer [plot bar]]
             [clojure.core.async :refer [<!!]]
-            [konserve.filestore :refer [new-fs-store]]
+            [konserve.filestore :refer [connect-fs-store]]
             [konserve.memory :refer [new-mem-store]]
             [oz.core :as oz]))
 
@@ -11,8 +11,8 @@
   (case store-type
     :memory (if sync? (timed (new-mem-store opts))
                       (timed (<!! (new-mem-store opts))))
-    :file (if sync? (timed (new-fs-store fs-store-path :opts opts))
-                    (timed (<!! (new-fs-store fs-store-path :opts opts))))) )
+    :file (if sync? (timed (connect-fs-store fs-store-path :opts opts))
+                    (timed (<!! (connect-fs-store fs-store-path :opts opts))))) )
 
 (defmethod benchmark :create [_function stores store-sizes iterations]
   (->> (for [store-type stores

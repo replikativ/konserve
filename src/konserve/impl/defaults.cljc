@@ -117,7 +117,7 @@
 
 (defn read-blob
   "Read meta, edn or binary from blob."
-  [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb config _store-key] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
@@ -196,11 +196,11 @@
    *default-sync-translation*
    (go-try-
     (loop [i 0]
-      (let [[l e :as res] (try
-                            [(<?- (-get-lock this env)) nil]
-                            (catch #?(:clj Exception :cljs js/Error) e
-                              (trace "Failed to acquire lock: " e)
-                              [nil e]))]
+      (let [[l e] (try
+                    [(<?- (-get-lock this env)) nil]
+                    (catch #?(:clj Exception :cljs js/Error) e
+                      (trace "Failed to acquire lock: " e)
+                      [nil e]))]
 
         (if-not (nil? l)
           l
