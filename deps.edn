@@ -9,7 +9,7 @@
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         com.taoensso/timbre {:mvn/version "6.0.1"}
         ;; cljs
-        com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.332"}
+        com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.339"}
         fress/fress {:mvn/version "0.4.0"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}}
  :aliases {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.60"}
