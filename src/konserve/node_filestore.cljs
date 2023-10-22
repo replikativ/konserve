@@ -10,7 +10,7 @@
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.serializers]
-            [konserve.utils :refer [with-promise]]
+            [konserve.utils :refer-macros [with-promise]]
             [taoensso.timbre :refer [info]]))
 
 (def stream (node/require "stream"))

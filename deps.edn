@@ -13,7 +13,7 @@
         fress/fress {:mvn/version "0.4.0"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}}
  :aliases {:cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.60"}
-                               thheller/shadow-cljs {:mvn/version "2.22.0"}
+                               thheller/shadow-cljs {:mvn/version "2.25.9"}
                                binaryage/devtools {:mvn/version "1.0.6"}}
                   :extra-paths ["test"]}
            :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
@@ -28,12 +28,12 @@
                                lambdaisland/kaocha-cljs {:mvn/version "1.4.130"}
                                org.clojure/test.check {:mvn/version "1.1.1"}}
                   :extra-paths ["test"]
-                  :main-opts ["-e" "(set! *warn-on-reflection* true)"]} 
+                  :main-opts ["-e" "(set! *warn-on-reflection* true)"]}
            :run-cljs-tests {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.0"}}
                             :extra-paths ["test"]
-                            :main-opts ["-m" "cljs-test-runner.main" 
-                                        "-o" "target/cljs" 
-                                        "--exclude" "browser" 
+                            :main-opts ["-m" "cljs-test-runner.main"
+                                        "-o" "target/cljs"
+                                        "--exclude" "browser"
                                         "--env" "node"]}
            :build  {:deps {io.github.clojure/tools.build          {:mvn/version "0.9.3"}
                            slipset/deps-deploy                    {:mvn/version "0.2.0"}

@@ -6,7 +6,7 @@
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.serializers]
-            [konserve.utils :refer [with-promise]]))
+            [konserve.utils :refer-macros [with-promise]]))
 
 (defn connect-to-idb [db-name]
   (let [req (js/window.indexedDB.open db-name 1)]

@@ -5,7 +5,8 @@
             [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
-            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
+            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
+                            #?@(:cljs [:refer-macros [async+sync]])]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
