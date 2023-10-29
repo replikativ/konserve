@@ -19,7 +19,7 @@
            :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                               org.clojure/tools.cli {:mvn/version "1.0.214"}}
-                 :extra-paths ["benchmark/src"]}
+                 :extra-paths ["benchmark/src" "test"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}
                        :extra-paths ["benchmark/src"]

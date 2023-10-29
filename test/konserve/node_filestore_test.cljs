@@ -1,10 +1,12 @@
 (ns konserve.node-filestore-test
-  (:require-macros [cljs.core.async.macros :refer [go]])
-  (:require [cljs.core.async :refer [<! put! chan timeout]]
+  (:require [clojure.core.async :refer [go promise-chan <! put! chan timeout]]
             [cljs-node-io.fs :as fs]
+            [cljs-node-io.core :as io]
             [cljs.test :refer-macros [deftest is testing async use-fixtures]]
             [fress.api :as fress]
             [konserve.core :as k]
+            [konserve.cache :as kc]
+            [konserve.cache-test-common :as ktc]
             [konserve.impl.defaults :as d]
             [konserve.node-filestore :as filestore]
             [konserve.protocols :as p]))
@@ -168,3 +170,34 @@
                    (is (= [42 43] (<! op-chan)))))
                (is (nil? (<! (.close fc)))))
              (done)))))
+
+#!============
+#! Cache tests
+
+(deftest cache-PEDNKeyValueStore-test
+  (filestore/delete-store "/tmp/cache-store")
+  (async done
+         (go
+          (let [store (<! (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? false}))]
+            (<! (ktc/test-cached-PEDNKeyValueStore (kc/ensure-cache store)))
+            (done)))))
+
+(deftest cache-PKeyIterable-test
+  (filestore/delete-store "/tmp/cache-store")
+  (async done
+         (go
+          (let [store (<! (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? false}))]
+            (<! (ktc/test-cached-PKeyIterable (kc/ensure-cache store)))
+            (done)))))
+
+(deftest cache-PBin-test
+  (filestore/delete-store "/tmp/cache-store")
+  (async done
+         (go
+          (let [store (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? true})
+                f (fn [{:keys [input-stream]} bytes-ch]
+                    (let [res (.read input-stream)]
+                      (.destroy input-stream)
+                      (put! bytes-ch res)))]
+            (<! (ktc/test-cached-PBin (kc/ensure-cache store) f))
+            (done)))))

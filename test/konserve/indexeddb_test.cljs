@@ -1,8 +1,9 @@
 (ns konserve.indexeddb-test
-  (:require-macros [cljs.core.async.macros :refer [go]])
-  (:require [cljs.core.async :refer [<!]]
+  (:require [clojure.core.async :refer [go <! put! take!]]
             [cljs.test :refer-macros [deftest is testing async]]
             [konserve.core :as k]
+            [konserve.cache :as kc]
+            [konserve.cache-test-common :as ktc]
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p])
   (:import [goog userAgent]))
@@ -88,3 +89,35 @@
              (.close backing)
              (<! (idb/delete-idb db-name))
              (done)))))
+
+#! Cache tests
+
+(deftest cache-PEDNKeyValueStore-test
+  (idb/delete-idb "cache-store")
+  (async done
+    (go
+     (let [store (<! (idb/connect-idb-store "cache-store" :opts {:sync? false}))]
+       (<! (ktc/test-cached-PEDNKeyValueStore (kc/ensure-cache store)))
+       (done)))))
+
+(deftest cache-PKeyIterable-test
+  (idb/delete-idb "cache-store")
+  (async done
+    (go
+     (let [store (<! (idb/connect-idb-store "cache-store" :opts {:sync? false}))]
+       (<! (ktc/test-cached-PKeyIterable (kc/ensure-cache store)))
+       (done)))))
+
+(deftest cache-PBin-test
+  (idb/delete-idb "cache-store")
+  (async done
+         (go
+          (let [store (<! (idb/connect-idb-store "cache-store" :opts {:sync? false}))
+                f (fn [{:keys [input-stream offset] :as locked} bytes-ch]
+                    (take! (idb/read-web-stream locked)
+                      (fn [err-or-bytes]
+                        (if (goog/isArrayLike err-or-bytes)
+                          (put! bytes-ch err-or-bytes)
+                          (throw err-or-bytes)))))]
+            (<! (ktc/test-cached-PBin (kc/ensure-cache store) f))
+            (done)))))

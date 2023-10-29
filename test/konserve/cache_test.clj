@@ -1,7 +1,8 @@
 (ns konserve.cache-test
   (:require [konserve.cache :as k]
+            [konserve.cache-test-common :as ktc]
             [konserve.filestore :as fstore]
-            [clojure.core.async :refer [<!! go] :as async]
+            [clojure.core.async :refer [<!! go put!] :as async]
             [clojure.test :refer [deftest testing is are]]))
 
 (deftest cache-test
@@ -64,4 +65,20 @@
         (doseq [to-delete [:baz :binbar :foolog]]
           (<!! (k/dissoc store to-delete opts)))))))
 
+;; TODO  move these to filestore tests?
+(deftest cache-PEDNKeyValueStore-test
+  (fstore/delete-store "/tmp/cache-store")
+  (let [store (fstore/connect-fs-store "/tmp/cache-store" :opts {:sync? true})]
+    (<!! (ktc/test-cached-PEDNKeyValueStore (k/ensure-cache store)))))
 
+(deftest cache-PKeyIterable-test
+  (fstore/delete-store "/tmp/cache-store")
+  (let [store (fstore/connect-fs-store "/tmp/cache-store" :opts {:sync? true})]
+    (<!! (ktc/test-cached-PKeyIterable (k/ensure-cache store)))))
+
+(deftest cache-PBin-test
+  (fstore/delete-store "/tmp/cache-store")
+  (let [store (fstore/connect-fs-store "/tmp/cache-store" :opts {:sync? true})
+        f (fn [{:keys [input-stream]} bytes-ch]
+            (put! bytes-ch input-stream))]
+    (<!! (ktc/test-cached-PBin (k/ensure-cache store) f))))

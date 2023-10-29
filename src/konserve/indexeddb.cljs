@@ -1,6 +1,5 @@
 (ns konserve.indexeddb
-  (:require-macros [cljs.core.async.macros :refer [go]])
-  (:require [cljs.core.async :refer [take! put! close!]]
+  (:require [clojure.core.async :refer [go take! put! close!]]
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
@@ -267,6 +266,39 @@
     (db-exists? db-name))
   (-sync-store [_this env] (when-not (:sync? env) (go))))
 
+(defn read-web-stream
+  "Accepts the bget locked callback arg and returns a promise-chan containing
+   a concatenated byte array with the first offset bytes dropped:
+   (k/bget store
+           :key
+           (fn [{:keys [offset input-stream] :as m}] <-- locked-cb
+             (-> (read-web-stream m)
+                 (handle-promise-chan))))"
+  [{:keys [input-stream offset]}]
+  (let [reader (.getReader input-stream)
+        chunks #js[]]
+    (with-promise out
+      (let [read-chunk (fn read-chunk []
+                         (.then (.read reader)
+                                (fn [result]
+                                  (let [done (.-done result)
+                                        value (.-value result)]
+                                    (if done
+                                      (if (== 1 (alength chunks))
+                                        (put! out (.slice (aget chunks 0) offset))
+                                        (let [total-length (reduce + (map count chunks))
+                                              final-array (js/Uint8Array. (inc total-length))
+                                              _i (atom 0)]
+                                          (doseq [chunk (array-seq chunks)]
+                                            (.set final-array chunk @_i)
+                                            (swap! _i + (alength chunk)))
+                                          (put! out (.slice final-array offset))))
+                                      (do
+                                        (.push chunks value)
+                                        (read-chunk)))))
+                                (fn [err] (put! out err))))]
+        (read-chunk)))))
+
 (defn connect-idb-store
   "Connect to a IndexedDB backed KV store with the given db name.
    Optional serializer, read-handlers, write-handlers.
@@ -288,15 +320,20 @@
    db and core.async gets into a weird state due to an unhandled error, you
    will be unable to delete the database until the vm is restarted
 
-   + As of November 2022 firefox does not support IDBFactory.databases() so
+   + As of November 2023 firefox does not support IDBFactory.databases() so
    expect list-dbs, db-exists?, & PBackingStore/-store-exists? to all throw. You
    must work around this by keeping track of each db name you intend to delete
    https://developer.mozilla.org/en-US/docs/Web/API/IDBFactory/databases#browser_compatibility
 
-   + PBackingBlob/-read-binary returns a webstream that is *not* queued to the
-   value offset in the same way that the filestore implementations are. Consumers
-   must discard the amount of bytes found in the :offset key of the locked-cb
-   arg map. See: https://developer.mozilla.org/en-US/docs/Web/API/Blob/stream"
+   + `konserve.core/bget`locked-cb arg is given a webstream that is *not* queued
+   to the value offset in the same way that the filestore implementations are.
+   See: https://developer.mozilla.org/en-US/docs/Web/API/Blob/stream
+     - consumers must discard the amount of bytes found in the :offset key of
+       the locked-cb arg map. These bytes are meta data for konserve and not
+       part of the value you are retrieving
+     - `konserve.indexeddb/read-web-stream` will accept the argument to the
+       locked-cb and return a promise-chan receiving err|bytes at the cost of
+       allocating a larger array for the chunks to be copied into"
   [db-name & {:as params}]
   (let [store-config (merge {:default-serializer :FressianSerializer
                              :compressor         konserve.compressor/null-compressor
