@@ -247,7 +247,9 @@
   (fn [{is :input-stream}]
     (let [tmp-file (io/file \"/tmp/my-private-copy\")]
       (io/copy is tmp-file)))
-  "
+
+  When called asynchronously (by default or w/ {:sync? false}), the locked-cb
+  must synchronously return a channel."
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]

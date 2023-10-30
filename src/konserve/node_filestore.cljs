@@ -65,10 +65,11 @@
       buf))
   (-read-binary [this meta-size locked-cb _env]
     (let [blob-size ^number (.-size (fs.fstatSync fd))
-          pos (+ meta-size storage-layout/header-size)
-          rstream (fs.createReadStream nil #js{:fd (.-fd this) :start pos})]
-      (.on rstream "readable"
-           #(locked-cb {:input-stream rstream :size blob-size}))))
+          offset (+ meta-size storage-layout/header-size)
+          value-len (- blob-size offset)
+          blob (js/Buffer. value-len)]
+      (iofs/read (.-fd this) blob offset value-len 0)
+      (locked-cb {:blob blob})))
   (-write-header [_this header _env]
     (let [buffer (js/Buffer.from header)
           bytes-written (iofs/write fd buffer {:position 0})]
@@ -195,17 +196,33 @@
 
 (defn- afread-binary ;=> ch<readable|err>
   [fd meta-size locked-cb _env]
-  (go
-    (let [[?err total-size] (<! (afsize fd))]
-      (or ?err
+  (with-promise out
+    (take! (afsize fd)
+      (fn [[?err total-size]]
+        (if (some? ?err)
+          (put! out ?err)
           (try
             (let [opts #js{:fd fd
                            :encoding ""
-                           :start (+ meta-size storage-layout/header-size)}
+                           :start (+ meta-size storage-layout/header-size)
+                           :autoClose false}
+                  _readable-fired? (atom false)
                   rstream (fs.createReadStream nil opts)]
               (.on rstream "readable"
-                   #(locked-cb {:input-stream rstream :size total-size})))
-            (catch js/Error e e))))))
+                   (fn []
+                     (when-not @_readable-fired?
+                       (reset! _readable-fired? true)
+                       (let [ret (locked-cb {:input-stream rstream :size total-size})]
+                         (take! ret (fn [res] (put! out res)))))))
+              (.on rstream "close"
+                   (fn [& args]
+                     (println "CLOSE" args)))
+              (.on rstream "error"
+                   (fn [err]
+                     (put! out (ex-info "error reading from stream" {:cause err}))))
+              )
+            (catch js/Error err
+              (put! out (ex-info "error creating readstream" {:cause err})))))))))
 
 (defn- afwrite-binary ;  => ch<?err>
   [fd meta-size blob _env]

@@ -17,6 +17,6 @@
   ; http://localhost:8021/
   {:target    :browser-test
    :test-dir "out/browser-tests"
-   :ns-regexp "konserve.indexeddb-test" ;; TODO add in-mem for other tests
+   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
    :compiler-options {:infer-externs true}
    :autorun   true}}}

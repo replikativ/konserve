@@ -1,15 +1,15 @@
 (ns konserve.node-filestore-test
-  (:require [clojure.core.async :refer [go promise-chan <! put! chan timeout]]
+  (:require [clojure.core.async :refer [go promise-chan <! put! chan timeout to-chan!]]
             [cljs-node-io.fs :as fs]
             [cljs-node-io.core :as io]
             [cljs.test :refer-macros [deftest is testing async use-fixtures]]
             [fress.api :as fress]
             [konserve.core :as k]
-            [konserve.cache :as kc]
-            [konserve.cache-test-common :as ktc]
             [konserve.impl.defaults :as d]
-            [konserve.node-filestore :as filestore]
-            [konserve.protocols :as p]))
+            [konserve.node-filestore :as filestore :refer [connect-fs-store]]
+            [konserve.protocols :as p]
+            [konserve.tests.cache :as ct]
+            [konserve.tests.gc :as gct]))
 
 (def store-path "/tmp/konserve-fs-nodejs-test")
 
@@ -17,7 +17,7 @@
 
 (deftest PEDNKeyValueStore-sync-test
   (let [opts {:sync? true}
-        store (filestore/connect-fs-store store-path :opts opts)]
+        store (connect-fs-store store-path :opts opts)]
     (and
      (is (false? (p/-exists? store :bar opts)))
      (is (= :not-found (p/-get-in store [:bar] :not-found opts)))
@@ -39,9 +39,9 @@
 
 (deftest existing-store-sync-test
   (let [opts {:sync? true}
-        store (filestore/connect-fs-store store-path :opts opts)]
+        store (connect-fs-store store-path :opts opts)]
     (is (= [nil {:a 42 :b "a string"}] (p/-assoc-in store [:my-db] identity {:a 42 :b "a string"} opts)))
-    (let [store' (filestore/connect-fs-store store-path :opts opts)]
+    (let [store' (connect-fs-store store-path :opts opts)]
       (is (= [{:a 42 :b "a string"} {:a 42 :b "a string" :c 'sym}]
              (p/-update-in store' [:my-db] identity (fn [m] (assoc m :c 'sym)) opts))))))
 
@@ -49,9 +49,9 @@
   (async done
          (go
            (let [opts {:sync? false}
-                 store (<! (filestore/connect-fs-store store-path :opts opts))]
+                 store (<! (connect-fs-store store-path :opts opts))]
              (is (= [nil {:a 42 :b "a string"}] (<! (p/-assoc-in store [:my-db] identity {:a 42 :b "a string"} opts))))
-             (let [store' (<! (filestore/connect-fs-store store-path :opts opts))]
+             (let [store' (<! (connect-fs-store store-path :opts opts))]
                (is (= [{:a 42 :b "a string"} {:a 42 :b "a string" :c 'sym}]
                       (<! (p/-update-in store' [:my-db] identity (fn [m] (assoc m :c 'sym)) opts))))
                (done))))))
@@ -60,7 +60,7 @@
   (async done
          (go
            (let [opts {:sync? false}
-                 store (<! (filestore/connect-fs-store store-path :opts opts))]
+                 store (<! (connect-fs-store store-path :opts opts))]
              (is (false? (<! (p/-exists? store :bar opts))))
              (is (= :not-found (<! (p/-get-in store [:bar] :not-found opts))))
              (is (= [nil 42] (<! (p/-assoc-in store [:bar] identity 42 opts))))
@@ -80,26 +80,23 @@
              (is (false? (<! (p/-exists? store :bar opts))))
              (done)))))
 
-; TODO what are bget semantics (stream & chan behaviors) when called on a deleted store
 (deftest PBinaryKeyValueStore-async-test
   (async done
          (let [opts {:sync? false}
                data [:this/is 'some/fressian "data 😀😀😀" (js/Date.) #{true false nil}]
                bytes (fress/write data)
-               test-data (chan)
                locked-cb (fn [{readable :input-stream}]
-                           (put! test-data (fress/read (.read readable)))
-                           (.destroy readable))]
+                           (to-chan! [(fress/read (.read readable))]))]
            (go
-             (let [store (<! (filestore/connect-fs-store store-path :opts opts))]
-               (is (true? (<! (p/-bassoc store :key identity bytes opts))))
-               (<! (p/-bget store :key locked-cb opts))
-               (is (= data (<! test-data)))
+             (let [store (<! (connect-fs-store store-path :opts opts))]
+               (and
+                (is (true? (<! (p/-bassoc store :key identity bytes opts))))
+                (is (= data (<! (p/-bget store :key locked-cb opts)))))
                (done))))))
 
 (deftest PKeyIterable-sync-test
   (let [opts {:sync? true}
-        store (filestore/connect-fs-store store-path :opts opts)]
+        store (connect-fs-store store-path :opts opts)]
     (is (= #{} (k/keys store opts)))
     (is (= [nil 42] (k/assoc-in store [:value-blob] 42 opts)))
     (is (true? (k/bassoc store :bin-blob #js[255 255 255] opts)))
@@ -110,7 +107,7 @@
   (async done
          (go
            (let [opts {:sync? false}
-                 store (<! (filestore/connect-fs-store store-path :opts opts))]
+                 store (<! (connect-fs-store store-path :opts opts))]
              (is (= #{} (<! (k/keys store opts))))
              (is (= [nil 42] (<! (k/assoc-in store [:value-blob] 42 opts))))
              (is (true? (<! (k/bassoc store :bin-blob #js[255 255 255] opts))))
@@ -121,7 +118,7 @@
 
 (deftest append-store-sync-test
   (let [opts {:sync? true}
-        store (filestore/connect-fs-store store-path :opts opts)]
+        store (connect-fs-store store-path :opts opts)]
     (k/append store :foolog {:bar 42} opts)
     (k/append store :foolog {:bar 43} opts)
     (is (= '({:bar 42} {:bar 43}) (k/log store :foolog opts)))
@@ -135,7 +132,7 @@
   (async done
          (go
            (let [opts {:sync? false}
-                 store (<! (filestore/connect-fs-store store-path :opts opts))]
+                 store (<! (connect-fs-store store-path :opts opts))]
              (is (uuid? (second (<! (k/append store :foolog {:bar 42} opts)))))
              (is (uuid? (second (<! (k/append store :foolog {:bar 43} opts)))))
              (is (= '({:bar 42} {:bar 43}) (<! (k/log store :foolog opts))))
@@ -153,7 +150,7 @@
   (async done
          (go
            (let [opts {:sync? false}
-                 store (<! (filestore/connect-fs-store store-path :opts opts))
+                 store (<! (connect-fs-store store-path :opts opts))
                  key :key
                  key-file-path (path.join store-path (d/key->store-key key))]
              (testing "no lock, writes ok"
@@ -178,26 +175,35 @@
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (<! (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? false}))]
-            (<! (ktc/test-cached-PEDNKeyValueStore (kc/ensure-cache store)))
+          (let [store (<! (connect-fs-store "/tmp/cache-store"))]
+            (<! (ct/test-cached-PEDNKeyValueStore-async store))
             (done)))))
 
 (deftest cache-PKeyIterable-test
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (<! (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? false}))]
-            (<! (ktc/test-cached-PKeyIterable (kc/ensure-cache store)))
+          (let [store (<! (connect-fs-store "/tmp/cache-store"))]
+            (<! (ct/test-cached-PKeyIterable-async store))
             (done)))))
 
 (deftest cache-PBin-test
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (filestore/connect-fs-store "/tmp/cache-store" :opts {:sync? true})
-                f (fn [{:keys [input-stream]} bytes-ch]
-                    (let [res (.read input-stream)]
-                      (.destroy input-stream)
-                      (put! bytes-ch res)))]
-            (<! (ktc/test-cached-PBin (kc/ensure-cache store) f))
+          (let [store (<! (connect-fs-store "/tmp/cache-store"))
+                f (fn [{:keys [input-stream]}]
+                    (to-chan! [(.read input-stream)]))]
+            (<! (ct/test-cached-PBin-async store f))
+            (done)))))
+
+#!============
+#! GC tests
+
+(deftest async-gc-test
+  (filestore/delete-store "/tmp/gc-store")
+  (async done
+         (go
+          (let [store (<! (connect-fs-store "/tmp/gc-store"))]
+            (<! (gct/test-gc-async store))
             (done)))))

@@ -134,11 +134,11 @@
                (put! out (ex-info "error reading blob from objectStore"
                                   {:cause res
                                    :caller 'konserve.indexeddb/read-binary}))
-               (do
+               (take!
                  (locked-cb {:input-stream (.stream res)
                              :size (.-size res)
                              :offset (+ meta-size storage-layout/header-size)})
-                 (close! out)))))))
+                 #(put! out %)))))))
 
 (defrecord ^{:doc "buf is cached data that has been read from the db,
                    & {header metadata value} are bin data to be written.
@@ -269,11 +269,7 @@
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing
    a concatenated byte array with the first offset bytes dropped:
-   (k/bget store
-           :key
-           (fn [{:keys [offset input-stream] :as m}] <-- locked-cb
-             (-> (read-web-stream m)
-                 (handle-promise-chan))))"
+   (k/bget store :key (read-web-stream m))"
   [{:keys [input-stream offset]}]
   (let [reader (.getReader input-stream)
         chunks #js[]]
@@ -325,7 +321,7 @@
    must work around this by keeping track of each db name you intend to delete
    https://developer.mozilla.org/en-US/docs/Web/API/IDBFactory/databases#browser_compatibility
 
-   + `konserve.core/bget`locked-cb arg is given a webstream that is *not* queued
+   + `konserve.core/bget` locked-cb arg is given a webstream that is *not* queued
    to the value offset in the same way that the filestore implementations are.
    See: https://developer.mozilla.org/en-US/docs/Web/API/Blob/stream
      - consumers must discard the amount of bytes found in the :offset key of

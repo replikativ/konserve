@@ -1,13 +1,17 @@
-(ns konserve.cache-test-common
+(ns konserve.tests.cache
   (:require [clojure.core.async :refer [go <! promise-chan put! take!]]
             [clojure.test :refer [deftest is]]
             [fress.api :as fress]
             [konserve.cache :as kc]
             #?(:cljs [fress.util :refer [byte-array]])))
 
-(defn test-cached-PEDNKeyValueStore [store]
+;; TODO add testing statements "Test the cache API."
+;; TODO sync & async variants
+
+(defn test-cached-PEDNKeyValueStore-async [store]
   (go
-   (let [opts {:sync? false}]
+   (let [store (kc/ensure-cache store)
+         opts {:sync? false}]
      (and
       (is (nil? (<! (kc/get store :foo nil opts))))
       (is (false? (<! (kc/exists? store :foo opts))))
@@ -30,9 +34,10 @@
       (is (true? (<! (kc/dissoc store :foo opts))))
       (is (nil? (<! (kc/get-in store [:foo] nil opts))))))))
 
-(defn test-cached-PKeyIterable [store]
+(defn test-cached-PKeyIterable-async [store]
   (go
-   (let [opts {:sync? false}]
+   (let [store (kc/ensure-cache store)
+         opts {:sync? false}]
      (and
       (is (= #{} (<! (kc/keys store opts))))
       (is (= [nil 42] (<! (kc/assoc-in store [:value-blob] 42 opts))))
@@ -43,24 +48,18 @@
          (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
                 (set (map #(dissoc % :last-write) store-keys))))))))))
 
-(defn test-cached-PBin [store locked->promise]
-  (let [opts {:sync? false}
+(defn test-cached-PBin-async [store locked-cb]
+  (let [store (kc/ensure-cache store)
         data [:this/is
               'some/fressian
               "data 😀😀😀"
               #?(:cljs (js/Date.) :clj (java.util.Date.))
               #{true false nil}]
         bytes #?(:cljs (fress/write data)
-                 :clj (.array (fress/write data))) ;; TODO add HeapByteArrayBuffer to nio protocols
-        bytes-ch (promise-chan)
-        test-ch (promise-chan)
-        locked-cb (fn [locked]
-                    (locked->promise locked bytes-ch)
-                    (take! bytes-ch
-                      (fn [bytes]
-                        (put! test-ch (fress/read bytes)))))]
+                 ;; TODO add HeapByteArrayBuffer to nio protocols
+                 :clj (.array (fress/write data)))
+        bytes-ch (promise-chan)]
     (go
      (and
       (is (true? (<! (kc/bassoc store :key bytes {:sync? false}))))
-      (<! (kc/bget store :key locked-cb opts))
-      (is (= data (<! test-ch)))))))
+      (is (= data (fress/read (<! (kc/bget store :key locked-cb {:sync? false})))))))))
