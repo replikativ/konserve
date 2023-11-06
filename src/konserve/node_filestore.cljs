@@ -214,13 +214,9 @@
                        (reset! _readable-fired? true)
                        (let [ret (locked-cb {:input-stream rstream :size total-size})]
                          (take! ret (fn [res] (put! out res)))))))
-              (.on rstream "close"
-                   (fn [& args]
-                     (println "CLOSE" args)))
               (.on rstream "error"
                    (fn [err]
-                     (put! out (ex-info "error reading from stream" {:cause err}))))
-              )
+                     (put! out (ex-info "error reading from stream" {:cause err})))))
             (catch js/Error err
               (put! out (ex-info "error creating readstream" {:cause err})))))))))
 
@@ -367,6 +363,7 @@
     (.delete f)
     (try
       (sync-base parent-base)
+      nil
       (catch js/Error e
         e))))
 
@@ -515,19 +512,24 @@
       (sync-base-async base))))
 
 (defn detect-old-file-schema [& _args] (throw (js/Error "TODO detect-old-file-schema")))
-;; get-file-channel
-;; migration
 
 (defn connect-fs-store
   "Create Filestore in given path.
-  Optional serializer, read-handlers, write-handlers, buffer-size and config (for fsync) can be changed.
-  Defaults are
-  {:base           path
-   :serializer     fressian-serializer
-   :read-handlers  empty
-   :write-handlers empty
-   :buffer-size    1 MB
-   :config         config} "
+   Optional serializer, read-handlers, write-handlers, buffer-size and config (for fsync) can be changed.
+
+   + the `k/bget` callback gets different args depending on `:sync?`
+     - async bget callbacks recieve `{:input-stream <fs.readStream>}` akin to
+       the same call on the JVM filestore impl. These streams are opened to the
+       same fd that konserve is managing for the blob, so users should not call
+       destroy() or it will raise an error
+     - sync bget callbacks are called with `{:blob <js/Buffer>}`
+
+   {:base           path
+    :serializer     fressian-serializer
+    :read-handlers  empty
+    :write-handlers empty
+    :buffer-size    1 MB
+    :config         config} "
   [path & {:keys [detect-old-file-schema? ephemeral? config]
            :or {detect-old-file-schema? false
                 ephemeral? (fn [pathstr]

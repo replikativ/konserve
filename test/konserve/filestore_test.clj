@@ -6,7 +6,8 @@
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.cache :as ct]
-            [konserve.tests.gc :as gct]))
+            [konserve.tests.gc :as gct]
+            [konserve.tests.serializers :as st]))
 
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"
@@ -119,3 +120,18 @@
   (delete-store "/tmp/gc-store")
   (let [store (connect-fs-store "/tmp/gc-store" :opts {:sync? true})]
     (<!! (gct/test-gc-async store))))
+
+#!==================
+#! Serializers tests
+
+(deftest fressian-serializer-test
+  (<!! (st/test-fressian-serializers-async "/tmp/serializers-test"
+                                           connect-fs-store
+                                           (fn [p] (go (delete-store p)))
+                                           (fn [{:keys [input-stream]}]
+                                             (async/to-chan! [input-stream])))))
+
+(deftest CBOR-serializer-test
+  (st/cbor-serializer-test "/tmp/konserve-fs-cbor-test"
+                           connect-fs-store
+                           (fn [p] (go (delete-store p)))))

@@ -268,8 +268,8 @@
 
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing
-   a concatenated byte array with the first offset bytes dropped:
-   (k/bget store :key (read-web-stream m))"
+   a concatenated byte array with the first offset bytes dropped
+   `(k/bget store :key read-web-stream)`"
   [{:keys [input-stream offset]}]
   (let [reader (.getReader input-stream)
         chunks #js[]]
@@ -277,9 +277,9 @@
       (let [read-chunk (fn read-chunk []
                          (.then (.read reader)
                                 (fn [result]
-                                  (let [done (.-done result)
-                                        value (.-value result)]
-                                    (if done
+                                  (if (.-done result)
+                                    (do
+                                      (some->> (.-value result) (.push chunks))
                                       (if (== 1 (alength chunks))
                                         (put! out (.slice (aget chunks 0) offset))
                                         (let [total-length (reduce + (map count chunks))
@@ -288,10 +288,10 @@
                                           (doseq [chunk (array-seq chunks)]
                                             (.set final-array chunk @_i)
                                             (swap! _i + (alength chunk)))
-                                          (put! out (.slice final-array offset))))
-                                      (do
-                                        (.push chunks value)
-                                        (read-chunk)))))
+                                          (put! out (.slice final-array offset)))))
+                                    (do
+                                      (.push chunks (.-value result))
+                                      (read-chunk))))
                                 (fn [err] (put! out err))))]
         (read-chunk)))))
 

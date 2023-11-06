@@ -9,7 +9,8 @@
             [konserve.node-filestore :as filestore :refer [connect-fs-store]]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
-            [konserve.tests.gc :as gct]))
+            [konserve.tests.gc :as gct]
+            [konserve.tests.serializers :as st]))
 
 (def store-path "/tmp/konserve-fs-nodejs-test")
 
@@ -207,3 +208,17 @@
           (let [store (<! (connect-fs-store "/tmp/gc-store"))]
             (<! (gct/test-gc-async store))
             (done)))))
+
+#!==================
+#! Serializers tests
+
+(deftest fressian-serializer-test
+  (async done
+   (go
+    (<! (st/test-fressian-serializers-async "/tmp/serializers-test"
+                                            connect-fs-store
+                                            (fn [store-name]
+                                              (go (filestore/delete-store store-name)))
+                                            (fn [{:keys [input-stream]}]
+                                              (to-chan! [(.read input-stream)]))))
+    (done))))

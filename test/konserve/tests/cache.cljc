@@ -5,9 +5,6 @@
             [konserve.cache :as kc]
             #?(:cljs [fress.util :refer [byte-array]])))
 
-;; TODO add testing statements "Test the cache API."
-;; TODO sync & async variants
-
 (defn test-cached-PEDNKeyValueStore-async [store]
   (go
    (let [store (kc/ensure-cache store)
@@ -56,7 +53,6 @@
               #?(:cljs (js/Date.) :clj (java.util.Date.))
               #{true false nil}]
         bytes #?(:cljs (fress/write data)
-                 ;; TODO add HeapByteArrayBuffer to nio protocols
                  :clj (.array (fress/write data)))
         bytes-ch (promise-chan)]
     (go
