@@ -9,6 +9,7 @@
             [konserve.node-filestore :as filestore :refer [connect-fs-store]]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
+            [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
             [konserve.tests.serializers :as st]))
 
@@ -221,4 +222,16 @@
                                               (go (filestore/delete-store store-name)))
                                             (fn [{:keys [input-stream]}]
                                               (to-chan! [(.read input-stream)]))))
+    (done))))
+
+#!==================
+#! Encryptor tests
+
+(deftest encryptor-async-test
+  (async done
+   (go
+    (<! (et/async-encryptor-test "/tmp/encryptor-test"
+                                 connect-fs-store
+                                 (fn [store-name]
+                                   (go (filestore/delete-store store-name)))))
     (done))))

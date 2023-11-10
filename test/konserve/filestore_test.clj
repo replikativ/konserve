@@ -6,6 +6,7 @@
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.cache :as ct]
+            [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
             [konserve.tests.serializers :as st]))
 
@@ -135,3 +136,16 @@
   (st/cbor-serializer-test "/tmp/konserve-fs-cbor-test"
                            connect-fs-store
                            (fn [p] (go (delete-store p)))))
+
+#!==================
+#! Encryptor tests
+
+(deftest encryptor-sync-test
+  (et/sync-encryptor-test "/tmp/encryptor-test"
+                          connect-fs-store
+                          delete-store))
+
+(deftest encryptor-async-test
+  (<!! (et/async-encryptor-test "/tmp/encryptor-test"
+                                connect-fs-store
+                                (fn [p] (go (delete-store p))))))

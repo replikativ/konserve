@@ -6,6 +6,7 @@
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
+            [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
             [konserve.tests.serializers :as st])
   (:import [goog userAgent]))
@@ -149,3 +150,14 @@
                                              idb/delete-idb
                                              idb/read-web-stream))
      (done))))
+
+#!==================
+#! Encryptor tests
+
+(deftest encryptor-async-test
+  (async done
+         (go
+          (<! (et/async-encryptor-test "encryptor-test"
+                                       idb/connect-idb-store
+                                       idb/delete-idb))
+          (done))))
