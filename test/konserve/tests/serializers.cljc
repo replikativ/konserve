@@ -123,12 +123,13 @@
                  (is (= [nil my-type] (<! (k/assoc-in store [:foo] my-type))))
                  (is (= my-type (<! (k/get-in store [:foo]))))
                  (testing "custom write-handler takes precedent over incognito"
-                   (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
-                   (let [bytes (<! (k/bget store :foo locked-cb))
-                         o (fress/read bytes)]
-                     (and (is (fress/tagged-object? o))
-                          (is (= "my-record" (fress/tag o)))))
-                   (is (= my-record (<! (k/get-in store [:foo]))))))]
+                   (and
+                    (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
+                    (let [bytes (<! (k/bget store :foo locked-cb))
+                          o (fress/read bytes)]
+                      (and (is (fress/tagged-object? o))
+                           (is (= "my-record" (fress/tag o)))))
+                    (is (= my-record (<! (k/get-in store [:foo])))))))]
         #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
         (assert (nil? (<! (delete-store-async store-name))))
         res))
