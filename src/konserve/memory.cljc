@@ -43,8 +43,8 @@
                                                 (if rkey
                                                   (update-in data rkey up-fn)
                                                   (up-fn data))])))))
-                          [old-meta old-val] (get @state fkey)
-                          {[new-meta new-val] fkey} (update-atom state)]
+                          [_ old-val] (get @state fkey)
+                          {[_ new-val] fkey} (update-atom state)]
                       (if overwrite?
                         [nil new-val]
                         [old-val new-val]))))))

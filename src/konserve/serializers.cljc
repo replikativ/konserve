@@ -32,17 +32,7 @@
              (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-   (let [[irecord-handler
-          incognito-handlers] ((juxt #(get % "irecord")
-                                     #(dissoc % "irecord"))
-                               (incognito-read-handlers read-handlers))
-          handlers #?(:cljs (merge (assoc custom-read-handlers
-                                          "irecord" (fn [rdr tag]
-                                                      (let [{:keys [tag value] :as itl} (irecord-handler rdr tag)]
-                                                        (if-let [user-handler (get @read-handlers tag)]
-                                                          (user-handler value)
-                                                          itl))))
-                                   incognito-handlers)
+    (let [handlers #?(:cljs (merge custom-read-handlers (incognito-read-handlers read-handlers))
                       :clj (-> (merge fress/clojure-read-handlers
                                       custom-read-handlers
                                       (incognito-read-handlers read-handlers))

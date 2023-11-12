@@ -31,7 +31,7 @@
 (defn wait [lock]
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (long (rand-int 20))))
-     :cljs (when (nil? (cljs.core.async/poll! lock))
+     :cljs (when (nil? (poll! lock))
              (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
