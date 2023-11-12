@@ -6,17 +6,20 @@
   {:target :browser
    :output-dir "public/js"
    :modules {:main {:entries [konserve.core]}}}
-  :node-tests ; shadow-cljs compile node-tests && node out/node-tests.js
+
+  :node-tests ; shadow-cljs release node-tests && node out/node-tests.js
   {:target    :node-test
    :output-to "out/node-tests.js"
    :ns-regexp "^(?!konserve.indexeddb-test)"
-   :compiler-options {:infer-externs true}
-   :autorun   true}
+   :compiler-options {:infer-externs true
+                      :externs ["cljs_node_io/externs.js"]
+                      :closure-warnings   {:useless-code :off}}}
+
   :browser-tests
   ; shadow-cljs watch :browser-tests
   ; http://localhost:8021/
-  {:target    :browser-test
+  {:target :browser-test
    :test-dir "out/browser-tests"
    :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
-   :compiler-options {:infer-externs true}
-   :autorun   true}}}
+   :compiler-options {:infer-externs true
+                      :closure-warnings {:useless-code :off}}}}}

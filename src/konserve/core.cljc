@@ -1,6 +1,6 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [clojure.core.async :refer [chan put! #?(:clj poll!)]]
+  (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
             [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
@@ -28,10 +28,11 @@
                                              (clojure.core/assoc old key c))))
                           key))))
 
-(defn wait [#?(:clj lock :cljs _)]
+(defn wait [lock]
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (long (rand-int 20))))
-     :cljs (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")))
+     :cljs (when (nil? (cljs.core.async/poll! lock))
+             (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]

@@ -95,6 +95,27 @@
                   (fress/write-object writer (.-a o))
                   (fress/write-object writer (.-b o))))}})
 
+(defn- test-fressian-incognito-record-recovery
+  [store-name connect-store delete-store-async locked-cb]
+  (go
+   (testing ":read-handlers arg to connect-store let's us recover records"
+     (let [read-handlers {'konserve.tests.serializers.MyRecord map->MyRecord}
+           _(<! (delete-store-async store-name))
+           store (<! (connect-store store-name
+                                    :read-handlers (atom read-handlers)))
+           my-record (map->MyRecord {:a 0 :b 1})]
+       (and
+        (is (nil? (<! (k/get-in store [:foo]))))
+        (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
+        (testing "written as 'irecord'"
+          (let [bytes (<! (k/bget store :foo locked-cb))
+                o (fress/read bytes)]
+            (and (is (fress/tagged-object? o))
+                 (is (= "irecord" (fress/tag o))))))
+        (is (= my-record (<! (k/get-in store [:foo])))))
+       #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
+       (<! (delete-store-async store-name))))))
+
 (defn test-fressian-serializers-async
   "Test roundtripping custom types and records using the :FressianSerializer.
    `locked-cb` is used to verify fressian bytes, needs to simply pass through
@@ -131,28 +152,27 @@
                            (is (= "my-record" (fress/tag o)))))
                     (is (= my-record (<! (k/get-in store [:foo])))))))]
         #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-        (assert (nil? (<! (delete-store-async store-name))))
         res))
     (testing "records are intercepted by incognito by default"
-      (let [store (<! (connect-store store-name))
+      (let [_(<! (delete-store-async store-name))
+            store (<! (connect-store store-name))
             my-record (map->MyRecord {:a 0 :b 1})
             res (and
                  (is (= [nil my-record] (<! (k/assoc-in store [:bar] my-record))))
+                 (testing "written as 'irecord'"
+                   (let [bytes (<! (k/bget store :bar locked-cb))
+                         o (fress/read bytes)]
+                     (and (is (fress/tagged-object? o))
+                          (is (= "irecord" (fress/tag o))))))
                  (is (instance? IncognitoTaggedLiteral (<! (k/get-in store [:bar])))))]
         #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-        (assert (nil? (<! (delete-store-async store-name))))
         res))
-    (testing ":read-handlers arg to connect-store let's us recover records"
-        (let [read-handlers {'konserve.tests.serializers.MyRecord map->MyRecord}
-              store (<! (connect-store store-name
-                                       :read-handlers (atom read-handlers)))
-              my-record (map->MyRecord {:a 0 :b 1})]
-          (and
-           (is (nil? (<! (k/get-in store [:foo]))))
-           (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
-           (is (= my-record (<! (k/get-in store [:foo])))))
-          #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-          (assert (nil? (<! (delete-store-async store-name)))))))))
+    #?(:clj (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb))
+       :cljs (when goog.DEBUG
+               ;; incognito uses reflection to get record name, will not work
+               ;; at rt w/ cljs :advanced. Need string tag statically available
+               ;; see https://github.com/pkpkpk/fress#records
+               (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb)))))))
 
 #?(:clj
    (defn cbor-serializer-test [store-name connect-store delete-store-async]

@@ -5,9 +5,7 @@
                                               async-compliance-test]]
             [konserve.memory :refer [new-mem-store map->MemoryStore]]
             [konserve.tests.cache :as ct]
-            [konserve.tests.encryptor :as et]
-            [konserve.tests.gc :as gct]
-            [konserve.tests.serializers :as st]))
+            [konserve.tests.gc :as gct]))
 
 (defn connect-mem-store
   [init-atom & {:as params opts :opts}]

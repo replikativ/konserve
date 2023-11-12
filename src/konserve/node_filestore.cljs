@@ -40,6 +40,16 @@
     (set! (.-locked this) lock)
     lock))
 
+(defn verify-read-size
+  [expected actual]
+  (when-not (== expected actual)
+    (throw (js/Error. (str "Expected " expected " bytes, but read " actual)))))
+
+(defn verify-write-size
+  [expected actual]
+  (when-not (== expected actual)
+    (throw (js/Error. (str "Expected to write " expected " bytes, but wrote " actual)))))
+
 (deftype FileChannel [path fd open? locked]
   storage-layout/PBackingBlob
   (-sync [this _env] (.force this true))
@@ -48,12 +58,12 @@
   (-read-header [_this _env]
     (let [buf (js/Buffer.alloc storage-layout/header-size)
           bytes-read (iofs/read fd buf {:position 0})]
-      (assert (== bytes-read storage-layout/header-size))
+      (verify-read-size storage-layout/header-size bytes-read)
       buf))
   (-read-meta [_this meta-size _env]
     (let [buf (js/Buffer.alloc meta-size)
           bytes-read (iofs/read fd buf {:position storage-layout/header-size})]
-      (assert (== bytes-read meta-size))
+      (verify-read-size meta-size bytes-read)
       buf))
   (-read-value [_this meta-size _env]
     (let [blob-size ^number (.-size (fs.fstatSync fd))
@@ -61,34 +71,35 @@
           buf (js/Buffer.alloc value-size)
           pos (+ meta-size storage-layout/header-size)
           bytes-read (iofs/read fd buf {:position pos :length (alength buf)})]
-      (assert (== bytes-read value-size))
+      (verify-read-size value-size bytes-read)
       buf))
   (-read-binary [this meta-size locked-cb _env]
     (let [blob-size ^number (.-size (fs.fstatSync fd))
           offset (+ meta-size storage-layout/header-size)
           value-len (- blob-size offset)
-          blob (js/Buffer. value-len)]
-      (iofs/read (.-fd this) blob offset value-len 0)
+          blob (js/Buffer. value-len)
+          bytes-read (iofs/read (.-fd this) blob offset value-len 0)]
+      (verify-read-size value-len bytes-read)
       (locked-cb {:blob blob})))
   (-write-header [_this header _env]
     (let [buffer (js/Buffer.from header)
           bytes-written (iofs/write fd buffer {:position 0})]
-      (assert (== bytes-written (alength header)))))
+      (verify-write-size (alength header) bytes-written)))
   (-write-meta [_this meta-arr _env]
     (let [buffer (js/Buffer.from meta-arr)
           pos storage-layout/header-size
           bytes-written (iofs/write fd buffer {:position pos})]
-      (assert (== bytes-written (alength buffer)))))
+      (verify-write-size (alength buffer) bytes-written)))
   (-write-value [_this value-arr meta-size _env]
     (let [buffer (js/Buffer.from value-arr)
           pos (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
-      (assert (== bytes-written (alength buffer)))))
+      (verify-write-size (alength buffer) bytes-written)))
   (-write-binary [_this meta-size blob _env]
     (let [buffer  (js/Buffer.from blob)
           pos     (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
-      (assert (== bytes-written (alength buffer)))))
+      (verify-write-size (alength buffer) bytes-written)))
   Object
   (force [_this _] (fs.fsyncSync fd))
   (close [this]
