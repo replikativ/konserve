@@ -1,5 +1,4 @@
 {:deps {:aliases [:cljs]}
- :source-paths ["src"]
  :dev-http {8021 "out/browser-tests"}
  :builds
  {:app
@@ -22,4 +21,12 @@
    :test-dir "out/browser-tests"
    :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
    :compiler-options {:infer-externs true
+                      :closure-warnings {:useless-code :off}}}
+
+  :ci
+  {:target :karma
+   :output-to  "target/ci.js"
+   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
+   :compiler-options {:infer-externs true
+                      :compiler-options {:optimizations :advanced}
                       :closure-warnings {:useless-code :off}}}}}

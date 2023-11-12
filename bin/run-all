@@ -3,9 +3,9 @@
 set -o errexit
 set -o pipefail
 
-./bin/run-cljstests
+./bin/run-jvm-tests
 
 echo
 echo
 
-./bin/run-unittests
+./bin/run-cljs-tests
