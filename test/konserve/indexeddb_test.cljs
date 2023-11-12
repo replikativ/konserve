@@ -98,33 +98,33 @@
 
 (deftest cache-PEDNKeyValueStore-test
   (async done
-    (go
-     (<! (idb/delete-idb "cache-store"))
-     (let [store (<! (idb/connect-idb-store "cache-store"))]
-       (<! (ct/test-cached-PEDNKeyValueStore-async store))
-       (<! (.close (:backing store)))
-       (<! (idb/delete-idb "cache-store"))
-       (done)))))
+         (go
+           (<! (idb/delete-idb "cache-store"))
+           (let [store (<! (idb/connect-idb-store "cache-store"))]
+             (<! (ct/test-cached-PEDNKeyValueStore-async store))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb "cache-store"))
+             (done)))))
 
 (deftest cache-PKeyIterable-test
   (async done
-    (go
-     (<! (idb/delete-idb "cache-store"))
-     (let [store (<! (idb/connect-idb-store "cache-store"))]
-       (<! (ct/test-cached-PKeyIterable-async store))
-       (<! (.close (:backing store)))
-       (<! (idb/delete-idb "cache-store"))
-       (done)))))
+         (go
+           (<! (idb/delete-idb "cache-store"))
+           (let [store (<! (idb/connect-idb-store "cache-store"))]
+             (<! (ct/test-cached-PKeyIterable-async store))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb "cache-store"))
+             (done)))))
 
 (deftest cache-PBin-test
   (async done
          (go
-          (<! (idb/delete-idb "cache-store"))
-          (let [store (<! (idb/connect-idb-store "cache-store"))]
-            (<! (ct/test-cached-PBin-async store idb/read-web-stream))
-            (<! (.close (:backing store)))
-            (<! (idb/delete-idb "cache-store"))
-            (done)))))
+           (<! (idb/delete-idb "cache-store"))
+           (let [store (<! (idb/connect-idb-store "cache-store"))]
+             (<! (ct/test-cached-PBin-async store idb/read-web-stream))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb "cache-store"))
+             (done)))))
 
 #!============
 #! GC tests
@@ -132,24 +132,24 @@
 (deftest async-gc-test
   (async done
          (go
-          (<! (idb/delete-idb "gc-store"))
-          (let [store (<! (idb/connect-idb-store "gc-store"))]
-            (<! (gct/test-gc-async store))
-            (<! (.close (:backing store)))
-            (<! (idb/delete-idb "gc-store"))
-            (done)))))
+           (<! (idb/delete-idb "gc-store"))
+           (let [store (<! (idb/connect-idb-store "gc-store"))]
+             (<! (gct/test-gc-async store))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb "gc-store"))
+             (done)))))
 
 #!==================
 #! Serializers tests
 
 (deftest fressian-serializer-test
   (async done
-    (go
-     (<! (st/test-fressian-serializers-async "serializers-test"
-                                             idb/connect-idb-store
-                                             idb/delete-idb
-                                             idb/read-web-stream))
-     (done))))
+         (go
+           (<! (st/test-fressian-serializers-async "serializers-test"
+                                                   idb/connect-idb-store
+                                                   idb/delete-idb
+                                                   idb/read-web-stream))
+           (done))))
 
 #!==================
 #! Encryptor tests
@@ -157,7 +157,7 @@
 (deftest encryptor-async-test
   (async done
          (go
-          (<! (et/async-encryptor-test "encryptor-test"
-                                       idb/connect-idb-store
-                                       idb/delete-idb))
-          (done))))
+           (<! (et/async-encryptor-test "encryptor-test"
+                                        idb/connect-idb-store
+                                        idb/delete-idb))
+           (done))))

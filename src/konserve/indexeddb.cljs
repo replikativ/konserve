@@ -135,10 +135,10 @@
                                   {:cause res
                                    :caller 'konserve.indexeddb/read-binary}))
                (take!
-                 (locked-cb {:input-stream (.stream res)
-                             :size (.-size res)
-                             :offset (+ meta-size storage-layout/header-size)})
-                 #(put! out %)))))))
+                (locked-cb {:input-stream (.stream res)
+                            :size (.-size res)
+                            :offset (+ meta-size storage-layout/header-size)})
+                #(put! out %)))))))
 
 (defrecord ^{:doc "buf is cached data that has been read from the db,
                    & {header metadata value} are bin data to be written.

@@ -12,18 +12,18 @@
 
 (deftype MyType [a b]
   #?@(:clj
-     (Object
-      (equals [this other]
-              (and (instance? MyType other)
-                   (= a (.a ^MyType other))
-                   (= b (.b ^MyType other))))
-      (hashCode [this] (hash [a b])))
-     :cljs
-     (IEquiv
-      (-equiv [this other]
-              (and (instance? MyType other)
-                   (= a (.-a ^MyType other))
-                   (= b (.-b ^MyType other)))))))
+      (Object
+       (equals [this other]
+               (and (instance? MyType other)
+                    (= a (.a ^MyType other))
+                    (= b (.b ^MyType other))))
+       (hashCode [this] (hash [a b])))
+      :cljs
+      (IEquiv
+       (-equiv [this other]
+               (and (instance? MyType other)
+                    (= a (.-a ^MyType other))
+                    (= b (.-b ^MyType other)))))))
 
 (defrecord MyRecord [a b])
 
@@ -42,7 +42,7 @@
    #?(:clj
       (reify ReadHandler
         (read [_ rdr _ _]
-              (Date. ^long (.readObject rdr))))
+          (Date. ^long (.readObject rdr))))
       :cljs
       (fn [rdr _ _]
         (doto (js/Date.)
@@ -51,8 +51,8 @@
    #?(:clj
       (reify ReadHandler
         (read [_ rdr _ _]
-              (MyRecord. (fress/read-object rdr)
-                         (fress/read-object rdr))))
+          (MyRecord. (fress/read-object rdr)
+                     (fress/read-object rdr))))
       :cljs
       (fn [rdr _ _]
         (MyRecord. (fress/read-object rdr)
@@ -64,8 +64,8 @@
     #?(:clj
        (reify WriteHandler
          (write [_ writer instant]
-                (fress/write-tag    writer "custom-tag" 1)
-                (fress/write-object writer (.getTime ^Date instant))))
+           (fress/write-tag    writer "custom-tag" 1)
+           (fress/write-object writer (.getTime ^Date instant))))
        :cljs
        (fn [wrt date]
          (fress/write-tag wrt "custom-tag" 1)
@@ -74,9 +74,9 @@
            #?(:clj
               (reify WriteHandler
                 (write [_ writer o]
-                       (fress/write-tag writer "my-type" 2)
-                       (fress/write-object writer ^MyType (.-a o))
-                       (fress/write-object writer ^MyType (.-b o))))
+                  (fress/write-tag writer "my-type" 2)
+                  (fress/write-object writer ^MyType (.-a o))
+                  (fress/write-object writer ^MyType (.-b o))))
               :cljs
               (fn [writer o]
                 (fress/write-tag writer "my-type" 2)
@@ -86,9 +86,9 @@
              #?(:clj
                 (reify WriteHandler
                   (write [_ writer o]
-                         (fress/write-tag writer "my-record" 2)
-                         (fress/write-object writer (.-a o))
-                         (fress/write-object writer (.-b o))))
+                    (fress/write-tag writer "my-record" 2)
+                    (fress/write-object writer (.-a o))
+                    (fress/write-object writer (.-b o))))
                 :cljs
                 (fn [writer o]
                   (fress/write-tag writer "my-record" 2)
@@ -98,23 +98,23 @@
 (defn- test-fressian-incognito-record-recovery
   [store-name connect-store delete-store-async locked-cb]
   (go
-   (testing ":read-handlers arg to connect-store let's us recover records"
-     (let [read-handlers {'konserve.tests.serializers.MyRecord map->MyRecord}
-           _(<! (delete-store-async store-name))
-           store (<! (connect-store store-name
-                                    :read-handlers (atom read-handlers)))
-           my-record (map->MyRecord {:a 0 :b 1})]
-       (and
-        (is (nil? (<! (k/get-in store [:foo]))))
-        (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
-        (testing "written as 'irecord'"
-          (let [bytes (<! (k/bget store :foo locked-cb))
-                o (fress/read bytes)]
-            (and (is (fress/tagged-object? o))
-                 (is (= "irecord" (fress/tag o))))))
-        (is (= my-record (<! (k/get-in store [:foo])))))
-       #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-       (<! (delete-store-async store-name))))))
+    (testing ":read-handlers arg to connect-store let's us recover records"
+      (let [read-handlers {'konserve.tests.serializers.MyRecord map->MyRecord}
+            _ (<! (delete-store-async store-name))
+            store (<! (connect-store store-name
+                                     :read-handlers (atom read-handlers)))
+            my-record (map->MyRecord {:a 0 :b 1})]
+        (and
+         (is (nil? (<! (k/get-in store [:foo]))))
+         (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
+         (testing "written as 'irecord'"
+           (let [bytes (<! (k/bget store :foo locked-cb))
+                 o (fress/read bytes)]
+             (and (is (fress/tagged-object? o))
+                  (is (= "irecord" (fress/tag o))))))
+         (is (= my-record (<! (k/get-in store [:foo])))))
+        #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
+        (<! (delete-store-async store-name))))))
 
 (defn test-fressian-serializers-async
   "Test roundtripping custom types and records using the :FressianSerializer.
@@ -122,57 +122,57 @@
    the input-stream on jvm or a full realized byte array in js"
   [store-name connect-store delete-store-async locked-cb]
   (go
-   (and
-    (testing ":serializers arg to connect-store"
-      (let [serializers {:FressianSerializer (fressian-serializer custom-read-handlers
-                                                                  custom-write-handlers)}
-            _(assert (nil? (<! (delete-store-async store-name))))
-            store (<! (connect-store store-name :serializers serializers))
-            d #?(:clj (Date.) :cljs (js/Date.))
-            my-type (MyType. "a" "b")
-            my-record (map->MyRecord {:a 0 :b 1})
-            res (and
-                 (is [nil 42] (<! (k/assoc-in store [:foo] 42)))
-                 (is (= 42 (<! (k/get-in store [:foo]))))
-                 (is (= [nil d] (<! (k/assoc-in store [:foo] d))))
-                 (testing "should be written with custom-tag not built-in"
-                   (let [bytes (<! (k/bget store :foo locked-cb))
-                         o (fress/read bytes)]
-                     (and (is (fress/tagged-object? o))
-                          (is (= "custom-tag" (fress/tag o))))))
-                 (is (= d (<! (k/get-in store  [:foo]))))
-                 (is (= [nil my-type] (<! (k/assoc-in store [:foo] my-type))))
-                 (is (= my-type (<! (k/get-in store [:foo]))))
-                 (testing "custom write-handler takes precedent over incognito"
-                   (and
-                    (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
+    (and
+     (testing ":serializers arg to connect-store"
+       (let [serializers {:FressianSerializer (fressian-serializer custom-read-handlers
+                                                                   custom-write-handlers)}
+             _ (assert (nil? (<! (delete-store-async store-name))))
+             store (<! (connect-store store-name :serializers serializers))
+             d #?(:clj (Date.) :cljs (js/Date.))
+             my-type (MyType. "a" "b")
+             my-record (map->MyRecord {:a 0 :b 1})
+             res (and
+                  (is [nil 42] (<! (k/assoc-in store [:foo] 42)))
+                  (is (= 42 (<! (k/get-in store [:foo]))))
+                  (is (= [nil d] (<! (k/assoc-in store [:foo] d))))
+                  (testing "should be written with custom-tag not built-in"
                     (let [bytes (<! (k/bget store :foo locked-cb))
                           o (fress/read bytes)]
                       (and (is (fress/tagged-object? o))
-                           (is (= "my-record" (fress/tag o)))))
-                    (is (= my-record (<! (k/get-in store [:foo])))))))]
-        #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-        res))
-    (testing "records are intercepted by incognito by default"
-      (let [_(<! (delete-store-async store-name))
-            store (<! (connect-store store-name))
-            my-record (map->MyRecord {:a 0 :b 1})
-            res (and
-                 (is (= [nil my-record] (<! (k/assoc-in store [:bar] my-record))))
-                 (testing "written as 'irecord'"
-                   (let [bytes (<! (k/bget store :bar locked-cb))
-                         o (fress/read bytes)]
-                     (and (is (fress/tagged-object? o))
-                          (is (= "irecord" (fress/tag o))))))
-                 (is (instance? IncognitoTaggedLiteral (<! (k/get-in store [:bar])))))]
-        #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
-        res))
-    #?(:clj (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb))
-       :cljs (when goog.DEBUG
+                           (is (= "custom-tag" (fress/tag o))))))
+                  (is (= d (<! (k/get-in store  [:foo]))))
+                  (is (= [nil my-type] (<! (k/assoc-in store [:foo] my-type))))
+                  (is (= my-type (<! (k/get-in store [:foo]))))
+                  (testing "custom write-handler takes precedent over incognito"
+                    (and
+                     (is (= [nil my-record] (<! (k/assoc-in store [:foo] my-record))))
+                     (let [bytes (<! (k/bget store :foo locked-cb))
+                           o (fress/read bytes)]
+                       (and (is (fress/tagged-object? o))
+                            (is (= "my-record" (fress/tag o)))))
+                     (is (= my-record (<! (k/get-in store [:foo])))))))]
+         #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
+         res))
+     (testing "records are intercepted by incognito by default"
+       (let [_ (<! (delete-store-async store-name))
+             store (<! (connect-store store-name))
+             my-record (map->MyRecord {:a 0 :b 1})
+             res (and
+                  (is (= [nil my-record] (<! (k/assoc-in store [:bar] my-record))))
+                  (testing "written as 'irecord'"
+                    (let [bytes (<! (k/bget store :bar locked-cb))
+                          o (fress/read bytes)]
+                      (and (is (fress/tagged-object? o))
+                           (is (= "irecord" (fress/tag o))))))
+                  (is (instance? IncognitoTaggedLiteral (<! (k/get-in store [:bar])))))]
+         #?(:cljs (when (.-close (:backing store)) (<! (.close (:backing store)))))
+         res))
+     #?(:clj (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb))
+        :cljs (when goog.DEBUG
                ;; incognito uses reflection to get record name, will not work
                ;; at rt w/ cljs :advanced. Need string tag statically available
                ;; see https://github.com/pkpkpk/fress#records
-               (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb)))))))
+                (<! (test-fressian-incognito-record-recovery store-name connect-store delete-store-async locked-cb)))))))
 
 #?(:clj
    (defn cbor-serializer-test [store-name connect-store delete-store-async]

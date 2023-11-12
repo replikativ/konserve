@@ -209,27 +209,27 @@
   [fd meta-size locked-cb _env]
   (with-promise out
     (take! (afsize fd)
-      (fn [[?err total-size]]
-        (if (some? ?err)
-          (put! out ?err)
-          (try
-            (let [opts #js{:fd fd
-                           :encoding ""
-                           :start (+ meta-size storage-layout/header-size)
-                           :autoClose false}
-                  _readable-fired? (atom false)
-                  rstream (fs.createReadStream nil opts)]
-              (.on rstream "readable"
-                   (fn []
-                     (when-not @_readable-fired?
-                       (reset! _readable-fired? true)
-                       (let [ret (locked-cb {:input-stream rstream :size total-size})]
-                         (take! ret (fn [res] (put! out res)))))))
-              (.on rstream "error"
-                   (fn [err]
-                     (put! out (ex-info "error reading from stream" {:cause err})))))
-            (catch js/Error err
-              (put! out (ex-info "error creating readstream" {:cause err})))))))))
+           (fn [[?err total-size]]
+             (if (some? ?err)
+               (put! out ?err)
+               (try
+                 (let [opts #js{:fd fd
+                                :encoding ""
+                                :start (+ meta-size storage-layout/header-size)
+                                :autoClose false}
+                       _readable-fired? (atom false)
+                       rstream (fs.createReadStream nil opts)]
+                   (.on rstream "readable"
+                        (fn []
+                          (when-not @_readable-fired?
+                            (reset! _readable-fired? true)
+                            (let [ret (locked-cb {:input-stream rstream :size total-size})]
+                              (take! ret (fn [res] (put! out res)))))))
+                   (.on rstream "error"
+                        (fn [err]
+                          (put! out (ex-info "error reading from stream" {:cause err})))))
+                 (catch js/Error err
+                   (put! out (ex-info "error creating readstream" {:cause err})))))))))
 
 (defn- afwrite-binary ;  => ch<?err>
   [fd meta-size blob _env]

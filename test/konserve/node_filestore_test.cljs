@@ -177,27 +177,27 @@
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (<! (connect-fs-store "/tmp/cache-store"))]
-            (<! (ct/test-cached-PEDNKeyValueStore-async store))
-            (done)))))
+           (let [store (<! (connect-fs-store "/tmp/cache-store"))]
+             (<! (ct/test-cached-PEDNKeyValueStore-async store))
+             (done)))))
 
 (deftest cache-PKeyIterable-test
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (<! (connect-fs-store "/tmp/cache-store"))]
-            (<! (ct/test-cached-PKeyIterable-async store))
-            (done)))))
+           (let [store (<! (connect-fs-store "/tmp/cache-store"))]
+             (<! (ct/test-cached-PKeyIterable-async store))
+             (done)))))
 
 (deftest cache-PBin-test
   (filestore/delete-store "/tmp/cache-store")
   (async done
          (go
-          (let [store (<! (connect-fs-store "/tmp/cache-store"))
-                f (fn [{:keys [input-stream]}]
-                    (to-chan! [(.read input-stream)]))]
-            (<! (ct/test-cached-PBin-async store f))
-            (done)))))
+           (let [store (<! (connect-fs-store "/tmp/cache-store"))
+                 f (fn [{:keys [input-stream]}]
+                     (to-chan! [(.read input-stream)]))]
+             (<! (ct/test-cached-PBin-async store f))
+             (done)))))
 
 #!============
 #! GC tests
@@ -206,32 +206,32 @@
   (filestore/delete-store "/tmp/gc-store")
   (async done
          (go
-          (let [store (<! (connect-fs-store "/tmp/gc-store"))]
-            (<! (gct/test-gc-async store))
-            (done)))))
+           (let [store (<! (connect-fs-store "/tmp/gc-store"))]
+             (<! (gct/test-gc-async store))
+             (done)))))
 
 #!==================
 #! Serializers tests
 
 (deftest fressian-serializer-test
   (async done
-   (go
-    (<! (st/test-fressian-serializers-async "/tmp/serializers-test"
-                                            connect-fs-store
-                                            (fn [store-name]
-                                              (go (filestore/delete-store store-name)))
-                                            (fn [{:keys [input-stream]}]
-                                              (to-chan! [(.read input-stream)]))))
-    (done))))
+         (go
+           (<! (st/test-fressian-serializers-async "/tmp/serializers-test"
+                                                   connect-fs-store
+                                                   (fn [store-name]
+                                                     (go (filestore/delete-store store-name)))
+                                                   (fn [{:keys [input-stream]}]
+                                                     (to-chan! [(.read input-stream)]))))
+           (done))))
 
 #!==================
 #! Encryptor tests
 
 (deftest encryptor-async-test
   (async done
-   (go
-    (<! (et/async-encryptor-test "/tmp/encryptor-test"
-                                 connect-fs-store
-                                 (fn [store-name]
-                                   (go (filestore/delete-store store-name)))))
-    (done))))
+         (go
+           (<! (et/async-encryptor-test "/tmp/encryptor-test"
+                                        connect-fs-store
+                                        (fn [store-name]
+                                          (go (filestore/delete-store store-name)))))
+           (done))))
