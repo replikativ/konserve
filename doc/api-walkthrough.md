@@ -47,17 +47,17 @@
 Stores also accept var-args. Support for each entry varies per implementation
 
 + `:opts` => `{:sync? <boolean>}`
-  - This is an env map passed around by most functions internally within konserve. The only entry you should typically need to concern yourself is `:sync?` which is used to control whether functions return channels or values
+  - This is an env map passed around by most functions internally within konserve. The only entry you should typically need to concern yourself with is `:sync?` which is used to control whether functions return channels or values
   - an opts map is the last parameter accepted by `konserve.core` functions, but for creating stores, it must be identified by the keyword `:opts`
 + `:config` => map
   - this map includes options for manipulating blobs in store specific ways. Very rarely should you ever need to alter the defaults
 + `:buffer-size` => number
   - in clj this lets you control the chunk size used for writing blobs. the default is 1mb
 + `:default-serializer` => keyword
-  - the default serializer is `:FressianSerializer`, but you can override
+  - the default serializer is `:FressianSerializer`, but you can override with a keyword identifying a different serializer implementation
   - `(connect-store store-name :default-serializer :StringSerializer)` => writes string edn
   - jvm also supports `:CBORSerializer`
-  - you can provide your own serializer byte giving a map of `{:MySerializer PStoreSerializerImpl}` to `:serializers` (..see next bullet) and then referencing it via `:default-serializer :MySerializer`
+  - you can provide your own serializer by giving a map of `{:MySerializer PStoreSerializerImpl}` to `:serializers` (..see next bullet) and then referencing it via `:default-serializer :MySerializer`
 
 + `:serializers` => Map<keyword, PStoreSerializerImpl>
   - this is where you can provide your own serializer to reference via `:default-serializer`
@@ -134,12 +134,13 @@ In the fruits example a simple keyword is the store key, but keys themselves can
 ```
 With `bassoc` binary data is written as-is without passing through serialization/encryption/compression.
 
-`bget` is probably the trickiest function in konserve. It accepts a callback function that is passed a map of `{:input-stream <host-input-stream>}`. While `locked-cb`  is running, konserve locks & holds onto underyling resources (ie file descriptors) until the function exits. You can choose to read from the input stream however you choose, but you need to return your desired value else the lock will remain held.
+`bget` is probably the trickiest function in konserve. It accepts a callback function that is passed a map of `{:input-stream <host-input-stream>}`. While `locked-cb`  is running, konserve locks & holds onto underyling resources (ie file descriptors) until the function exits. You can choose to read from the input stream however you like, but rather than running side-effects within the callback, you should instead return your desired value else the lock will remain held.
 
 + when called async, the `locked-cb` should return a channel yielding the desired value that will be read from and yielded by `bget`'s channel
 + in both clojurescript stores, synchronous input streams are not possible.
-  - On nodejs you can called `bget` synchronously but in this instance it will be called with `{:blob js/Buffer}`
-  - In the browser, `bget` the (async) locked-cb is given `{:input-stream <readable-webstream> :offset <number>}` where offset indicates the amount of bytes to drop before reaching the desired blob start. `konserve.indexeddb/read-web-stream` can serve as a locked-cb that will yield a `Uint8Array`.
++ On nodejs you can called `bget` synchronously but in this instance it will be called with `{:blob js/Buffer}`
++ In the browser with indexedDB, the async only `bget` calls its locked-cb with `{:input-stream <readable-webstream> :offset <number>}` where offset indicates the amount of bytes to drop before reaching the desired blob start.
+  - `konserve.indexeddb/read-web-stream` can serve as a locked-cb that will yield a `Uint8Array`.
 
 ## Metadata
 
