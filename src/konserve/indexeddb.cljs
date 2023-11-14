@@ -297,7 +297,6 @@
 
 (defn connect-idb-store
   "Connect to a IndexedDB backed KV store with the given db name.
-   Optional serializer, read-handlers, write-handlers.
 
    This implementation stores all values as js/Blobs in an IndexedDB
    object store instance. The object store itself is nameless, and there

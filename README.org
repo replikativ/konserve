@@ -217,12 +217,11 @@ Usage:
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.indexeddb :refer [connect-idb-store]]
-              [konserve.core :as k])
-    (:require-macros [cljs.core.async.macros :refer [go]]))
+    (:require [clojure.core.async :refer [go]]
+              [konserve.indexeddb :refer [connect-idb-store]]
+              [konserve.core :as k]))
 
-  (def dbname "example-db")
-  (go (def my-db (<! (connect-idb-store dbname))))
+  (go (def my-idb-store (<! (connect-idb-store "example-db"))))
 #+END_SRC
 
 *** External Backends
