@@ -83,7 +83,7 @@ Konserve intercepts records and writes them as [incognito](https://github.com/re
 
 
 ## Working with data
-Once you have a store you can use it using `konserve.core` functions. By default functions are asynchronous and return channels yielding values or errors. You can override this by passing an opts map with `:sync? true`
+Once you have a store you can access it using `konserve.core` functions. By default functions are asynchronous and return channels yielding values or errors. You can override this by passing an opts map with `:sync? true`
 
 ```clojure
 (require '[konserve.core :as k])
