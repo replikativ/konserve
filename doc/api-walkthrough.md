@@ -138,7 +138,7 @@ With `bassoc` binary data is written as-is without passing through serialization
 
 + when called async, the `locked-cb` should return a channel yielding the desired value that will be read from and yielded by `bget`'s channel
 + in both clojurescript stores, synchronous input streams are not possible.
-+ On nodejs you can called `bget` synchronously but in this instance it will be called with `{:blob js/Buffer}`
++ On nodejs you can call `bget` synchronously but the locked-cb will be called with `{:blob js/Buffer}`
 + In the browser with indexedDB, the async only `bget` calls its locked-cb with `{:input-stream <readable-webstream> :offset <number>}` where offset indicates the amount of bytes to drop before reaching the desired blob start.
   - `konserve.indexeddb/read-web-stream` can serve as a locked-cb that will yield a `Uint8Array`.
 
