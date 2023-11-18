@@ -1,11 +1,12 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [clojure.core.async :refer [chan put! #?(:clj poll!)]]
+  (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
             [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
                                         -keys]]
-            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
+            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
+             #?@(:cljs [:refer-macros [async+sync]])]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
@@ -27,10 +28,11 @@
                                              (clojure.core/assoc old key c))))
                           key))))
 
-(defn wait [#?(:clj lock :cljs _)]
+(defn wait [lock]
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (long (rand-int 20))))
-     :cljs (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")))
+     :cljs (when-not (some-> lock poll!)
+             (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
@@ -246,7 +248,9 @@
   (fn [{is :input-stream}]
     (let [tmp-file (io/file \"/tmp/my-private-copy\")]
       (io/copy is tmp-file)))
-  "
+
+  When called asynchronously (by default or w/ {:sync? false}), the locked-cb
+  must synchronously return a channel."
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]

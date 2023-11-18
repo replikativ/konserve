@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+echo "Running JVM tests"
+
+TIMBRE_LEVEL=':warn' clojure -X:test

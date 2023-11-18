@@ -1,5 +1,6 @@
 (ns konserve.memory
-  "Address globally aggregated immutable key-value store(s)."
+  "Address globally aggregated immutable key-value store(s).
+   Does not support serialization."
   (:require [clojure.core.async :as async :refer [go <!]]
             [konserve.protocols :refer [PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable]]
@@ -27,7 +28,7 @@
                   {go do}
                   (go (first (get @state key))))))
   (-update-in [_ key-vec meta-up-fn up-fn opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? overwrite?]} opts]
       (async+sync sync?
                   {go do}
                   (go
@@ -42,10 +43,13 @@
                                                 (if rkey
                                                   (update-in data rkey up-fn)
                                                   (up-fn data))])))))
-                          new-state (update-atom state)]
-                      [(second (get new-state fkey))
-                       (second (get new-state fkey))])))))
-  (-assoc-in [this key-vec meta val opts] (-update-in this key-vec meta (fn [_] val) opts))
+                          [_ old-val] (get @state fkey)
+                          {[_ new-val] fkey} (update-atom state)]
+                      (if overwrite?
+                        [nil new-val]
+                        [old-val new-val]))))))
+  (-assoc-in [this key-vec meta val opts]
+    (-update-in this key-vec meta (fn [_] val) (assoc opts :overwrite? true)))
   (-dissoc [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -64,8 +68,7 @@
       (async+sync sync?
                   {go do
                    <! do}
-                  (go
-                    (<! (locked-cb (second (get @state key))))))))
+                  (go (<! (locked-cb {:input-stream (second (get @state key))}))))))
   (-bassoc [_ key meta-up-fn input opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -76,9 +79,8 @@
                            (fn [old]
                              (update old key
                                      (fn [[meta _data]]
-                                       [(meta-up-fn meta) {:input-stream input
-                                                           :size         :unknown}]))))
-                    nil))))
+                                       [(meta-up-fn meta) input]))))
+                    true))))
   PKeyIterable
   (-keys [_ opts]
     (let [{:keys [sync?]} opts]

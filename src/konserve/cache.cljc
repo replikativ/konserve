@@ -9,7 +9,8 @@
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
             [konserve.core #?@(:clj (:refer [go-locked locked])) :as core]
-            [konserve.utils :refer [meta-update async+sync *default-sync-translation*]]
+            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
+             #?@(:cljs [:refer-macros [async+sync]])]
             [taoensso.timbre :refer [trace]]
             [superv.async :refer [go-try- <?-]]
             [clojure.core.async])

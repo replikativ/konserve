@@ -197,7 +197,8 @@ Usage:
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.memory :refer [connect-fs-store]]
+    (:require [#?(:clj  konserve.filestore
+                  :cljs konserve.node-filestore) :refer [connect-fs-store]]
               [konserve.core :as k]))
 
   (def my-folder "path/to/folder")
@@ -210,18 +211,17 @@ Usage:
     :END:
 
 [[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
-ClojureScript browser backends.
+ClojureScript browser backends. The IndexedDB store is restricted to the async api only.
 
 Usage:
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.memory :refer [connect-idb-store]]
-              [konserve.core :as k])
-    (:require-macros [cljs.core.async.macros :refer [go]]))
+    (:require [clojure.core.async :refer [go]]
+              [konserve.indexeddb :refer [connect-idb-store]]
+              [konserve.core :as k]))
 
-  (def dbname "example-db")
-  (go (def my-db (<! (connect-idb-store dbname))))
+  (go (def my-idb-store (<! (connect-idb-store "example-db"))))
 #+END_SRC
 
 *** External Backends

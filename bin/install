@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+
+npm install
+npm install karma
+npm install karma-cljs-test
+npm install karma-chrome-launcher
