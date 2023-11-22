@@ -28,7 +28,6 @@
            _                (.put return-buffer env-array)
            _                (.putInt return-buffer 4 meta)
            return-array     (.array return-buffer)]
-       (.clear return-buffer)
        return-array)
      :cljs
      (let [serializer-id        (get serializer-class->byte (type serializer)) ;;TODO

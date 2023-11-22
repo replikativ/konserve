@@ -250,7 +250,7 @@
           buffer (ByteBuffer/allocate header-size)]
       (.read this buffer 0 header-size
              (proxy [CompletionHandler] []
-               (completed [_res _]
+               (completed [a b]
                  (put! ch (.array buffer)))
                (failed [t _att]
                  (put! ch (ex-info "Could not read key."
