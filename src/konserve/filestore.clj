@@ -344,8 +344,9 @@
         (finally
           (.close ^Closeable bis)))))
   (-read-header [this _env]
-    (let [buffer (ByteBuffer/allocate header-size)]
-      (assert (= 20 (.read this buffer 0)) "Header size does not match.")
+    (let [buffer (ByteBuffer/allocate header-size)
+          len (.read this buffer 0)]
+      (assert (or (= 20 len) (= 8 len)) (str "Header size does not match. Length: " len))
       (.array buffer)))
   (-read-meta [this meta-size env]
     (let [{:keys [header-size]} env
