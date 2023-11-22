@@ -109,11 +109,17 @@
           (<?- (-close new-blob env))))))))
 
 (defn read-header [ac serializers env]
-  (let [{:keys [sync?]} env]
+  (let [{:keys [sync? store-key]} env]
     (async+sync sync? *default-sync-translation*
                 (go-try-
                  (let [arr (<?- (-read-header ac env))]
-                   (parse-header arr serializers))))))
+                   (try
+                     (parse-header arr serializers)
+                     (catch Exception e
+                       (throw (ex-info "Header parsing error."
+                                       {:error e
+                                        :store-key store-key
+                                        :arr (seq arr)})))))))))
 
 (defn read-blob
   "Read meta, edn or binary from blob."
