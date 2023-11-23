@@ -97,13 +97,17 @@
 
         (when (:sync-blob? config)
           (trace "syncing for " key)
-          (<?- (-sync new-blob env))
-          (<?- (-sync-store backing env)))
+          (<?- (-sync new-blob env)))
         (<?- (-close new-blob env))
 
         (when-not (:in-place? config)
           (trace "moving blob: " key)
-          (<?- (-atomic-move backing new-store-key store-key env)))
+          (<?- (-atomic-move backing new-store-key store-key env))) 
+
+        (when (:sync-blob? config)
+          (trace "syncing store for " key)
+          (<?- (-sync-store backing env)))
+
         (if (= operation :write-edn) [old-value value] true)
         (finally
           (<?- (-close new-blob env))))))))
