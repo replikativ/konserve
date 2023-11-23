@@ -4,14 +4,14 @@ set -o errexit
 set -o pipefail
 
 echo "Running tests for node"
-rm out/node-tests.js
-shadow-cljs release node-tests
+rm out/node-tests.js || true
+npx shadow-cljs release node-tests
 node out/node-tests.js
 
 echo
 echo
 
 echo "Running tests for browser"
-rm target/*.js target/*.map
-shadow-cljs release ci
-karma start --single-run
+rm target/*.js target/*.map || true
+npx shadow-cljs release ci
+npx karma start --single-run
