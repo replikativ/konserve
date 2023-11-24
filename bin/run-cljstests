@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+
+echo "Running tests for node"
+rm out/node-tests.js 2>/dev/null || true
+npx shadow-cljs release node-tests
+node out/node-tests.js
+
+echo
+echo
+
+echo "Running tests for browser"
+rm target/*.js target/*.map 2>/dev/null || true
+npx shadow-cljs release ci
+npx karma start --single-run
