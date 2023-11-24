@@ -8,10 +8,10 @@ workflows:
     jobs:
       - tools/setup:
           context: docker-deploy
-          setup_cljs: false
+          setup_cljs: true
       - tools/build:
           context: docker-deploy
-          build_cljs: false
+          build_cljs: true
           requires:
             - tools/setup
       - tools/format:
