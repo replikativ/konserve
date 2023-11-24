@@ -102,7 +102,7 @@
 
         (when-not (:in-place? config)
           (trace "moving blob: " key)
-          (<?- (-atomic-move backing new-store-key store-key env))) 
+          (<?- (-atomic-move backing new-store-key store-key env)))
 
         (when (:sync-blob? config)
           (trace "syncing store for " key)
