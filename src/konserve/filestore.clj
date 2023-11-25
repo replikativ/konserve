@@ -178,51 +178,42 @@
     (let [{:keys [msg]} env
           ch (chan)
           buffer (ByteBuffer/wrap header)]
-      (try
-        (.write this buffer 0 header-size
-                (proxy [CompletionHandler] []
-                  (completed [_res _att]
-                    (close! ch))
-                  (failed [t _att]
-                    (put! ch (ex-info "Could not write key file."
-                                      (assoc msg :exception t)))
-                    (close! ch))))
-        (finally
-          (.clear ^ByteBuffer buffer)))
+      (.write this buffer 0 header-size
+              (proxy [CompletionHandler] []
+                (completed [_res _att]
+                  (close! ch))
+                (failed [t _att]
+                  (put! ch (ex-info "Could not write key file."
+                                    (assoc msg :exception t)))
+                  (close! ch))))
       ch))
   (-write-meta [this meta-arr env]
     (let [{:keys [msg]} env
           ch (chan)
           meta-size (alength ^bytes meta-arr)
           buffer (ByteBuffer/wrap meta-arr)]
-      (try
-        (.write this buffer header-size (+ header-size meta-size)
-                (proxy [CompletionHandler] []
-                  (completed [_res _att]
-                    (close! ch))
-                  (failed [t _att]
-                    (put! ch (ex-info "Could not write key file."
-                                      (assoc msg :exception t)))
-                    (close! ch))))
-        (finally
-          (.clear buffer)))
+      (.write this buffer header-size (+ header-size meta-size)
+              (proxy [CompletionHandler] []
+                (completed [_res _att]
+                  (close! ch))
+                (failed [t _att]
+                  (put! ch (ex-info "Could not write key file."
+                                    (assoc msg :exception t)))
+                  (close! ch))))
       ch))
   (-write-value [this value-arr meta-size env]
     (let [{:keys [msg]} env
           ch (chan)
           total-size (.size this)
           buffer (ByteBuffer/wrap value-arr)]
-      (try
-        (.write this buffer (+ header-size meta-size) total-size
-                (proxy [CompletionHandler] []
-                  (completed [_res _att]
-                    (close! ch))
-                  (failed [t _att]
-                    (put! ch (ex-info "Could not write key file."
-                                      (assoc msg :exception t)))
-                    (close! ch))))
-        (finally
-          (.clear buffer)))
+      (.write this buffer (+ header-size meta-size) total-size
+              (proxy [CompletionHandler] []
+                (completed [_res _att]
+                  (close! ch))
+                (failed [t _att]
+                  (put! ch (ex-info "Could not write key file."
+                                    (assoc msg :exception t)))
+                  (close! ch))))
       ch))
   (-write-binary [this meta-size blob env]
     (let [{:keys [msg buffer-size]} env
@@ -240,49 +231,42 @@
              (.write this buffer start-byte stop-byte
                      (proxy [CompletionHandler] []
                        (completed [_res _att]
+                         (.clear buffer)
                          (close! ch))
                        (failed [t _att]
                          (put! ch (ex-info "Could not write key file."
                                            (assoc msg :exception t)))
                          (close! ch))))
              (<?- ch)
-             (.clear ^ByteBuffer buffer)
              (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
        (catch Exception e
          (trace "write-binary error: " e)
          e)
        (finally
-         (.close ^Closeable bis)
-         (.clear ^ByteBuffer buffer)))))
+         (.close ^Closeable bis)))))
   (-read-header [this env]
     (let [{:keys [msg]} env
           ch (chan)
           buffer (ByteBuffer/allocate header-size)]
-      (try
-        (.read this buffer 0 header-size
-               (proxy [CompletionHandler] []
-                 (completed [_res _]
-                   (put! ch (.array buffer)))
-                 (failed [t _att]
-                   (put! ch (ex-info "Could not read key."
-                                     (assoc msg :exception t))))))
-        (finally
-          (.clear buffer)))
+      (.read this buffer 0 header-size
+             (proxy [CompletionHandler] []
+               (completed [a b]
+                 (put! ch (.array buffer)))
+               (failed [t _att]
+                 (put! ch (ex-info "Could not read key."
+                                   (assoc msg :exception t))))))
       ch))
   (-read-meta [this meta-size env]
     (let [{:keys [msg header-size]} env
           ch (chan)
           buffer (ByteBuffer/allocate meta-size)]
-      (try
-        (.read this buffer header-size (+ header-size meta-size)
-               (proxy [CompletionHandler] []
-                 (completed [_res _]
-                   (put! ch (.array buffer)))
-                 (failed [t _att]
-                   (put! ch (ex-info "Could not read key."
-                                     (assoc msg :exception t))))))
-        (finally
-          (.clear buffer)))
+      (.read this buffer header-size (+ header-size meta-size)
+             (proxy [CompletionHandler] []
+               (completed [_res _]
+                 (put! ch (.array buffer)))
+               (failed [t _att]
+                 (put! ch (ex-info "Could not read key."
+                                   (assoc msg :exception t))))))
       ch))
   (-read-value [this meta-size env]
     (let [{:keys [msg header-size]} env
@@ -291,19 +275,16 @@
           buffer (ByteBuffer/allocate (- total-size
                                          meta-size
                                          header-size))]
-      (try
-        (.read this buffer (+ header-size meta-size)
-               (- total-size
-                  meta-size
-                  header-size)
-               (proxy [CompletionHandler] []
-                 (completed [_res _]
-                   (put! ch (.array buffer)))
-                 (failed [t _att]
-                   (put! ch (ex-info "Could not read key."
-                                     (assoc msg :exception t))))))
-        (finally
-          (.clear buffer)))
+      (.read this buffer (+ header-size meta-size)
+             (- total-size
+                meta-size
+                header-size)
+             (proxy [CompletionHandler] []
+               (completed [_res _]
+                 (put! ch (.array buffer)))
+               (failed [t _att]
+                 (put! ch (ex-info "Could not read key."
+                                   (assoc msg :exception t))))))
       ch))
   (-read-binary [this meta-size locked-cb env]
     (let [{:keys [msg header-size]} env
@@ -317,17 +298,14 @@
                                           buffer (ByteBuffer/allocate (- total-size
                                                                          meta-size
                                                                          header-size))]
-                                      (try
-                                        (.read this buffer (+ header-size meta-size)
-                                               total-size
-                                               (proxy [CompletionHandler] []
-                                                 (completed [_res _]
-                                                   (put! ch (.array buffer)))
-                                                 (failed [t _att]
-                                                   (put! ch (ex-info "Could not read key."
-                                                                     (assoc msg :exception t))))))
-                                        (finally
-                                          (.clear buffer)))
+                                      (.read this buffer (+ header-size meta-size)
+                                             total-size
+                                             (proxy [CompletionHandler] []
+                                               (completed [_res _]
+                                                 (put! ch (.array buffer)))
+                                               (failed [t _att]
+                                                 (put! ch (ex-info "Could not read key."
+                                                                   (assoc msg :exception t))))))
                                       ch)))
                     :size         total-size}))
        (catch Exception e
@@ -341,22 +319,13 @@
   (-get-lock [this _env] (.lock this))
   (-write-header [this header _env]
     (let [buffer (ByteBuffer/wrap header)]
-      (try
-        (.write this buffer 0)
-        (finally
-          (.clear buffer)))))
+      (.write this buffer 0)))
   (-write-meta [this meta-arr _env]
     (let [buffer (ByteBuffer/wrap meta-arr)]
-      (try
-        (.write this buffer header-size)
-        (finally
-          (.clear buffer)))))
+      (.write this buffer header-size)))
   (-write-value [this value-arr meta-size _env]
     (let [buffer (ByteBuffer/wrap value-arr)]
-      (try
-        (.write this buffer (+ header-size meta-size))
-        (finally
-          (.clear buffer)))))
+      (.write this buffer (+ header-size meta-size))))
   (-write-binary [this meta-size blob env]
     (let [{:keys [buffer-size]} env
           [bis read] (blob->channel blob buffer-size)
@@ -373,34 +342,25 @@
               (.clear buffer)
               (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
         (finally
-          (.close ^Closeable bis)
-          (.clear buffer)))))
+          (.close ^Closeable bis)))))
   (-read-header [this _env]
-    (let [buffer (ByteBuffer/allocate header-size)]
-      (try
-        (.read this buffer 0)
-        (.array buffer)
-        (finally
-          (.clear buffer)))))
+    (let [buffer (ByteBuffer/allocate header-size)
+          len (.read this buffer 0)]
+      (assert (or (= 20 len) (= 8 len)) (str "Header size does not match. Length: " len))
+      (.array buffer)))
   (-read-meta [this meta-size env]
     (let [{:keys [header-size]} env
           buffer (ByteBuffer/allocate meta-size)]
-      (try
-        (.read this buffer header-size)
-        (.array buffer)
-        (finally
-          (.clear buffer)))))
+      (.read this buffer header-size)
+      (.array buffer)))
   (-read-value [this meta-size env]
     (let [{:keys [header-size]} env
           total-size (.size this)
           buffer (ByteBuffer/allocate (- total-size
                                          meta-size
                                          header-size))]
-      (try
-        (.read this buffer (+ header-size meta-size))
-        (.array buffer)
-        (finally
-          (.clear buffer)))))
+      (.read this buffer (+ header-size meta-size))
+      (.array buffer)))
   (-read-binary [this meta-size locked-cb env]
     (let [{:keys [header-size]} env
           total-size (.size this)]
@@ -409,11 +369,8 @@
                                  (let [buffer (ByteBuffer/allocate (- total-size
                                                                       meta-size
                                                                       header-size))]
-                                   (try
-                                     (.read this buffer (+ header-size meta-size))
-                                     (.array buffer)
-                                     (finally
-                                       (.clear buffer)))))
+                                   (.read this buffer (+ header-size meta-size))
+                                   (.array buffer)))
                   :size         total-size}))))
 
 (extend-type FileLock
@@ -428,24 +385,18 @@
 (defn- -read [this start-byte stop-byte msg env]
   (if (:sync? env)
     (let [buffer (ByteBuffer/allocate (- stop-byte start-byte))]
-      (try
-        (.read ^FileChannel this buffer start-byte)
-        (.array buffer)
-        (finally
-          (.clear buffer))))
-    (let [buffer (ByteBuffer/allocate (- stop-byte start-byte))]
-      (try
-        (let [res-ch (chan)
-              handler (proxy [CompletionHandler] []
-                        (completed [_res _]
-                          (put! res-ch (.array buffer)))
-                        (failed [t _att]
-                          (put! res-ch (ex-info "Could not read key."
-                                                (assoc msg :exception t)))))]
-          (.read ^AsynchronousFileChannel this buffer start-byte stop-byte handler)
-          res-ch)
-        (finally
-          (.clear buffer))))))
+      (.read ^FileChannel this buffer start-byte)
+      (.array buffer))
+    (let [buffer (ByteBuffer/allocate (- stop-byte start-byte))
+          res-ch (chan)
+          handler (proxy [CompletionHandler] []
+                    (completed [_res _]
+                      (put! res-ch (.array buffer)))
+                    (failed [t _att]
+                      (put! res-ch (ex-info "Could not read key."
+                                            (assoc msg :exception t)))))]
+      (.read ^AsynchronousFileChannel this buffer start-byte stop-byte handler)
+      res-ch)))
 
 (defn get-file-channel [path sync?]
   (let [standard-open-option (into-array StandardOpenOption [StandardOpenOption/READ])]
@@ -699,9 +650,7 @@
        stop-byte
        (proxy [CompletionHandler] []
          (completed [res att]
-           (let [arr-bb    (.array bb)
-                 buff-meta (ByteBuffer/wrap arr-bb)
-                 _         (.clear buff-meta)]
+           (let [arr-bb    (.array bb)]
              (prn (map #(get arr-bb %) (range 0 4)))))
          (failed [t att]
            (prn "fail"))))))

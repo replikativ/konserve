@@ -97,23 +97,33 @@
 
         (when (:sync-blob? config)
           (trace "syncing for " key)
-          (<?- (-sync new-blob env))
-          (<?- (-sync-store backing env)))
+          (<?- (-sync new-blob env)))
         (<?- (-close new-blob env))
 
         (when-not (:in-place? config)
           (trace "moving blob: " key)
           (<?- (-atomic-move backing new-store-key store-key env)))
+
+        (when (:sync-blob? config)
+          (trace "syncing store for " key)
+          (<?- (-sync-store backing env)))
+
         (if (= operation :write-edn) [old-value value] true)
         (finally
           (<?- (-close new-blob env))))))))
 
 (defn read-header [ac serializers env]
-  (let [{:keys [sync?]} env]
+  (let [{:keys [sync? store-key]} env]
     (async+sync sync? *default-sync-translation*
                 (go-try-
                  (let [arr (<?- (-read-header ac env))]
-                   (parse-header arr serializers))))))
+                   (try
+                     (parse-header arr serializers)
+                     (catch Exception e
+                       (throw (ex-info "Header parsing error."
+                                       {:error e
+                                        :store-key store-key
+                                        :arr (seq arr)})))))))))
 
 (defn read-blob
   "Read meta, edn or binary from blob."
