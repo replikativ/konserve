@@ -6,8 +6,7 @@
 [[https://clojurians.slack.com/archives/CB7GJAN0L][https://img.shields.io/badge/slack-join_chat-brightgreen.svg]]
 [[https://clojars.org/io.replikativ/konserve][https://img.shields.io/clojars/v/io.replikativ/konserve.svg]]
 [[https://circleci.com/gh/replikativ/konserve][https://circleci.com/gh/replikativ/konserve.svg?style=shield]]
-[[https://github.com/replikativ/konserve/tree/development][https://img.shields.io/github/last-commit/replikativ/konserve/development.svg]]
-[[https://versions.deps.co/replikativ/konserve][https://versions.deps.co/replikativ/konserve/status.svg]]
+[[https://github.com/replikativ/konserve/tree/development][https://img.shields.io/github/last-commit/replikativ/konserve/main.svg]]
 
 
 [[https://whilo.github.io/old/articles/16/unified-storage-io][Simple durability, made flexible.]]
@@ -234,13 +233,20 @@ synchronous and asynchronous execution, but also to provide protocols that simpl
 the implementation of external backends. Unfortunately most of the external backends
 are deprecated now because of this.
 
-Supported backend implementations are:
+**** Supported backends
+
 - [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
 - [[https://github.com/replikativ/konserve-s3][konserve-s3]]
 - [[https://github.com/replikativ/konserve-redis][konserve-redis]]
 
 Please let us know if you are interested in other backends or if you need help
 with implementing one.
+
+**** Unofficial backends
+
+- [[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]]
+
+**** Outdated backends
 
 The following projects are incompatible with the latest konserve release, but
 describe the usage of the underlying store API and could still be helpful to
@@ -324,19 +330,6 @@ outside usage even when the same keys are used. To support multiple
 konserve clients in the store the backend has to support locking and
 proper transactions on keys internally, which is the case for backends
 like CouchDB, Redis and Riak.
-
-** Todo
-   :PROPERTIES:
-   :CUSTOM_ID: h:e35d9570-46e0-4750-8b98-cc3f27b19ac1
-   :END:
-
-- add more backends
-- add stress tests, e.g. with https://github.com/madthanu/alice
-- implement https://github.com/maxogden/abstract-blob-store for cljs
-- verify proper directory fsync for filestore
-  http://blog.httrack.com/blog/2013/11/15/everything-you-always-wanted-to-know-about-fsync/
-- evaluate bytearrays for binary values
-- add transit cljs support (once it is declared stable)
 
 ** Changelog
    :PROPERTIES:
