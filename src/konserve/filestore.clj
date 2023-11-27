@@ -28,7 +28,7 @@
 
 ;; avoid core.async deadlocks with blocking IO 
 (def pool (Executors/newFixedThreadPool
-           (* 2 (.availableProcessors (Runtime/getRuntime)))
+           1 #_(* 2 (.availableProcessors (Runtime/getRuntime)))
            (proxy [ThreadFactory] []
              (newThread [r]
                (let [t (Thread. r)]
@@ -172,9 +172,7 @@
   (-store-exists? [_this env]
     (sync-io-wrapper (:sync? env) store-exists? base))
   (-sync-store [this env]
-    (go-try- nil)
-    #_(locking this
-      (sync-io-wrapper (:sync? env) sync-base base))))
+    (sync-io-wrapper (:sync? env) sync-base base)))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
