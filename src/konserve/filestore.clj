@@ -28,24 +28,25 @@
 
 ;; avoid core.async deadlocks with blocking IO 
 (def pool (Executors/newFixedThreadPool
-           4
+           (* 2 (.availableProcessors (Runtime/getRuntime)))
            (proxy [ThreadFactory] []
              (newThread [r]
                (let [t (Thread. r)]
                  (.setDaemon t true)
                  t)))))
 
-(defn async-wrapper [f & args]
-  (let [ch (chan 1)]
-    (.submit pool 
-             (fn []
-               (try
-                 (if-let [res (apply f args)]
-                   (put! ch res)
-                   (close! ch))
-                 (catch Exception e (put! ch e))
-                 (finally (close! ch)))))
-      ch))
+(defn sync-io-wrapper [sync? f & args]
+  (if sync? (apply f args)
+      (let [ch (chan 1)]
+        (.submit pool
+                 (fn []
+                   (try
+                     (if-let [res (apply f args)]
+                       (put! ch res)
+                       (close! ch))
+                     (catch Exception e (put! ch e))
+                     (finally (close! ch)))))
+        ch)))
 
 (defn- sync-base
   "Helper Function to synchronize the base of the filestore"
@@ -114,22 +115,21 @@
 (defrecord BackingFilestore [base detected-old-blobs ephemeral?]
   PBackingStore
   (-create-blob [_this store-key env]
-    (let [{:keys [sync?]} env
-          path (Paths/get base (into-array String [store-key]))
-          standard-open-option (into-array StandardOpenOption
-                                           [StandardOpenOption/WRITE
-                                            StandardOpenOption/READ
-                                            StandardOpenOption/CREATE])
-          ac               (if sync?
-                             (FileChannel/open path standard-open-option)
-                             (AsynchronousFileChannel/open path standard-open-option))]
-      (if sync? ac (go ac))))
+    (sync-io-wrapper (:sync? env)
+                     #(let [{:keys [sync?]} env
+                            path (Paths/get base (into-array String [store-key]))
+                            standard-open-option (into-array StandardOpenOption
+                                                             [StandardOpenOption/WRITE
+                                                              StandardOpenOption/READ
+                                                              StandardOpenOption/CREATE])
+                            ac               (if sync?
+                                               (FileChannel/open path standard-open-option)
+                                               (AsynchronousFileChannel/open path standard-open-option))]
+                        ac)))
   (-delete-blob [_this store-key env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/delete (Paths/get base (into-array String [store-key]))))))
+    (sync-io-wrapper (:sync? env) #(Files/delete (Paths/get base (into-array String [store-key])))))
   (-blob-exists? [_this store-key env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/exists (Paths/get base (into-array String [store-key])) (into-array LinkOption [])))))
+    (sync-io-wrapper (:sync? env) #(Files/exists (Paths/get base (into-array String [store-key])) (into-array LinkOption []))))
 
   (-migratable [_this _key store-key env]                    ;; or importable
     (async+sync (:sync? env) *default-sync-translation*
@@ -154,42 +154,25 @@
     (migrate-old-files this file-or-dir serializer read-handlers write-handlers env))
 
   (-keys [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (into [] (list-files base ephemeral?)))))
+    (sync-io-wrapper (:sync? env) #(into [] (list-files base ephemeral?))))
 
   (-copy [_this from to env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                   ;; TODO throws java.lang.ClassNotFoundException:
-                   ;; java.nio.file.Files {}
-                   ;; in native-image compilation
-                 #_(Files/copy ^Path from1 ^Path to1
-                               (into-array [StandardCopyOption/REPLACE_EXISTING]))
-                 ;; work-around with clojure.java.io for now:
-                 (io/copy (.toFile (Paths/get base (into-array String [from])))
-                          (.toFile (Paths/get base (into-array String [to])))))))
+    (sync-io-wrapper (:sync? env)
+                     #(io/copy (.toFile (Paths/get base (into-array String [from])))
+                               (.toFile (Paths/get base (into-array String [to]))))))
   (-atomic-move [_this from to env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (Files/move (Paths/get base (into-array String [from]))
-                             (Paths/get base (into-array String [to]))
-                             (into-array [StandardCopyOption/ATOMIC_MOVE])))))
+    (sync-io-wrapper (:sync? env)
+                     #(Files/move (Paths/get base (into-array String [from]))
+                                  (Paths/get base (into-array String [to]))
+                                  (into-array [StandardCopyOption/ATOMIC_MOVE]))))
   (-create-store [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (check-and-create-backing-store base))))
+    (sync-io-wrapper (:sync? env) check-and-create-backing-store base))
   (-delete-store [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (delete-store (:base env)))))
+    (sync-io-wrapper (:sync? env) delete-store base))
   (-store-exists? [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (store-exists? (:base env)))))
+    (sync-io-wrapper (:sync? env) store-exists? base))
   (-sync-store [_this env]
-    (if (:sync? env) 
-      (sync-base base)
-      (async-wrapper sync-base base))))
+    (sync-io-wrapper (:sync? env) sync-base base)))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
