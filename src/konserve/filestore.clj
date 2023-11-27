@@ -19,11 +19,33 @@
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
    [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
-   [java.util Date UUID]))
+   [java.util Date UUID]
+   [java.util.concurrent Executors ThreadFactory]))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
          '{AsynchronousFileChannel FileChannel}))
+
+;; avoid core.async deadlocks with blocking IO 
+(def pool (Executors/newFixedThreadPool
+           4
+           (proxy [ThreadFactory] []
+             (newThread [r]
+               (let [t (Thread. r)]
+                 (.setDaemon t true)
+                 t)))))
+
+(defn async-wrapper [f & args]
+  (let [ch (chan 1)]
+    (.submit pool 
+             (fn []
+               (try
+                 (if-let [res (apply f args)]
+                   (put! ch res)
+                   (close! ch))
+                 (catch Exception e (put! ch e))
+                 (finally (close! ch)))))
+      ch))
 
 (defn- sync-base
   "Helper Function to synchronize the base of the filestore"
@@ -165,9 +187,9 @@
                 (go-try-
                  (store-exists? (:base env)))))
   (-sync-store [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (sync-base base)))))
+    (if (:sync? env) 
+      (sync-base base)
+      (async-wrapper sync-base base))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
