@@ -176,7 +176,7 @@
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
-  (-sync [this _env] (go-try- (.force this true)))
+  (-sync [this _env] (sync-io-wrapper false (.force this true)))
   (-close [this _env] (go-try- (.close this)))
   (-get-lock [this _env] (go-try- (.get (.lock this))))
   (-write-header [this header env]
