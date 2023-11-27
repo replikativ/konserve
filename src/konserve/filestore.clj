@@ -172,7 +172,8 @@
   (-store-exists? [_this env]
     (sync-io-wrapper (:sync? env) store-exists? base))
   (-sync-store [this env]
-    (sync-io-wrapper (:sync? env) (fn [] (locking this (sync-base base))))))
+    (locking this
+      (sync-io-wrapper (:sync? env) sync-base base))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
