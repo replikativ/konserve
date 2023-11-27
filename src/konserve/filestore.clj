@@ -33,14 +33,6 @@
     (.force fc true)
     (.close fc)))
 
-(defn- sync-base-async
-  "Helper Function to synchronize the base of the filestore"
-  [base]
-  (let [p (.getPath (FileSystems/getDefault) base (into-array String []))
-        fc (AsynchronousFileChannel/open p (into-array OpenOption []))]
-    (.force fc true)
-    (.close fc)))
-
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
   [base]
@@ -172,11 +164,11 @@
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
                  (store-exists? (:base env)))))
-  (-sync-store [_this env]
+  (-sync-store [this env]
     (async+sync (:sync? env) *default-sync-translation*
-                (if (:sync? env)  
-                  (sync-base base) 
-                  (go-try- (sync-base-async base))))))
+                (go-try-
+                 (locking this
+                   (sync-base base))))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
