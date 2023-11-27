@@ -28,7 +28,7 @@
 
 ;; avoid core.async deadlocks with blocking IO 
 (def pool (Executors/newFixedThreadPool
-           1 #_(* 2 (.availableProcessors (Runtime/getRuntime)))
+           100 #_(* 2 (.availableProcessors (Runtime/getRuntime)))
            (proxy [ThreadFactory] []
              (newThread [r]
                (let [t (Thread. r)]
