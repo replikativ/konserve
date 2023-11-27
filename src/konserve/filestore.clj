@@ -172,7 +172,7 @@
   (-store-exists? [_this env]
     (sync-io-wrapper (:sync? env) store-exists? base))
   (-sync-store [this env]
-    (locking this
+    #_(locking this
       (sync-io-wrapper (:sync? env) sync-base base))))
 
 (extend-type AsynchronousFileChannel
