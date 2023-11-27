@@ -39,7 +39,7 @@
   "Helper Function to synchronize the base of the filestore"
   [base]
   (let [p (.getPath (FileSystems/getDefault) base (into-array String []))
-        fis (FileInputStream. ^String p)]
+        fis (FileInputStream. p)]
     (.sync (.getFD fis))
     (.close fis)))
 
