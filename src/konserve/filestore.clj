@@ -25,23 +25,13 @@
   (merge *default-sync-translation*
          '{AsynchronousFileChannel FileChannel}))
 
-#_(defn- sync-base
+(defn- sync-base
   "Helper Function to synchronize the base of the filestore"
   [base]
   (let [p (.getPath (FileSystems/getDefault) base (into-array String []))
         fc (FileChannel/open p (into-array OpenOption []))]
     (.force fc true)
     (.close fc)))
-
-;; the same code but with inputstream instead of filechannel
-
-(defn- sync-base
-  "Helper Function to synchronize the base of the filestore"
-  [base]
-  (let [p (.getPath (FileSystems/getDefault) base (into-array String []))
-        fis (FileInputStream. p)]
-    (.sync (.getFD fis))
-    (.close fis)))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
@@ -174,10 +164,8 @@
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
                  (store-exists? (:base env)))))
-  (-sync-store [_this env]
-    (async+sync (:sync? env) *default-sync-translation*
-                (go-try-
-                 (sync-base base)))))
+  (-sync-store [_this _env]
+    (sync-base base)))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
