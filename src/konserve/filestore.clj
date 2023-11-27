@@ -164,8 +164,10 @@
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
                  (store-exists? (:base env)))))
-  (-sync-store [_this _env]
-    (sync-base base)))
+  (-sync-store [_this env]
+    (async+sync (:sync? env) *default-sync-translation*
+                (go-try-
+                 (sync-base base)))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob

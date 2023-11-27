@@ -106,7 +106,8 @@
 
         (when (:sync-blob? config)
           (trace "syncing store for " key)
-          (-sync-store backing env))
+          (locking backing
+            (<?- (-sync-store backing env))))
 
         (if (= operation :write-edn) [old-value value] true)
         (finally
