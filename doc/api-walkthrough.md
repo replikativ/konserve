@@ -16,6 +16,7 @@
   - https://github.com/replikativ/konserve-jdbc
   - https://github.com/replikativ/konserve-redis
   - https://github.com/alekcz/konserve-fire
+  - https://github.com/The-Literal-Company/konserve-cloud-storage
   - https://github.com/search?q=konserve&type=repositories&p=1
 
 <hr>
