@@ -119,7 +119,7 @@
                  (let [arr (<?- (-read-header ac env))]
                    (try
                      (parse-header arr serializers)
-                     (catch Exception e
+                     (catch #?(:clj Exception :cljs js/Error) e
                        (throw (ex-info "Header parsing error."
                                        {:error e
                                         :store-key store-key
