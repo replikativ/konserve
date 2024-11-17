@@ -3,7 +3,7 @@
   (:require
    [clojure.core.async :refer [<! timeout]]
    [clojure.string :refer [ends-with?]]
-   [hasch.core :refer [squuid]]
+   [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor]]
    [konserve.encryptor :refer [get-encryptor]]
@@ -35,7 +35,7 @@
     (if (:sync? env) nil (go-try- nil))))
 
 (defn key->store-key [key]
-  (str (squuid key) ".ksv"))
+  (str (uuid key) ".ksv"))
 
 (defn store-key->uuid-key [^String store-key]
   (cond
