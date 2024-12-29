@@ -144,7 +144,7 @@
   ([store key-vec val opts]
    (trace "assoc-in on key " key)
    (let [[path-vec key] ((juxt pop peek) key-vec)]
-     (k/update-in store path-vec #(clojure.core/assoc % key val) opts))))
+     (update-in store path-vec #(clojure.core/assoc % key val) opts))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
