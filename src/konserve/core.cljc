@@ -143,8 +143,11 @@
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
    (trace "assoc-in on key " key)
-   (let [[path-vec key] ((juxt pop peek) key-vec)]
-     (update-in store path-vec #(clojure.core/assoc % key val) opts))))
+   (async+sync (:sync? opts)
+               *default-sync-translation*
+               (go-locked
+                store (first key-vec)
+                (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for

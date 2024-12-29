@@ -365,7 +365,7 @@
                      :config     config
                      :sync? sync?
                      :buffer-size buffer-size
-                     :overwrite? true
+                     :overwrite? (empty? (rest key-vec))
                      :msg        {:type :write-edn-error
                                   :key  (first key-vec)}})))
 
