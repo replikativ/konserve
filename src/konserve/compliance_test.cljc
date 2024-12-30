@@ -47,6 +47,7 @@
          (<!! (k/update-in store [:foo] name opts))
          (is (= "bar2" (<!! (k/get store :foo nil opts))))
          (<!! (k/assoc-in store [:baz] {:bar 42} opts))
+         (<!! (k/assoc-in store [:baz :barf] 43 opts))
          (is (= 42 (<!! (k/get-in store [:baz :bar] nil opts))))
          (<!! (k/update-in store [:baz :bar] inc opts))
          (is (= 43 (<!! (k/get-in store [:baz :bar] nil opts))))

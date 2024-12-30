@@ -71,7 +71,7 @@ that it does not get lost.
    :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
    :END:
 
-Add to your dependencies: [[http://clojars.org/io.replikativ/konserve][http://clojars.org/io.replikativ/konserve/latest-version.svg]]
+Add to your dependencies: [![Clojars Project](https://img.shields.io/clojars/v/io.replikativ/konserve.svg)](https://clojars.org/io.replikativ/konserve)
 
 *** Synchronous Execution
 :PROPERTIES:
@@ -234,19 +234,30 @@ the implementation of external backends. Unfortunately most of the external back
 are deprecated now because of this.
 
 **** Supported backends
+:PROPERTIES:
+:CUSTOM_ID: h:0100b431-cbaa-4aec-8750-9c02bc0965ba
+:END:
 
 - [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
 - [[https://github.com/replikativ/konserve-s3][konserve-s3]]
 - [[https://github.com/replikativ/konserve-redis][konserve-redis]]
+- [[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]]
 
 Please let us know if you are interested in other backends or if you need help
 with implementing one.
 
 **** Unofficial backends
+:PROPERTIES:
+:CUSTOM_ID: h:333570e0-e842-4eca-aef3-9a61fdb67499
+:END:
 
 - [[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]]
+- [[https://github.com/The-Literal-Company/konserve-gcs][konserve-gcs]]
 
 **** Outdated backends
+:PROPERTIES:
+:CUSTOM_ID: h:2ff08b83-d842-4cdc-a5e4-1d3144e7993a
+:END:
 
 The following projects are incompatible with the latest konserve release, but
 describe the usage of the underlying store API and could still be helpful to
@@ -335,6 +346,13 @@ like CouchDB, Redis and Riak.
    :PROPERTIES:
    :CUSTOM_ID: h:db9710e5-93b2-45db-ab9c-38e2d7ef6765
    :END:
+
+*** 0.8
+:PROPERTIES:
+:CUSTOM_ID: h:70f33c7f-ddf1-474f-b305-db802fe64116
+:END:
+- fix nested assoc-in bug #120 (breaking)
+
 
 *** 0.7.274
     :PROPERTIES:
