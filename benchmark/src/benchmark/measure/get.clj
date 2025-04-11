@@ -9,12 +9,12 @@
   (let [mid-el (int (/ n 2))
         store (setup-store store-type n)
         times (if sync?
-          [(timed (k/get store 0 nil opts))
-           (timed (k/get store mid-el nil opts))
-           (timed (k/get store (dec n) nil opts))]
-          [(timed (<!! (k/get store 0 nil opts)))
-           (timed (<!! (k/get store mid-el nil opts)))
-           (timed (<!! (k/get store (dec n) nil opts)))])]
+                [(timed (k/get store 0 nil opts))
+                 (timed (k/get store mid-el nil opts))
+                 (timed (k/get store (dec n) nil opts))]
+                [(timed (<!! (k/get store 0 nil opts)))
+                 (timed (<!! (k/get store mid-el nil opts)))
+                 (timed (<!! (k/get store (dec n) nil opts)))])]
     times))
 
 (defmethod benchmark :get [_function stores store-sizes iterations]

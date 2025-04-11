@@ -10,9 +10,9 @@
   (setup-store store-type store-size)
   (case store-type
     :memory (if sync? (timed (new-mem-store opts))
-                      (timed (<!! (new-mem-store opts))))
+                (timed (<!! (new-mem-store opts))))
     :file (if sync? (timed (connect-fs-store fs-store-path :opts opts))
-                    (timed (<!! (connect-fs-store fs-store-path :opts opts))))) )
+              (timed (<!! (connect-fs-store fs-store-path :opts opts))))))
 
 (defmethod benchmark :create [_function stores store-sizes iterations]
   (->> (for [store-type stores
@@ -42,10 +42,10 @@
 
 (defn create-empty-time-plot [data]
   (bar {:title      "Median Create Performance of Empty Store"
-         :vals       (filter #(= 0 (:size %)) data)
-         :x          {:key :store :title "Store"}
-         :y          {:key :median :title "Time (in ms)"}
-         :zero-y     true}))
+        :vals       (filter #(= 0 (:size %)) data)
+        :x          {:key :store :title "Store"}
+        :y          {:key :median :title "Time (in ms)"}
+        :zero-y     true}))
 
 (defmethod plots :create [_function data]
   [["create-time" (create-time-plot data)]
@@ -57,6 +57,4 @@
 
   (oz/start-server!)
   (oz/view! (create-time-plot data) :mode :vega)
-  (oz/view! (create-empty-time-plot data) :mode :vega)
-  
-  )
+  (oz/view! (create-empty-time-plot data) :mode :vega))

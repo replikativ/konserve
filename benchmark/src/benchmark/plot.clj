@@ -151,7 +151,6 @@
                    :update {:tooltip {:signal tooltip}}
                    :hover  {:strokeOpacity {:value 0.5}}}}]}]}))
 
-
 (defn bar [description]
   (let [{:keys [x y vals title]} description]
     {:description

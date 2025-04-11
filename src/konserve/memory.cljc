@@ -89,10 +89,10 @@
                   {go do
                    <! do}
                   (go (set (map first (vals @state)))))))
-                  
+
   PMultiKeySupport
   (-supports-multi-key? [_] true)
-  
+
   PMultiKeyEDNValueStore
   (-multi-assoc [_ kvs meta-up-fn opts]
     (let [{:keys [sync?]} opts]

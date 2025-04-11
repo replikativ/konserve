@@ -3,8 +3,9 @@
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
-            [konserve.impl.storage-layout :as storage-layout]
+            [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore]]
             [konserve.serializers]
+            [konserve.protocols :as protocols]
             [konserve.utils :refer-macros [with-promise]]))
 
 (defn connect-to-idb [db-name]
@@ -140,6 +141,47 @@
                             :offset (+ meta-size storage-layout/header-size)})
                 #(put! out %)))))))
 
+(defn multi-write-blobs
+  "Execute multiple write operations in a single IndexedDB transaction.
+   All operations either succeed or all fail (atomic)."
+  [db store-key-values]
+  (with-promise out
+    (let [tx (.transaction db #js[""] "readwrite")
+          os (.objectStore tx "")
+          remaining-count (atom (count store-key-values))
+          errors (atom [])
+          results (atom {})]
+
+      ;; Set up transaction event handlers
+      (set! (.-oncomplete tx)
+            #(if (empty? @errors)
+               (put! out @results)
+               (put! out (ex-info "Error in multi-write transaction"
+                                  {:type :not-supported
+                                   :reason "One or more write operations failed"
+                                   :errors @errors}))))
+
+      (set! (.-onerror tx)
+            #(put! out (ex-info "Transaction failed"
+                                {:type :not-supported
+                                 :reason "IndexedDB transaction error"
+                                 :cause %})))
+
+      ;; Process each key-value pair in the transaction
+      (doseq [[store-key data] store-key-values]
+        (let [{:keys [header meta value]} data
+              bin #js[header meta value]
+              blob (js/Blob. bin #js{:type "application/octet-stream"})
+              req (.put os blob store-key)]
+
+          (set! (.-onsuccess req)
+                #(do (swap! results assoc store-key true)
+                     (swap! remaining-count dec)))
+
+          (set! (.-onerror req)
+                #(do (swap! errors conj {:key store-key :error %})
+                     (swap! remaining-count dec))))))))
+
 (defrecord ^{:doc "buf is cached data that has been read from the db,
                    & {header metadata value} are bin data to be written.
                    If a write begins, buf is discarded."}
@@ -264,7 +306,13 @@
   (-store-exists? [_this env]
     (assert (not (:sync? env)))
     (db-exists? db-name))
-  (-sync-store [_this env] (when-not (:sync? env) (go))))
+  (-sync-store [_this env] (when-not (:sync? env) (go)))
+
+  ;; Implementation for atomic multi-key operations
+  PMultiWriteBackingStore
+  (-multi-write-blobs [_this store-key-values env]
+    (assert (not (:sync? env)))
+    (multi-write-blobs db store-key-values)))
 
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing

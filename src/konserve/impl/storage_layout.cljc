@@ -161,7 +161,7 @@
 
 (defprotocol PMultiWriteBackingStore
   "Protocol for backing stores that support atomic multi-key writes."
-  (-multi-write-blobs [this store-key-values env] 
+  (-multi-write-blobs [this store-key-values env]
     "Write multiple blobs atomically in a single operation.
      store-key-values is a sequence of [store-key serialized-data] pairs.
      serialized-data is a map containing :header, :meta-arr, and :value-arr.

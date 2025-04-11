@@ -13,7 +13,7 @@
 
 (defprotocol PMultiKeySupport
   "Protocol for checking if a store supports atomic multi-key operations."
-  (-supports-multi-key? [this] 
+  (-supports-multi-key? [this]
     "Returns true if the store supports atomic multi-key operations."))
 
 (defprotocol PMultiKeyEDNValueStore
@@ -44,6 +44,6 @@
 ;; Default implementations for Object
 
 #?(:clj
-(extend-protocol PMultiKeySupport
-  Object
-  (-supports-multi-key? [_] false)))
+   (extend-protocol PMultiKeySupport
+     Object
+     (-supports-multi-key? [_] false)))

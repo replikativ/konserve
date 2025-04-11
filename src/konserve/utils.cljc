@@ -22,29 +22,13 @@
     {:key key :type type :last-write (now)}
     (clojure.core/assoc old :last-write (now))))
 
-;; Using a dynamic var for testing
-(def ^:dynamic *multi-key-support-enabled* true)
-
-;; Platform-specific implementation for multi-key capability checking
-#?(:clj
 (defn multi-key-capable?
   "Checks whether the store supports multi-key operations.
-   A store supports multi-key operations if:
-   1. Multi-key support is enabled
-   2. AND it implements PMultiKeyEDNValueStore
-   3. AND it reports support for multi-key operations via PMultiKeySupport
+
    This function is used by the high-level API to determine if a store supports multi-key operations."
   [store]
-  (and *multi-key-support-enabled*
-       (satisfies? protocols/PMultiKeyEDNValueStore store)
-       (protocols/-supports-multi-key? store))))
-
-;; ClojureScript version always returns false for now
-#?(:cljs
-(defn multi-key-capable?
-  "Checks whether the store supports multi-key operations (currently always returns false in ClojureScript)"
-  [store]
-  false))
+  (and (satisfies? protocols/PMultiKeyEDNValueStore store)
+       (protocols/-supports-multi-key? store)))
 
 (defmacro async+sync
   [sync? async->sync async-code]

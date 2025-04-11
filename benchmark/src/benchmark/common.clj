@@ -25,9 +25,7 @@
           population)
     store))
 
-
 ; time measurements
-
 
 (defmacro timed
   "Evaluates expr. Returns the value of expr and the time in a map."
