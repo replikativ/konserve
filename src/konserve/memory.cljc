@@ -3,7 +3,8 @@
    Does not support serialization."
   (:require [clojure.core.async :as async :refer [go <!]]
             [konserve.protocols :refer [PEDNKeyValueStore -update-in
-                                        PBinaryKeyValueStore PKeyIterable]]
+                                        PBinaryKeyValueStore PKeyIterable
+                                        PMultiKeyEDNValueStore PMultiKeySupport]]
             [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
@@ -87,7 +88,28 @@
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (set (map first (vals @state))))))))
+                  (go (set (map first (vals @state)))))))
+                  
+  PMultiKeySupport
+  (-supports-multi-key? [_] true)
+  
+  PMultiKeyEDNValueStore
+  (-multi-assoc [_ kvs meta-up-fn opts]
+    (let [{:keys [sync?]} opts]
+      (async+sync sync?
+                  {go do}
+                  (go
+                    ;; Use an atomic update on the state atom to ensure all key-val pairs are updated atomically
+                    (swap! state
+                           (fn [old-state]
+                             (reduce (fn [acc [key val]]
+                                       (update acc key
+                                               (fn [[meta _data]]
+                                                 [(meta-up-fn key :edn meta) val])))
+                                     old-state
+                                     kvs)))
+                    ;; Return a map of keys to success status
+                    (into {} (map (fn [[k _]] [k true]) kvs)))))))
 
 #?(:clj
    (defmethod print-method MemoryStore

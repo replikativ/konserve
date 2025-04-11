@@ -2,11 +2,13 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
-            [konserve.protocols :refer [-exists? -get-meta -get-in -assoc-in
+            [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                         -update-in -dissoc -bget -bassoc
-                                        -keys]]
-            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
+                                        -keys -multi-assoc]]
+            [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
+            [konserve.impl.storage-layout :as storage-layout]
+            [konserve.impl.defaults :as defaults]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
@@ -157,6 +159,56 @@
   ([store key val opts]
    (trace "assoc on key " key)
    (assoc-in store [key] val opts)))
+
+
+;; JVM implementation of multi-assoc
+#?(:clj
+(defn multi-assoc
+  "Atomically associates multiple key-value pairs with flat keys.
+   Takes a map of keys to values and stores them in a single atomic transaction.
+   All operations must succeed or all must fail (all-or-nothing semantics).
+   
+   Example:
+   ```
+   (multi-assoc store {:user1 {:name \"Alice\"}
+                       :user2 {:name \"Bob\"}})
+   ```
+   
+   Returns a map of keys to results (typically true for each key).
+   
+   Throws an exception if the store doesn't support multi-key operations."
+  ([store kvs]
+   (multi-assoc store kvs {:sync? false}))
+  ([store kvs opts]
+   (trace "multi-assoc operation with " (count kvs) " keys")
+   (when-not (multi-key-capable? store)
+     (throw (ex-info "Store does not support multi-key operations" 
+                    {:store-type (type store)
+                     :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"})))
+   (async+sync (:sync? opts)
+              *default-sync-translation*
+              (go-try-
+               (try
+                 (<?- (-multi-assoc store kvs meta-update opts))
+                 (catch Exception e
+                   ;; Backend might throw an exception indicating it doesn't support multi-key operations
+                   ;; even though the store implements the protocol
+                   (if (and (instance? clojure.lang.ExceptionInfo e) 
+                            (= :not-supported (:type (ex-data e))))
+                     (throw (ex-info "Backing store does not support multi-key operations" 
+                                    {:store-type (type store)
+                                     :cause e
+                                     :reason (:reason (ex-data e))}))
+                     (throw e)))))))))
+
+;; ClojureScript implementation (not supported yet)
+#?(:cljs
+(defn multi-assoc
+  "Not yet supported in ClojureScript."
+  ([store kvs]
+   (multi-assoc store kvs {:sync? false}))
+  ([store kvs opts]
+   (throw (js/Error. "multi-assoc is not supported in ClojureScript yet")))))
 
 (defn dissoc
   "Removes an entry from the store. "
