@@ -3,6 +3,7 @@
             [cljs.test :refer-macros [deftest is testing async]]
             [konserve.cache :as kc]
             [konserve.core :as k]
+            [konserve.utils :refer [multi-key-capable?]]
             [konserve.indexeddb :as idb]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
@@ -70,6 +71,35 @@
              (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
                     (set (map #(dissoc % :last-write) (<! (k/keys store opts))))))
              (is (every? inst? (map :last-write (<! (k/keys store opts)))))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb db-name))
+             (done)))))
+
+(deftest ^:browser multi-key-operations-test
+  (async done
+         (go
+           (let [db-name "multi-key-test"
+                 _ (<! (idb/delete-idb db-name))
+                 opts {:sync? false}
+                 store (<! (idb/connect-idb-store db-name :opts opts))]
+
+             ;; Test multi-key capabilities using konserve.core API
+             (is (true? (multi-key-capable? store)))
+
+             ;; Test multi-assoc with multiple keys
+             (let [result (<! (k/multi-assoc store {:key1 "value1"
+                                                    :key2 "value2"
+                                                    :key3 42}
+                                             opts))]
+               ;; Verify all operations succeeded
+               (is (= {:key1 true :key2 true :key3 true} result))
+
+               ;; Verify each value was stored correctly
+               (is (= "value1" (<! (k/get store :key1 nil opts))))
+               (is (= "value2" (<! (k/get store :key2 nil opts))))
+               (is (= 42 (<! (k/get store :key3 nil opts)))))
+
+             ;; Clean up
              (<! (.close (:backing store)))
              (<! (idb/delete-idb db-name))
              (done)))))

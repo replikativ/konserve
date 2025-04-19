@@ -216,12 +216,23 @@ Usage:
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [clojure.core.async :refer [go]]
+    (:require [clojure.core.async :refer [go <!]]
               [konserve.indexeddb :refer [connect-idb-store]]
               [konserve.core :as k]))
 
-  (go (def my-idb-store (<! (connect-idb-store "example-db"))))
+  (go 
+    (def my-idb-store (<! (connect-idb-store "example-db")))
+    
+    ;; Regular operations
+    (<! (k/assoc-in my-idb-store [:user] {:name "Alice" :age 30}))
+    (<! (k/get-in my-idb-store [:user]))
+    
+    ;; Multi-key atomic operations
+    (<! (k/multi-assoc my-idb-store {:user1 {:name "Alice"} 
+                                     :user2 {:name "Bob"}})))
 #+END_SRC
+
+The IndexedDB implementation supports atomic multi-key operations through IndexedDB's native transaction model. This means you can write to multiple keys in a single atomic operation - all changes will either succeed or fail together.
 
 *** External Backends
     :PROPERTIES:

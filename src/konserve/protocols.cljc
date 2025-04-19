@@ -11,6 +11,20 @@
   (-assoc-in [this key-vec meta-up-fn val opts])
   (-dissoc [this key opts]))
 
+(defprotocol PMultiKeySupport
+  "Protocol for checking if a store supports atomic multi-key operations."
+  (-supports-multi-key? [this]
+    "Returns true if the store supports atomic multi-key operations."))
+
+(defprotocol PMultiKeyEDNValueStore
+  "Allows to atomically update multiple key-value pairs with all-or-nothing semantics.
+   This is an optional protocol that backends can implement to provide transactional operations."
+  (-multi-assoc [this kvs meta-up-fn opts]
+    "Atomically associates multiple key-value pairs with flat keys.
+     Takes a map of keys to values and stores them in a single atomic transaction.
+     All operations must succeed or all must fail (all-or-nothing semantics).
+     Returns a map of keys to results (typically true for each key)."))
+
 (defprotocol PBinaryKeyValueStore
   "Allows binary data byte array storage."
   (-bget [this key locked-cb opts] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
@@ -26,3 +40,10 @@
   (-serialize [this output-stream write-handlers val]
     "For the JVM we use streams, while for JavaScript we return the value for now.")
   (-deserialize [this read-handlers input-stream]))
+
+;; Default implementations for Object
+
+#?(:clj
+   (extend-protocol PMultiKeySupport
+     Object
+     (-supports-multi-key? [_] false)))

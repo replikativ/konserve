@@ -10,7 +10,9 @@
    [konserve.protocols :refer [PEDNKeyValueStore -exists?
                                PBinaryKeyValueStore
                                -serialize -deserialize
-                               PKeyIterable]]
+                               PKeyIterable
+                               PMultiKeySupport
+                               PMultiKeyEDNValueStore]]
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
                                          -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
@@ -19,6 +21,7 @@
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
+                                         PMultiWriteBackingStore -multi-write-blobs
                                          default-version
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
@@ -302,6 +305,66 @@
               (recur (into keys additional-keys) store-keys)))
           keys))))))
 
+(defn prepare-multi-assoc
+  "Prepares multiple key-value pairs for writing to the backing store.
+   Handles serialization, metadata updates, and key translation."
+  [backing serializers read-handlers write-handlers
+   {:keys [kvs meta-up-fn default-serializer compressor encryptor version config] :as env}]
+  (async+sync
+   (:sync? env) *default-sync-translation*
+   (go-try-
+    (let [serializer (get serializers default-serializer)
+          to-array #?(:cljs
+                      (fn [value]
+                        (-serialize ((encryptor  (:encryptor config)) (compressor serializer)) nil write-handlers value))
+                      :clj
+                      (fn [value]
+                        (let [bos (ByteArrayOutputStream.)]
+                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
+                                           bos write-handlers value)
+                               (.toByteArray bos)
+                               (finally
+                                 (.close bos))))))
+
+          ;; Process each key-value pair
+          results (loop [pairs []
+                         pending-entries (seq kvs)]
+                    (if-let [[key val] (first pending-entries)]
+                      (let [store-key (key->store-key key)
+
+                            ;; no reading, we will just reset it with fresh metadata here
+                            old-meta nil
+
+                            ;; Prepare serialized data
+                            meta (meta-up-fn key :edn old-meta)
+                            meta-arr (to-array meta)
+                            meta-size (count meta-arr)
+                            value-arr (to-array val)
+                            header (create-header version
+                                                  serializer compressor encryptor meta-size)
+
+                            ;; Create serialized data structure
+                            data {:store-key store-key
+                                  :header header
+                                  :meta-arr meta-arr
+                                  :value-arr value-arr
+                                  :meta-size meta-size
+                                  :key key}]
+
+                        (recur (conj pairs data) (rest pending-entries)))
+                      pairs))
+
+          ;; Map to format expected by backing store
+          store-key-values (map (fn [{:keys [store-key header meta-arr value-arr]}]
+                                  [store-key {:header header
+                                              :meta meta-arr
+                                              :value value-arr}])
+                                results)]
+
+      ;; Return the prepared data for backend
+      {:store-key-values store-key-values
+       :processed-pairs results}))))
+
 (defrecord DefaultStore [version backing serializers default-serializer compressor encryptor
                          read-handlers write-handlers buffer-size locks config]
   PEDNKeyValueStore
@@ -445,7 +508,48 @@
                   :config config
                   :sync? sync?
                   :buffer-size buffer-size
-                  :msg {:type :read-all-keys-error}}))))
+                  :msg {:type :read-all-keys-error}})))
+
+  PMultiKeySupport
+  (-supports-multi-key? [_]
+    (satisfies? PMultiWriteBackingStore backing))
+
+  PMultiKeyEDNValueStore
+  (-multi-assoc [this kvs meta-up-fn opts]
+    (let [{:keys [sync?]} opts]
+      ;; First check if the backing store supports multi-writes
+      (when-not (satisfies? PMultiWriteBackingStore backing)
+        (throw (ex-info "Backing store does not support multi-key operations"
+                        {:store-type (type backing)
+                         :type :not-supported})))
+
+      (let [env (merge opts
+                       {:kvs kvs
+                        :meta-up-fn meta-up-fn
+                        :compressor compressor
+                        :encryptor encryptor
+                        :version version
+                        :default-serializer default-serializer
+                        :config config
+                        :buffer-size buffer-size
+                        :sync? sync?
+                        :operation :write-edn
+                        :msg {:type :multi-write-edn-error}})]
+
+        (async+sync
+         sync? *default-sync-translation*
+         (go-try-
+          ;; 1. Prepare the data for multi-key storage
+          (let [prepared-data (<?- (prepare-multi-assoc backing serializers read-handlers write-handlers env))
+                {:keys [store-key-values processed-pairs]} prepared-data
+
+                ;; 2. Use the backing store's multi-write capability
+                multi-result (<?- (-multi-write-blobs backing store-key-values env))]
+
+            ;; 3. Map the results back to original keys
+            (into {} (map (fn [{:keys [key store-key]}]
+                            [key (get multi-result store-key true)])
+                          processed-pairs)))))))))
 
 (defn connect-default-store
   "Create general store in given base of backing store."

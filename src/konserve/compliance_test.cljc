@@ -1,6 +1,7 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :refer [#?(:clj <!!) <! go]]
             [konserve.core :as k]
+            [konserve.utils :as utils]
             #?(:cljs [cljs.test :refer [is]])
             #?(:clj [clojure.test :refer [are is testing]])))
 
@@ -97,7 +98,20 @@
              (is (exception? (<!! (exists? corrupt :bad))))
              (is (exception? (<!! (keys corrupt))))
              (is (exception? (<!! (bget corrupt :bad (fn [_] nil)))))
-             (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10)))))))))))
+             (is (exception? (<!! (bassoc corrupt :binbar (byte-array (range 10))))))))
+
+       ;; Optional test for multi-key operations - runs if store supports it
+       (when (utils/multi-key-capable? store)
+         (testing "Testing multi-key operations"
+             ;; Test multi-assoc with flat keys
+           (let [result (<!! (k/multi-assoc store {:multi1 42 :multi2 "value"} opts))]
+             (is (= result {:multi1 true :multi2 true}))
+             (is (= 42 (<!! (k/get store :multi1 nil opts))))
+             (is (= "value" (<!! (k/get store :multi2 nil opts)))))
+
+             ;; Clean up multi-key test values
+           (doseq [to-delete [:multi1 :multi2]]
+             (<!! (k/dissoc store to-delete opts))))))))
 
 (defn async-compliance-test [store]
   (go
@@ -118,4 +132,3 @@
      (is (= (<! (k/get-in store [:baz :bar])) 48))
      (<! (k/dissoc store :foo))
      (is (= (<! (k/get-in store [:foo])) nil)))))
-

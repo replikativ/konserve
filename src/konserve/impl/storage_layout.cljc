@@ -159,6 +159,15 @@
   (-keys [this env] "List all the keys representing blobs in the store.")
   (-handle-foreign-key [this migration-key serializer read-handlers write-handlers env] "Handle keys not recognized by the current konserve version."))
 
+(defprotocol PMultiWriteBackingStore
+  "Protocol for backing stores that support atomic multi-key writes."
+  (-multi-write-blobs [this store-key-values env]
+    "Write multiple blobs atomically in a single operation.
+     store-key-values is a sequence of [store-key serialized-data] pairs.
+     serialized-data is a map containing :header, :meta-arr, and :value-arr.
+     Returns a map of store-keys to success values (typically true).
+     Backends must implement this to support multi-key operations."))
+
 (defprotocol PBackingBlob
   "Blob object that is backing a stored value and its metadata."
   (-sync [this env] "Synchronize this object and ensure it is stored. This is not necessary in many stores.")

@@ -1,5 +1,6 @@
 (ns konserve.utils
-  (:require [clojure.walk]))
+  (:require [clojure.walk]
+            [konserve.protocols :as protocols]))
 
 (defn invert-map [m]
   (->> (map (fn [[k v]] [v k]) m)
@@ -14,12 +15,20 @@
   {:key 'The stored key'
    :type 'The type of the stored value binary or edn'
    :last-write Date timestamp in milliseconds.}
-  Returns the meta value of the stored key-value tupel. Returns metadata if the key
+  Returns the meta value of the stored key-value tuple. Returns metadata if the key
   value not exist, if it does it will update the last-write to date now. "
   [key type old]
   (if (empty? old)
     {:key key :type type :last-write (now)}
     (clojure.core/assoc old :last-write (now))))
+
+(defn multi-key-capable?
+  "Checks whether the store supports multi-key operations.
+
+   This function is used by the high-level API to determine if a store supports multi-key operations."
+  [store]
+  (and (satisfies? protocols/PMultiKeyEDNValueStore store)
+       (protocols/-supports-multi-key? store)))
 
 (defmacro async+sync
   [sync? async->sync async-code]
