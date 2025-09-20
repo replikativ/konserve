@@ -110,7 +110,7 @@
                  (let [p (.arrayBuffer res)]
                    (.catch p #(put! out %))
                    (.then p #(do
-                               (set! (.-buf bb) %)
+                               (set! (.-buf ^BackingBlob bb) %)
                                (put! out %))))))))))
 
 (defn- read-header
