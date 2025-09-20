@@ -355,14 +355,14 @@
    - populate-missing-strategy    Only add keys missing from frontend
    - full-sync-strategy          Replace entire frontend with backend"
   [frontend-store backend-store & {:keys [write-policy read-policy sync? sync-on-connect?
-                                          sync-strategy sync-mode]
+                                          sync-strategy sync-mode opts]
                                    :or {write-policy :write-through
                                         read-policy :frontend-first
-                                        sync? false
+                                        opts {sync? false}
                                         sync-on-connect? false
                                         sync-strategy populate-missing-strategy
                                         sync-mode :background}
-                                   :as opts}]
+                                   :as params}]
   (when-not (contains? write-policies write-policy)
     (throw (ex-info "Invalid write policy" {:provided write-policy :valid write-policies})))
   (when-not (contains? read-policies read-policy)
@@ -378,21 +378,23 @@
                 :write-policy write-policy
                 :read-policy read-policy
                 :locks (atom {})
-                :config opts})]
+                :config params})]
     (maybe-sync-on-connect store opts)))
 
 ;; Convenience constructor for common case
 (defn connect-memory-tiered-store
   "Create a tiered store with memory frontend and persistent backend.
    This is the most common use case - fast memory cache with persistent storage."
-  [backend-store & {:keys [sync-on-connect? sync-strategy sync-mode]
+  [backend-store & {:keys [sync-on-connect? sync-strategy sync-mode opts]
                     :or {sync-on-connect? true
                          sync-strategy populate-missing-strategy
                          sync-mode :blocking
+                         opts {:sync? false}
                          sync? false}
-                    :as opts}]
-  (connect-tiered-store 
-  ;; we construct synchronously here, since this is always possible
+                    :as params}]
+  (apply
+   connect-tiered-store
+   ;; we construct synchronously here, since this is always possible
    (memory/new-mem-store (atom {}) (clojure.core/assoc opts :sync? true))
-   backend-store 
-   opts))
+   backend-store
+   params))

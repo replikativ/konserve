@@ -22,23 +22,6 @@
       (compliance-test store))
     (delete-store folder)))
 
-(comment
-(do
-  (def folder "/tmp/konserve-tiered-sync-test")
-
-  (def frontend-store (<!! (memory/new-mem-store)))
-
-  (def backend-store (<!! (connect-fs-store folder)))
-
-
-  (def store (<!! (connect-tiered-store frontend-store backend-store)))
-)
-
-  (<!! (exists? store :some-key {:sync? false}))
-
-
-  )
-
 (deftest tiered-store-write-policies-test
   (testing "Write policy behaviors"
     (let [folder "/tmp/konserve-tiered-write-test"
