@@ -4,7 +4,8 @@
   (:require [clojure.core.async :as async :refer [go <!]]
             [konserve.protocols :refer [PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable
-                                        PMultiKeyEDNValueStore PMultiKeySupport]]
+                                        PMultiKeyEDNValueStore PMultiKeySupport
+                                        PAssocSerializers]]
             [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks]
@@ -82,6 +83,8 @@
                                      (fn [[meta _data]]
                                        [(meta-up-fn meta) input]))))
                     true))))
+  PAssocSerializers ;; no serializers needed for memory
+  (-assoc-serializers [this _serializers] this)
   PKeyIterable
   (-keys [_ opts]
     (let [{:keys [sync?]} opts]

@@ -4,7 +4,7 @@
             [hasch.core :as hasch]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
-                                                      -keys -multi-assoc]]
+                                                      -keys -multi-assoc -assoc-serializers]]
             [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
@@ -347,3 +347,8 @@
   ([store opts]
    (trace "fetching keys")
    (-keys store opts)))
+
+(defn assoc-serializers
+  "Assoc the given serializers onto the store, taking effect immediately."
+  [store serializers]
+  (-assoc-serializers store serializers))

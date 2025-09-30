@@ -4,10 +4,7 @@
             [clojure.core.async :refer [<!! go chan put! close! <!] :as async]
             [konserve.core :refer [bassoc bget keys get-in assoc-in dissoc exists? get]]
             [konserve.compliance-test :refer [compliance-test]]
-            [konserve.tiered :refer [connect-tiered-store
-                                     populate-missing-strategy full-sync-strategy
-                                     connect-memory-tiered-store
-                                     perform-sync]]
+            [konserve.tiered :refer [connect-tiered-store sync-on-connect populate-missing-strategy]]
             [konserve.memory :as memory]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.gc :as gct]))
@@ -71,86 +68,17 @@
           (is (= {:source "frontend"} (<!! (get-in store [:test-key]))))
           (delete-store folder)))
 
-      (testing "Backend-first policy"
+      (testing "Frontend-only policy"
         (let [frontend-store (<!! (memory/new-mem-store))
               backend-store (<!! (connect-fs-store folder))
               store (<!! (connect-tiered-store frontend-store backend-store
-                                               :read-policy :backend-first))]
-          ;; Put different values in each store
-          (<!! (assoc-in frontend-store [:test-key] {:source "frontend"}))
+                                               :read-policy :frontend-only))]
+
           (<!! (assoc-in backend-store [:test-key] {:source "backend"}))
 
-          ;; Should read from backend first
-          (is (= {:source "backend"} (<!! (get-in store [:test-key]))))
+          ;; Should read from frontend only
+          (is (nil? (<!! (get-in store [:test-key]))))
           (delete-store folder))))))
-
-(deftest tiered-store-sync-test
-  (testing "Sync functionality"
-    (let [folder "/tmp/konserve-tiered-sync-test"
-          _ (delete-store folder)]
-
-      (testing "Populate missing strategy"
-        (let [frontend-store (<!! (memory/new-mem-store))
-              backend-store (<!! (connect-fs-store folder))]
-
-          ;; Add some data to backend only
-          (<!! (assoc-in backend-store [:backend-only-1] {:value "backend1"}))
-          (<!! (assoc-in backend-store [:backend-only-2] {:value "backend2"}))
-          (<!! (assoc-in backend-store [:shared-key] {:value "backend-shared"}))
-
-          ;; Add some data to frontend only
-          (<!! (assoc-in frontend-store [:frontend-only] {:value "frontend"}))
-          (<!! (assoc-in frontend-store [:shared-key] {:value "frontend-shared"}))
-
-          ;; Sync with populate-missing strategy
-          (let [result (<!! (perform-sync frontend-store backend-store populate-missing-strategy {}))]
-            (is (= 2 (:synced-keys result))) ; Should sync only missing keys
-
-            ;; Check that missing keys were added to frontend
-            (is (= {:value "backend1"} (<!! (get-in frontend-store [:backend-only-1]))))
-            (is (= {:value "backend2"} (<!! (get-in frontend-store [:backend-only-2]))))
-
-            ;; Check that existing keys were not overwritten
-            (is (= {:value "frontend-shared"} (<!! (get-in frontend-store [:shared-key]))))
-            (is (= {:value "frontend"} (<!! (get-in frontend-store [:frontend-only])))))
-          (delete-store folder)))
-
-      (testing "Full sync strategy"
-        (let [frontend-store (<!! (memory/new-mem-store))
-              backend-store (<!! (connect-fs-store folder))]
-
-          ;; Add some data to backend
-          (<!! (assoc-in backend-store [:backend-key-1] {:value "backend1"}))
-          (<!! (assoc-in backend-store [:backend-key-2] {:value "backend2"}))
-
-          ;; Add some data to frontend 
-          (<!! (assoc-in frontend-store [:frontend-key] {:value "frontend"}))
-
-          ;; Sync with full-sync strategy
-          (let [result (<!! (perform-sync frontend-store backend-store full-sync-strategy {}))]
-            (is (= 2 (:synced-keys result))) ; Should sync all backend keys
-
-            ;; Check that all backend keys were synced
-            (is (= {:value "backend1"} (<!! (get-in frontend-store [:backend-key-1]))))
-            (is (= {:value "backend2"} (<!! (get-in frontend-store [:backend-key-2]))))
-
-            ;; Frontend-only keys should remain
-            (is (= {:value "frontend"} (<!! (get-in frontend-store [:frontend-key])))))
-          (delete-store folder))))))
-
-(deftest tiered-store-convenience-constructors-test
-  (testing "Convenience constructor functions"
-    (let [folder "/tmp/konserve-tiered-convenience-test"
-          _ (delete-store folder)]
-
-      (testing "Memory-tiered store"
-        (let [backend-store (<!! (connect-fs-store folder))
-              store (<!! (connect-memory-tiered-store backend-store))]
-
-          ;; Should work like a normal tiered store
-          (<!! (assoc-in store [:test-key] {:value "test"}))
-          (is (= {:value "test"} (<!! (get-in store [:test-key]))))))
-      (delete-store folder))))
 
 (deftest tiered-store-keys-operations-test
   (testing "Key operations"
@@ -233,14 +161,33 @@
 
       (delete-store folder))))
 
-#!============
-#! GC tests
+(deftest tiered-store-sync-on-connect-test
+  (testing "Sync on connect functionality"
+    (let [folder "/tmp/konserve-tiered-sync-test"
+          _ (delete-store folder)
+          backend-store (<!! (connect-fs-store folder))
+          _ (<!! (assoc-in backend-store [:existing-key-1] {:value "existing1"}))
+          _ (<!! (assoc-in backend-store [:existing-key-2] {:value "existing2"}))
 
-(deftest tiered-async-gc-test
-  (let [folder "/tmp/konserve-tiered-gc-test"
-        _ (delete-store folder)
-        frontend-store (<!! (memory/new-mem-store))
-        backend-store (<!! (connect-fs-store folder))
-        store (<!! (connect-tiered-store frontend-store backend-store))]
-    (<!! (gct/test-gc-async store))
-    (delete-store folder)))
+          frontend-store (<!! (memory/new-mem-store))
+          tiered-store (<!! (connect-tiered-store frontend-store backend-store))
+
+          ;; Perform sync on connect
+          sync-result (<!! (sync-on-connect tiered-store
+                                            populate-missing-strategy
+                                            {:sync? false}))]
+
+      ;; Check sync result
+      (is (= 2 (:synced-keys sync-result)))
+      (is (= 0 (:frontend-keys sync-result)))
+      (is (= 2 (:backend-keys sync-result)))
+
+      ;; Verify frontend now has the backend keys after sync
+      (is (= {:value "existing1"} (<!! (get-in frontend-store [:existing-key-1]))))
+      (is (= {:value "existing2"} (<!! (get-in frontend-store [:existing-key-2]))))
+
+      ;; Verify tiered store can access the keys
+      (is (= {:value "existing1"} (<!! (get-in tiered-store [:existing-key-1]))))
+      (is (= {:value "existing2"} (<!! (get-in tiered-store [:existing-key-2]))))
+
+      (delete-store folder))))

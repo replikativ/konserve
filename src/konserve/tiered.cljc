@@ -6,9 +6,9 @@
             [konserve.memory :as memory]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
-                                                      -keys -multi-assoc
+                                                      -keys -multi-assoc -assoc-serializers
                                                       PEDNKeyValueStore PBinaryKeyValueStore
-                                                      PKeyIterable PMultiKeySupport
+                                                      PKeyIterable PAssocSerializers PMultiKeySupport
                                                       PMultiKeyEDNValueStore]]
             [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
@@ -22,10 +22,7 @@
 (def write-policies #{:write-through :write-around})
 
 ;; Read policies  
-(def read-policies #{:frontend-first :backend-first})
-
-;; Sync policies
-(def sync-modes #{:async :blocking :background})
+(def read-policies #{:frontend-first :frontend-only})
 
 ;; Default sync strategies
 (defn populate-missing-strategy
@@ -40,6 +37,7 @@
 
 ;; Sync utilities
 ;; TODO abstract this to provide any sync between two stores
+;; TODO load and write in parallel
 (defn- sync-keys-to-frontend
   "Copy specified keys from backend to frontend."
   [frontend-store backend-store keys-to-sync opts]
@@ -47,15 +45,13 @@
               *default-sync-translation*
               (go-try-
                (if (and (multi-key-capable? frontend-store)
-                        (multi-key-capable? backend-store)
                         (> (count keys-to-sync) 1))
                  ;; Use multi-assoc for efficiency
                  (let [kvs (loop [[k & r] keys-to-sync
                                   kvs {}]
-                             (if-not (seq r)
-                               kvs
-                               (let [v (<?- (-get-in backend-store [k] nil opts))]
-                                 (recur r (clojure.core/assoc kvs k v)))))]
+                             (let [v (<?- (-get-in backend-store [k] nil opts))
+                                   kvs (clojure.core/assoc kvs k v)]
+                               (if-not (seq r) kvs (recur r kvs))))]
                    (<?- (-multi-assoc frontend-store kvs meta-update opts)))
                  ;; Fall back to individual operations
                  (doseq [key keys-to-sync]
@@ -88,30 +84,15 @@
                   :frontend-keys (count frontend-key-set)
                   :backend-keys (count backend-key-set)}))))
 
-(defn- maybe-sync-on-connect
+(defn sync-on-connect
   "Optionally perform sync when connecting to store."
-  [{:keys [frontend-store backend-store config] :as tiered-store} opts]
-  (async+sync (:sync? opts)
-              *default-sync-translation*
-              (go-try-
-               (let [{:keys [sync-on-connect? sync-mode sync-strategy]} config]
-                 (when sync-on-connect?
-                   (case sync-mode
-                     :blocking
-                     (<?- (perform-sync frontend-store backend-store sync-strategy opts))
-
-                     (:async :background)
-                     ;; Fire and forget for non-blocking modes
-                     (go (try
-                           (<?- (perform-sync frontend-store backend-store sync-strategy opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Background sync on connect failed" {:error e}))))))
-                 tiered-store))))
+  [{:keys [frontend-store backend-store]} sync-strategy opts]
+  (perform-sync frontend-store backend-store sync-strategy opts))
 
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
   PEDNKeyValueStore
-  (-exists? [this key opts]
-    (trace "hierarchical exists? on key" key)
+  (-exists? [_this key opts]
+    (trace "tiered exists? on key" key)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -122,11 +103,11 @@
                        true
                        (<?- (-exists? backend-store key opts))))
 
-                   :backend-first
-                   (<?- (-exists? backend-store key opts))))))
+                   :frontend-only
+                   (<?- (-exists? frontend-store key opts))))))
 
-  (-get-meta [this key opts]
-    (trace "hierarchical get-meta on key" key)
+  (-get-meta [_this key opts]
+    (trace "tiered get-meta on key" key)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -137,11 +118,11 @@
                        frontend-meta
                        (<?- (-get-meta backend-store key opts))))
 
-                   :backend-first
-                   (<?- (-get-meta backend-store key opts))))))
+                   :frontend-only
+                   (<?- (-get-meta frontend-store key opts))))))
 
-  (-get-in [this key-vec not-found opts]
-    (trace "hierarchical get-in on key" key-vec)
+  (-get-in [_this key-vec not-found opts]
+    (trace "tiered get-in on key" key-vec)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -161,11 +142,11 @@
                            backend-result
                            not-found))))
 
-                   :backend-first
-                   (<?- (-get-in backend-store key-vec not-found opts))))))
+                   :frontend-only
+                   (<?- (-get-in frontend-store key-vec not-found opts))))))
 
-  (-update-in [this key-vec meta-up-fn up-fn opts]
-    (trace "hierarchical update-in on key" key-vec)
+  (-update-in [_this key-vec meta-up-fn up-fn opts]
+    (trace "tiered update-in on key" key-vec)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -186,7 +167,7 @@
                        (go (try
                              (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))
                              (catch #?(:clj Exception :cljs js/Error) e
-                               (debug "Async frontend update failed" {:key key-vec :error e})))))
+                               (warn "Async frontend update failed" {:key key-vec :error e})))))
                      backend-result)
 
                    :write-around
@@ -195,11 +176,11 @@
                      (go (try
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (debug "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
                      result)))))
 
-  (-assoc-in [this key-vec meta-up-fn val opts]
-    (trace "hierarchical assoc-in on key" key-vec)
+  (-assoc-in [_this key-vec meta-up-fn val opts]
+    (trace "tiered assoc-in on key" key-vec)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -218,7 +199,7 @@
                        (go (try
                              (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))
                              (catch #?(:clj Exception :cljs js/Error) e
-                               (debug "Async frontend assoc failed" {:key key-vec :error e})))))
+                               (warn "Async frontend assoc failed" {:key key-vec :error e})))))
                      backend-result)
 
                    :write-around
@@ -226,11 +207,11 @@
                      (go (try
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (debug "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
                      result)))))
 
-  (-dissoc [this key opts]
-    (trace "hierarchical dissoc on key" key)
+  (-dissoc [_this key opts]
+    (trace "tiered dissoc on key" key)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -241,8 +222,8 @@
                    (<?- backend-result)))))
 
   PBinaryKeyValueStore
-  (-bget [this key locked-cb opts]
-    (trace "hierarchical bget on key" key)
+  (-bget [_this key locked-cb opts]
+    (trace "tiered bget on key" key)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -252,11 +233,11 @@
                      (<?- (-bget frontend-store key locked-cb opts))
                      (<?- (-bget backend-store key locked-cb opts)))
 
-                   :backend-first
-                   (<?- (-bget backend-store key locked-cb opts))))))
+                   :frontend-only
+                   (<?- (-bget frontend-store key locked-cb opts))))))
 
-  (-bassoc [this key meta-up-fn val opts]
-    (trace "hierarchical bassoc on key" key)
+  (-bassoc [_this key meta-up-fn val opts]
+    (trace "tiered bassoc on key" key)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -275,7 +256,7 @@
                        (go (try
                              (<?- (-bassoc frontend-store key meta-up-fn val opts))
                              (catch #?(:clj Exception :cljs js/Error) e
-                               (debug "Async frontend bassoc failed" {:key key :error e})))))
+                               (warn "Async frontend bassoc failed" {:key key :error e})))))
                      backend-result)
 
                    :write-around
@@ -283,12 +264,18 @@
                      (go (try
                            (<?- (-dissoc frontend-store key opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (debug "Frontend invalidation failed" {:key key :error e}))))
+                             (warn "Frontend invalidation failed" {:key key :error e}))))
                      result)))))
+
+  PAssocSerializers
+  (-assoc-serializers [this serializers]
+    (clojure.core/assoc this
+                        :frontend-store (-assoc-serializers (:frontend-store this) serializers)
+                        :backend-store  (-assoc-serializers (:backend-store  this) serializers)))
 
   PKeyIterable
   (-keys [_this opts]
-    (trace "hierarchical keys")
+    (trace "tiered keys")
     ;; Always get keys from backend (source of truth)
     (-keys backend-store opts))
 
@@ -300,10 +287,10 @@
 
   PMultiKeyEDNValueStore
   (-multi-assoc [_this kvs meta-up-fn opts]
-    (trace "hierarchical multi-assoc operation with" (count kvs) "keys")
+    (trace "tiered multi-assoc operation with" (count kvs) "keys")
     (when-not (and (multi-key-capable? frontend-store)
                    (multi-key-capable? backend-store))
-      (throw (ex-info "Both stores must support multi-key operations for hierarchical multi-assoc"
+      (throw (ex-info "Both stores must support multi-key operations for tiered multi-assoc"
                       {:frontend-supports (multi-key-capable? frontend-store)
                        :backend-supports (multi-key-capable? backend-store)})))
     (async+sync (:sync? opts)
@@ -320,12 +307,12 @@
 
                    :write-around
                    (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))]
-                     ;; Invalidate all affected keys from frontend
+                     ;; Invalidate all affected keys from frontend/ubc/cs/research/plai-scratch/
                      (go (try
                            (doseq [k (clojure.core/keys kvs)]
                              (<?- (-dissoc frontend-store k opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (debug "Frontend invalidation failed" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                             (warn "Frontend invalidation failed" {:kvs-keys (clojure.core/keys kvs) :error e}))))
                      result))))))
 
 ;; Constructor function following konserve patterns
@@ -337,40 +324,25 @@
    
    Options:
    - :write-policy      #{:write-through :write-around} (default :write-through)
-   - :read-policy       #{:frontend-first :backend-first} (default :frontend-first)
+   - :read-policy       #{:frontend-first :frontend-only} (default :frontend-first)
    - :sync?             Boolean for synchronous/asynchronous operation (default false)
-   - :sync-on-connect?  Boolean to sync frontend on store creation (default false)
-   - :sync-strategy     Function to determine which keys to sync (default populate-missing-strategy)
-   - :sync-mode         How to perform sync #{:async :blocking :background} (default :background)
-   
+  
    Write policies:
    - :write-through  Write to backend, then frontend synchronously
    - :write-around   Write only to backend, invalidate frontend
    
    Read policies:
    - :frontend-first Check frontend first, fallback to backend (populates frontend)
-   - :backend-first  Always read from backend (ignores frontend)
-   
-   Sync strategies:
-   - populate-missing-strategy    Only add keys missing from frontend
-   - full-sync-strategy          Replace entire frontend with backend"
-  [frontend-store backend-store & {:keys [write-policy read-policy sync? sync-on-connect?
-                                          sync-strategy sync-mode opts]
+   - :frontend-only  Only read from frontend."
+  [frontend-store backend-store & {:keys [write-policy read-policy opts]
                                    :or {write-policy :write-through
                                         read-policy :frontend-first
-                                        opts {:sync? false}
-                                        sync-on-connect? false
-                                        sync-strategy populate-missing-strategy
-                                        sync-mode :background}
+                                        opts {:sync? false}}
                                    :as params}]
   (when-not (contains? write-policies write-policy)
     (throw (ex-info "Invalid write policy" {:provided write-policy :valid write-policies})))
   (when-not (contains? read-policies read-policy)
     (throw (ex-info "Invalid read policy" {:provided read-policy :valid read-policies})))
-  (when-not (contains? sync-modes sync-mode)
-    (throw (ex-info "Invalid sync mode" {:provided sync-mode :valid sync-modes})))
-  (when-not (fn? sync-strategy)
-    (throw (ex-info "Sync strategy must be a function" {:provided sync-strategy})))
 
   (let [store (map->TieredStore
                {:frontend-store frontend-store
@@ -379,21 +351,4 @@
                 :read-policy read-policy
                 :locks (atom {})
                 :config params})]
-    (maybe-sync-on-connect store opts)))
-
-;; Convenience constructor for common case
-(defn connect-memory-tiered-store
-  "Create a tiered store with memory frontend and persistent backend.
-   This is the most common use case - fast memory cache with persistent storage."
-  [backend-store & {:keys [sync-on-connect? sync-strategy sync-mode opts]
-                    :or {sync-on-connect? true
-                         sync-strategy populate-missing-strategy
-                         sync-mode :blocking
-                         opts {:sync? false}}
-                    :as params}]
-  (apply
-   connect-tiered-store
-   ;; we construct synchronously here, since this is always possible
-   (memory/new-mem-store (atom {}) (clojure.core/assoc opts :sync? true))
-   backend-store
-   params))
+    (if (:sync? opts) store (go store))))

@@ -30,6 +30,9 @@
   (-bget [this key locked-cb opts] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")
   (-bassoc [this key meta-up-fn val opts] "Copies given value (InputStream, Reader, File, byte[] or String on JVM, Blob in JavaScript) under key in the store."))
 
+(defprotocol PAssocSerializers
+  (-assoc-serializers [this serializers] "Assoc serializers onto this store."))
+
 (defprotocol PKeyIterable
   "Allows lazy iteration of keys in this store."
   (-keys [this opts]
@@ -43,7 +46,7 @@
 
 ;; Default implementations for Object
 
-#?(:clj
-   (extend-protocol PMultiKeySupport
-     Object
-     (-supports-multi-key? [_] false)))
+(extend-protocol PMultiKeySupport
+  #?(:clj Object :cljs default)
+  (-supports-multi-key? [_] false))
+

@@ -10,6 +10,7 @@
    [konserve.protocols :refer [PEDNKeyValueStore -exists?
                                PBinaryKeyValueStore
                                -serialize -deserialize
+                               PAssocSerializers
                                PKeyIterable
                                PMultiKeySupport
                                PMultiKeyEDNValueStore]]
@@ -494,6 +495,10 @@
                      :buffer-size buffer-size
                      :msg        {:type :write-binary-error
                                   :key  key}})))
+
+  PAssocSerializers
+  (-assoc-serializers [this serializers]
+    (assoc this :serializers serializers))
 
   PKeyIterable
   (-keys [this opts]
