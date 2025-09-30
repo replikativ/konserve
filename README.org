@@ -244,6 +244,43 @@ synchronous and asynchronous execution, but also to provide protocols that simpl
 the implementation of external backends. Unfortunately most of the external backends
 are deprecated now because of this.
 
+**** Tiered Store
+:PROPERTIES:
+:CUSTOM_ID: h:b8f1c3d2-4e5a-4b7c-9123-6d4e8f7a9b2c
+:END:
+
+Konserve supports tiered storage with a frontend cache layer and backend persistence layer.
+The tiered store combines a fast frontend store (e.g., in-memory) with a durable backend 
+store (e.g., filesystem) to optimize for both performance and persistence.
+
+Usage:
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [konserve.tiered :refer [connect-tiered-store]]
+              [konserve.memory :refer [new-mem-store]]
+              [konserve.filestore :refer [connect-fs-store]]
+              [clojure.core.async :refer [go <!]]))
+
+  (go
+    (def frontend-store (<! (new-mem-store)))
+    (def backend-store (<! (connect-fs-store "/tmp/store")))
+    (def tiered-store (<! (connect-tiered-store frontend-store backend-store
+                                                :write-policy :write-through
+                                                :read-policy :frontend-first))))
+#+END_SRC
+
+Write policies:
+- =:write-through= - Write to backend, then frontend synchronously
+- =:write-around= - Write only to backend, invalidate frontend
+
+Read policies:
+- =:frontend-first= - Check frontend first, fallback to backend (populates frontend)
+- =:frontend-only= - Only read from frontend
+
+The tiered store also supports synchronization between layers and multi-key operations
+when both stores support them.
+
 **** Supported backends
 :PROPERTIES:
 :CUSTOM_ID: h:0100b431-cbaa-4aec-8750-9c02bc0965ba
