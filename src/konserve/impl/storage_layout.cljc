@@ -166,6 +166,11 @@
      store-key-values is a sequence of [store-key serialized-data] pairs.
      serialized-data is a map containing :header, :meta-arr, and :value-arr.
      Returns a map of store-keys to success values (typically true).
+     Backends must implement this to support multi-key operations.")
+  (-multi-delete-blobs [this store-keys env]
+    "Delete multiple blobs atomically in a single operation.
+     store-keys is a sequence of store-key strings to delete.
+     Returns a map of store-keys to boolean indicating if the blob existed before deletion.
      Backends must implement this to support multi-key operations."))
 
 (defprotocol PBackingBlob

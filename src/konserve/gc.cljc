@@ -1,6 +1,7 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
+            [konserve.utils :as utils]
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
@@ -23,10 +24,12 @@
        (reduce<?-
         (fn [deleted-files batch]
           (go-try-
-           (if false
-             ;; insert batch dissoc for supporting stores here
-             :TODO
-             ;; fallback to single operations
+           (if (utils/multi-key-capable? store)
+             ;; Use multi-dissoc for batch deletion if supported
+             (let [keys-to-delete (mapv :key batch)]
+               (<?- (k/multi-dissoc store keys-to-delete))
+               (into deleted-files keys-to-delete))
+             ;; Fallback to single operations for stores without multi-key support
              (let [pending-deletes (mapv (fn [{:keys [key]}]
                                            (k/dissoc store key))
                                          batch)]
