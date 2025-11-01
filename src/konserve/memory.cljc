@@ -109,7 +109,23 @@
                                      old-state
                                      kvs)))
                     ;; Return a map of keys to success status
-                    (into {} (map (fn [[k _]] [k true]) kvs)))))))
+                    (into {} (map (fn [[k _]] [k true]) kvs))))))
+
+  (-multi-dissoc [_ keys opts]
+    (let [{:keys [sync?]} opts]
+      (async+sync sync?
+                  {go do}
+                  (go
+                    ;; Use an atomic update on the state atom to ensure all keys are removed atomically
+                    (let [old-state @state
+                          results (into {} (map (fn [k]
+                                                   [k (contains? old-state k)])
+                                                keys))]
+                      (swap! state
+                             (fn [s]
+                               (apply dissoc s keys)))
+                      ;; Return a map of keys to success status (true if existed, false if not)
+                      results))))))
 
 #?(:clj
    (defmethod print-method MemoryStore
