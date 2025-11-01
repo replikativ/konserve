@@ -116,16 +116,14 @@
       (async+sync sync?
                   {go do}
                   (go
-                    ;; Use an atomic update on the state atom to ensure all keys are removed atomically
-                    (let [old-state @state
-                          results (into {} (map (fn [k]
-                                                   [k (contains? old-state k)])
-                                                keys))]
-                      (swap! state
-                             (fn [s]
-                               (apply dissoc s keys)))
-                      ;; Return a map of keys to success status (true if existed, false if not)
-                      results))))))
+                    ;; Atomically swap state and capture old value to avoid race conditions
+                    (let [[old-state _new-state] (swap-vals! state
+                                                             (fn [s]
+                                                               (apply dissoc s keys)))]
+                      ;; Check existence against the actual old state we swapped from
+                      (into {} (map (fn [k]
+                                      [k (contains? old-state k)])
+                                    keys))))))))
 
 #?(:clj
    (defmethod print-method MemoryStore
