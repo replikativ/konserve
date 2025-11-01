@@ -182,6 +182,47 @@
                 #(do (swap! errors conj {:key store-key :error %})
                      (swap! remaining-count dec))))))))
 
+(defn multi-delete-blobs
+  "Execute multiple delete operations in a single IndexedDB transaction.
+   All operations either succeed or all fail (atomic).
+   Returns a map of store-keys to boolean indicating if the blob existed."
+  [db store-keys]
+  (with-promise out
+    (let [tx (.transaction db #js[""] "readwrite")
+          os (.objectStore tx "")
+          errors (atom [])
+          results (atom {})]
+
+      ;; Set up transaction event handlers
+      (set! (.-oncomplete tx)
+            #(if (empty? @errors)
+               (put! out @results)
+               (put! out (ex-info "Error in multi-delete transaction"
+                                  {:type :not-supported
+                                   :reason "One or more delete operations failed"
+                                   :errors @errors}))))
+
+      (set! (.-onerror tx)
+            #(put! out (ex-info "Transaction failed"
+                                {:type :not-supported
+                                 :reason "IndexedDB transaction error"
+                                 :cause %})))
+
+      ;; Process each key deletion in the transaction
+      (doseq [store-key store-keys]
+        ;; First check if key exists
+        (let [get-req (.get os store-key)]
+          (set! (.-onsuccess get-req)
+                (fn []
+                  (let [existed? (not (undefined? (.-result get-req)))
+                        del-req (.delete os store-key)]
+                    (set! (.-onsuccess del-req)
+                          (fn [] (swap! results assoc store-key existed?)))
+                    (set! (.-onerror del-req)
+                          (fn [err] (swap! errors conj {:key store-key :error err}))))))
+          (set! (.-onerror get-req)
+                (fn [err] (swap! errors conj {:key store-key :error err}))))))))
+
 (defrecord ^{:doc "buf is cached data that has been read from the db,
                    & {header metadata value} are bin data to be written.
                    If a write begins, buf is discarded."}
@@ -312,7 +353,10 @@
   PMultiWriteBackingStore
   (-multi-write-blobs [_this store-key-values env]
     (assert (not (:sync? env)))
-    (multi-write-blobs db store-key-values)))
+    (multi-write-blobs db store-key-values))
+  (-multi-delete-blobs [_this store-keys env]
+    (assert (not (:sync? env)))
+    (multi-delete-blobs db store-keys)))
 
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing
