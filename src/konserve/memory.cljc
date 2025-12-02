@@ -114,6 +114,20 @@
                     ;; Return a map of keys to success status
                     (into {} (map (fn [[k _]] [k true]) kvs))))))
 
+  (-multi-dissoc [_ keys opts]
+    (let [{:keys [sync?]} opts]
+      (async+sync sync?
+                  {go do}
+                  (go
+                    ;; Atomically swap state and capture old value to avoid race conditions
+                    (let [[old-state _new-state] (swap-vals! state
+                                                             (fn [s]
+                                                               (apply dissoc s keys)))]
+                      ;; Check existence against the actual old state we swapped from
+                      (into {} (map (fn [k]
+                                      [k (contains? old-state k)])
+                                    keys)))))))
+
   PWriteHookStore
   (-get-write-hooks [_] write-hooks)
   (-set-write-hooks! [this hooks-atom]

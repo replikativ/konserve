@@ -1,7 +1,7 @@
 (ns konserve.impl.defaults
   "Default implementation of the high level protocol given a binary backing implementation as defined in the storage-layout namespace."
   (:require
-   [clojure.core.async :refer [<! timeout]]
+   [clojure.core.async :refer [<! timeout] :as async]
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
@@ -23,7 +23,7 @@
                                          -read-header -read-meta -read-value -read-binary
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
-                                         PMultiWriteBackingStore -multi-write-blobs
+                                         PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
                                          default-version
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
@@ -558,6 +558,29 @@
             (into {} (map (fn [{:keys [key store-key]}]
                             [key (get multi-result store-key true)])
                           processed-pairs))))))))
+
+  (-multi-dissoc [this keys opts]
+    (let [{:keys [sync?]} opts]
+      ;; Check if backing store supports multi-writes (even though we're deleting)
+      (when-not (satisfies? PMultiWriteBackingStore backing)
+        (throw (ex-info "Backing store does not support multi-key operations"
+                        {:store-type (type backing)
+                         :type :not-supported})))
+
+      (async+sync
+       sync? *default-sync-translation*
+       (go-try-
+        ;; Convert keys to store-keys
+        (let [store-keys (map key->store-key keys)
+              env (merge opts {:sync? sync?})
+
+              ;; Use backing store's multi-delete capability
+              result (<?- (-multi-delete-blobs backing store-keys env))]
+
+          ;; Map results back from store-keys to original keys
+          (into {} (map (fn [key store-key]
+                          [key (get result store-key false)])
+                        keys store-keys)))))))
 
   PWriteHookStore
   (-get-write-hooks [_] write-hooks)

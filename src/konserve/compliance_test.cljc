@@ -109,9 +109,22 @@
              (is (= 42 (<!! (k/get store :multi1 nil opts))))
              (is (= "value" (<!! (k/get store :multi2 nil opts)))))
 
-             ;; Clean up multi-key test values
-           (doseq [to-delete [:multi1 :multi2]]
-             (<!! (k/dissoc store to-delete opts)))))
+             ;; Test multi-dissoc with existing keys
+           (let [result (<!! (k/multi-dissoc store [:multi1 :multi2] opts))]
+             (is (= result {:multi1 true :multi2 true}))
+             (is (= nil (<!! (k/get store :multi1 nil opts))))
+             (is (= nil (<!! (k/get store :multi2 nil opts)))))
+
+             ;; Test multi-dissoc with non-existing keys
+           (let [result (<!! (k/multi-dissoc store [:nonexistent1 :nonexistent2] opts))]
+             (is (= result {:nonexistent1 false :nonexistent2 false})))
+
+             ;; Test multi-dissoc with mix of existing and non-existing keys
+           (<!! (k/multi-assoc store {:multi3 "test3" :multi4 "test4"} opts))
+           (let [result (<!! (k/multi-dissoc store [:multi3 :multi4 :nonexistent3] opts))]
+             (is (= result {:multi3 true :multi4 true :nonexistent3 false}))
+             (is (= nil (<!! (k/get store :multi3 nil opts))))
+             (is (= nil (<!! (k/get store :multi4 nil opts)))))))
 
       ;; Optional test for write hooks - runs if store supports it
       (when (utils/write-hooks-capable? store)
