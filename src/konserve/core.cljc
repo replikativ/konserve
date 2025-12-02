@@ -4,7 +4,8 @@
             [hasch.core :as hasch]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
-                                                      -keys -multi-assoc -assoc-serializers]]
+                                                      -keys -multi-assoc -assoc-serializers
+                                                      -get-write-hooks]]
             [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
@@ -19,6 +20,64 @@
 ;; consistent
 ;; isolated
 ;; durable
+
+;; ============================================================================
+;; Write Hooks - callbacks invoked after successful write operations
+;; ============================================================================
+
+(defn add-write-hook!
+  "Register a write hook on the store. The hook-fn will be called after every
+   successful write operation at the API layer (assoc-in, update-in, dissoc, etc.).
+
+   Hook message format:
+   {:api-op :assoc-in|:assoc|:update-in|:update|:dissoc|:bassoc|:multi-assoc
+    :key <top-level key>
+    :key-vec <full key path> (for assoc-in/update-in)
+    :value <written value>
+    :old-value <previous value> (for update operations)
+    :kvs <map of key->value> (for multi-assoc)}
+
+   Parameters:
+   - store: A store implementing PWriteHookStore
+   - hook-id: Unique identifier for the hook (keyword recommended)
+   - hook-fn: Function of one argument (the write event map)
+
+   Returns the store for chaining."
+  [store hook-id hook-fn]
+  (when-let [hooks (-get-write-hooks store)]
+    (swap! hooks clojure.core/assoc hook-id hook-fn))
+  store)
+
+(defn remove-write-hook!
+  "Remove a previously registered write hook by its id.
+
+   Parameters:
+   - store: A store implementing PWriteHookStore
+   - hook-id: The id used when registering the hook
+
+   Returns the store for chaining."
+  [store hook-id]
+  (when-let [hooks (-get-write-hooks store)]
+    (swap! hooks clojure.core/dissoc hook-id))
+  store)
+
+(defn- invoke-write-hooks!
+  "Invoke all registered write hooks with the operation details.
+   Hooks are called synchronously after a successful write."
+  [store hook-event]
+  (when-let [hooks-atom (-get-write-hooks store)]
+    (when-let [hooks @hooks-atom]
+      (when (seq hooks)
+        (doseq [[_id hook-fn] hooks]
+          (try
+            (hook-fn hook-event)
+            (catch #?(:clj Exception :cljs js/Error) _e
+              ;; Silently ignore hook errors to avoid breaking writes
+              nil)))))))
+
+;; ============================================================================
+;; Locking utilities
+;; ============================================================================
 
 (defn get-lock [{:keys [locks] :as _store} key]
   (or (clojure.core/get @locks key)
@@ -125,7 +184,13 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))))))
+                (let [[old-val new-val :as result] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
+                  (invoke-write-hooks! store {:api-op :update-in
+                                              :key (first key-vec)
+                                              :key-vec key-vec
+                                              :old-value old-val
+                                              :value new-val})
+                  result)))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
@@ -149,7 +214,12 @@
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))))))
+                (let [result (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
+                  (invoke-write-hooks! store {:api-op :assoc-in
+                                              :key (first key-vec)
+                                              :key-vec key-vec
+                                              :value val})
+                  result)))))
 
 (defn assoc
   "Associates the key-vec to the value, any missing collections for
@@ -166,15 +236,15 @@
      "Atomically associates multiple key-value pairs with flat keys.
    Takes a map of keys to values and stores them in a single atomic transaction.
    All operations must succeed or all must fail (all-or-nothing semantics).
-   
+
    Example:
    ```
    (multi-assoc store {:user1 {:name \"Alice\"}
                        :user2 {:name \"Bob\"}})
    ```
-   
+
    Returns a map of keys to results (typically true for each key).
-   
+
    Throws an exception if the store doesn't support multi-key operations."
      ([store kvs]
       (multi-assoc store kvs {:sync? false}))
@@ -187,18 +257,21 @@
       (async+sync (:sync? opts)
                   *default-sync-translation*
                   (go-try-
-                   (try
-                     (<?- (-multi-assoc store kvs meta-update opts))
-                     (catch Exception e
-                   ;; Backend might throw an exception indicating it doesn't support multi-key operations
-                   ;; even though the store implements the protocol
-                       (if (and (instance? clojure.lang.ExceptionInfo e)
-                                (= :not-supported (:type (ex-data e))))
-                         (throw (ex-info "Backing store does not support multi-key operations"
-                                         {:store-type (type store)
-                                          :cause e
-                                          :reason (:reason (ex-data e))}))
-                         (throw e)))))))))
+                   (let [result (try
+                                  (<?- (-multi-assoc store kvs meta-update opts))
+                                  (catch Exception e
+                                    ;; Backend might throw an exception indicating it doesn't support multi-key operations
+                                    ;; even though the store implements the protocol
+                                    (if (and (instance? clojure.lang.ExceptionInfo e)
+                                             (= :not-supported (:type (ex-data e))))
+                                      (throw (ex-info "Backing store does not support multi-key operations"
+                                                      {:store-type (type store)
+                                                       :cause e
+                                                       :reason (:reason (ex-data e))}))
+                                      (throw e))))]
+                     (invoke-write-hooks! store {:api-op :multi-assoc
+                                                 :kvs kvs})
+                     result))))))
 
 ;; ClojureScript implementation
 #?(:cljs
@@ -206,15 +279,15 @@
      "Atomically associates multiple key-value pairs with flat keys.
    Takes a map of keys to values and stores them in a single atomic transaction.
    All operations must succeed or all must fail (all-or-nothing semantics).
-   
+
    Example:
    ```
    (multi-assoc store {:user1 {:name \"Alice\"}
                        :user2 {:name \"Bob\"}})
    ```
-   
+
    Returns a map of keys to results (typically true for each key).
-   
+
    Throws an error if the store doesn't support multi-key operations."
      ([store kvs]
       (multi-assoc store kvs {:sync? false}))
@@ -222,7 +295,11 @@
       (trace "multi-assoc operation with " (count kvs) " keys")
       (when-not (multi-key-capable? store)
         (throw (js/Error. "Store does not support multi-key operations")))
-      (-multi-assoc store kvs meta-update opts))))
+      (go-try-
+       (let [result (<?- (-multi-assoc store kvs meta-update opts))]
+         (invoke-write-hooks! store {:api-op :multi-assoc
+                                     :kvs kvs})
+         result)))))
 
 (defn dissoc
   "Removes an entry from the store. "
@@ -234,7 +311,11 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<?- (-dissoc store key opts))))))
+                (let [result (<?- (-dissoc store key opts))]
+                  (when result
+                    (invoke-write-hooks! store {:api-op :dissoc
+                                                :key key}))
+                  result)))))
 
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
@@ -338,7 +419,11 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (<?- (-bassoc store key (partial meta-update key :binary) val opts))))))
+                (let [result (<?- (-bassoc store key (partial meta-update key :binary) val opts))]
+                  (invoke-write-hooks! store {:api-op :bassoc
+                                              :key key
+                                              :value val})
+                  result)))))
 
 (defn keys
   "Return a channel that will yield all top-level keys currently in the store."

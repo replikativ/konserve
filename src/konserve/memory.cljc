@@ -5,10 +5,10 @@
             [konserve.protocols :refer [PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
-                                        PAssocSerializers]]
+                                        PAssocSerializers PWriteHookStore]]
             [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
 
-(defrecord MemoryStore [state read-handlers write-handlers locks]
+(defrecord MemoryStore [state read-handlers write-handlers locks write-hooks]
   PEDNKeyValueStore
   (-exists? [_ key opts]
     (let [{:keys [sync?]} opts]
@@ -112,12 +112,17 @@
                                      old-state
                                      kvs)))
                     ;; Return a map of keys to success status
-                    (into {} (map (fn [[k _]] [k true]) kvs)))))))
+                    (into {} (map (fn [[k _]] [k true]) kvs))))))
+
+  PWriteHookStore
+  (-get-write-hooks [_] write-hooks)
+  (-set-write-hooks! [this hooks-atom]
+    (assoc this :write-hooks hooks-atom)))
 
 #?(:clj
    (defmethod print-method MemoryStore
      [^MemoryStore store writer]
-     (.write ^java.io.StringWriter writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
+     (.write ^java.io.Writer writer (str "MemoryStore[\"" (.hasheq store) "\"]"))))
 
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and
@@ -129,5 +134,6 @@
          (map->MemoryStore {:state init-atom
                             :read-handlers (atom {})
                             :write-handlers (atom {})
-                            :locks (atom {})})]
+                            :locks (atom {})
+                            :write-hooks (atom {})})]
      (if (:sync? opts) store (go store)))))

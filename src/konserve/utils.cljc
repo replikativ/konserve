@@ -30,6 +30,15 @@
   (and (satisfies? protocols/PMultiKeyEDNValueStore store)
        (protocols/-supports-multi-key? store)))
 
+(defn write-hooks-capable?
+  "Checks whether the store supports write hooks.
+
+   This function is used by the high-level API and compliance tests to determine
+   if a store supports the PWriteHookStore protocol."
+  [store]
+  (and (satisfies? protocols/PWriteHookStore store)
+       (some? (protocols/-get-write-hooks store))))
+
 (defmacro async+sync
   [sync? async->sync async-code]
   (let [async->sync (if (symbol? async->sync)

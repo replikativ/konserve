@@ -44,9 +44,23 @@
     "For the JVM we use streams, while for JavaScript we return the value for now.")
   (-deserialize [this read-handlers input-stream]))
 
+(defprotocol PWriteHookStore
+  "Protocol for stores that support write hooks.
+   Write hooks are callbacks invoked after successful write operations.
+   Stores just need to hold the hooks atom - invocation happens at the API layer (konserve.core)."
+  (-get-write-hooks [this]
+    "Returns the write-hooks atom containing a map of {hook-id hook-fn}, or nil if not supported.")
+  (-set-write-hooks! [this hooks-atom]
+    "Set the write-hooks atom. Returns the modified store."))
+
 ;; Default implementations for Object
 
 (extend-protocol PMultiKeySupport
   #?(:clj Object :cljs default)
   (-supports-multi-key? [_] false))
+
+(extend-protocol PWriteHookStore
+  #?(:clj Object :cljs default)
+  (-get-write-hooks [_] nil)
+  (-set-write-hooks! [this _] this))
 
