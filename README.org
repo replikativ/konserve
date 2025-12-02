@@ -66,6 +66,46 @@ macros that properly handle the errors. =<?= needs to check for an exception and
 rethrow and =go-try= needs to catch and pass it along as a return value such
 that it does not get lost.
 
+*** Write Hooks
+:PROPERTIES:
+:CUSTOM_ID: h:c3d7f8a2-9e1b-4d5c-a012-3b4e5f6a7c8d
+:END:
+
+Konserve supports write hooks that are invoked after every successful write
+operation. This enables reactive patterns like store synchronization, change
+logging, or triggering side effects without wrapping the store.
+
+#+BEGIN_SRC clojure
+  (require '[konserve.core :as k]
+           '[konserve.memory :refer [new-mem-store]])
+
+  (def store (new-mem-store (atom {}) {:sync? true}))
+
+  ;; Register a hook to log all writes
+  (k/add-write-hook! store ::my-logger
+    (fn [{:keys [api-op key value]}]
+      (println "Write:" api-op key "->" value)))
+
+  ;; Writes now trigger the hook
+  (k/assoc-in store [:user] {:name "Alice"} {:sync? true})
+  ;; Prints: Write: :assoc-in :user -> {:name "Alice"}
+
+  ;; Remove hook when done
+  (k/remove-write-hook! store ::my-logger)
+#+END_SRC
+
+The hook function receives a map with these keys:
+- =:api-op= - The operation (=:assoc-in=, =:update-in=, =:dissoc=, =:bassoc=, =:multi-assoc=)
+- =:key= - The top-level key being written
+- =:key-vec= - Full key path (for =assoc-in= / =update-in=)
+- =:value= - The value written
+- =:old-value= - Previous value (for update operations)
+- =:kvs= - Map of key->value (for =multi-assoc=)
+
+Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
+across all store backends. Stores must implement the =PWriteHookStore= protocol;
+the built-in memory store and default file store both support hooks.
+
 ** Usage
    :PROPERTIES:
    :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
