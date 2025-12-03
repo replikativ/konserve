@@ -13,7 +13,7 @@
    [konserve.protocols :as kp]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
-   [taoensso.timbre :refer [info trace]])
+   [taoensso.timbre :refer [info debug]])
   (:import
    [java.io ByteArrayInputStream FileInputStream Closeable]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
@@ -240,7 +240,7 @@
              (<?- ch)
              (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
        (catch Exception e
-         (trace "write-binary error: " e)
+         (debug "write-binary error: " e)
          e)
        (finally
          (.close ^Closeable bis)))))
@@ -250,8 +250,13 @@
           buffer (ByteBuffer/allocate header-size)]
       (.read this buffer 0 header-size
              (proxy [CompletionHandler] []
-               (completed [a b]
-                 (put! ch (.array buffer)))
+               (completed [len _res]
+                 (put! ch
+                       (if-not (or (= 20 len) (= 8 len))
+                         (do (debug "Header size does not match." len)
+                             (ex-info "Header size does not match." {:type :header-size-does-not-match
+                                                                     :length len}))
+                         (.array buffer))))
                (failed [t _att]
                  (put! ch (ex-info "Could not read key."
                                    (assoc msg :exception t))))))
@@ -309,7 +314,7 @@
                                       ch)))
                     :size         total-size}))
        (catch Exception e
-         (trace "read-binary error: " e)
+         (debug "read-binary error: " e)
          e)))))
 
 (extend-type FileChannel
@@ -346,7 +351,10 @@
   (-read-header [this _env]
     (let [buffer (ByteBuffer/allocate header-size)
           len (.read this buffer 0)]
-      (assert (or (= 20 len) (= 8 len)) (str "Header size does not match. Length: " len))
+      (when-not (or (= 20 len) (= 8 len))
+        (debug "Header size does not match." len)
+        (throw (ex-info "Header size does not match." {:type :header-size-does-not-match
+                                                       :length len})))
       (.array buffer)))
   (-read-meta [this meta-size env]
     (let [{:keys [header-size]} env
