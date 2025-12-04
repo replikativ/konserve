@@ -8,7 +8,10 @@
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
-            [konserve.tests.serializers :as st]))
+            [konserve.tests.serializers :as st]
+            [konserve.tests.tiered :as tiered-tests]
+            [konserve.memory :as memory]
+            [konserve.tiered :as tiered]))
 
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"
@@ -30,6 +33,53 @@
         store  (<!! (connect-fs-store folder :config {:lock-blob? false}))]
     (testing "Compliance test without file locking."
       (compliance-test store))))
+
+(defn create-tiered-stores [folder]
+  (delete-store folder)
+  {:frontend (<!! (memory/new-mem-store))
+   :backend (<!! (connect-fs-store folder))})
+
+(deftest tiered-store-filestore-backend-test
+  (testing "Tiered Store with Filestore Backend"
+    (let [folder "/tmp/konserve-tiered-fs-test"]
+
+      (testing "Compliance (Async)"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-tiered-compliance-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Compliance (Sync)"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (tiered-tests/test-tiered-compliance-sync frontend backend)
+          (delete-store folder)))
+
+      (testing "Write Policies"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-write-policies-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Read Policies"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-read-policies-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Key Operations"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-key-operations-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Binary Operations"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-binary-operations-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Sync on Connect"
+        (let [{:keys [frontend backend]} (create-tiered-stores folder)]
+          (<!! (tiered-tests/test-sync-on-connect-async frontend backend))
+          (delete-store folder)))
+
+      (testing "Error Handling"
+        (tiered-tests/test-error-handling nil nil)))))
 
 (deftest binary-polymorhism-test
   (testing "Test storage of different binary input formats."

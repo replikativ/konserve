@@ -124,7 +124,64 @@
            (let [result (<!! (k/multi-dissoc store [:multi3 :multi4 :nonexistent3] opts))]
              (is (= result {:multi3 true :multi4 true :nonexistent3 false}))
              (is (= nil (<!! (k/get store :multi3 nil opts))))
-             (is (= nil (<!! (k/get store :multi4 nil opts))))))))))
+             (is (= nil (<!! (k/get store :multi4 nil opts)))))))
+
+      ;; Optional test for write hooks - runs if store supports it
+       (when (utils/write-hooks-capable? store)
+         (testing "Testing write hooks"
+           (let [hook-events (atom [])]
+            ;; Register a hook that captures events
+             (k/add-write-hook! store ::test-hook
+                                (fn [event]
+                                  (swap! hook-events conj event)))
+
+            ;; Test assoc-in triggers hook
+             (<!! (k/assoc-in store [:hook-test] {:value 42} opts))
+             (is (= 1 (count @hook-events)))
+             (is (= :assoc-in (:api-op (first @hook-events))))
+             (is (= :hook-test (:key (first @hook-events))))
+             (is (= {:value 42} (:value (first @hook-events))))
+             (is (= [:hook-test] (:key-vec (first @hook-events))))
+
+            ;; Test update-in triggers hook
+             (<!! (k/update-in store [:hook-test :value] inc opts))
+             (is (= 2 (count @hook-events)))
+             (is (= :update-in (:api-op (second @hook-events))))
+             (is (= :hook-test (:key (second @hook-events))))
+             (is (= [:hook-test :value] (:key-vec (second @hook-events))))
+
+            ;; Test dissoc triggers hook
+             (<!! (k/dissoc store :hook-test opts))
+             (is (= 3 (count @hook-events)))
+             (is (= :dissoc (:api-op (nth @hook-events 2))))
+             (is (= :hook-test (:key (nth @hook-events 2))))
+
+            ;; Test bassoc triggers hook
+             (<!! (k/bassoc store :hook-bin (byte-array [1 2 3]) opts))
+             (is (= 4 (count @hook-events)))
+             (is (= :bassoc (:api-op (nth @hook-events 3))))
+             (is (= :hook-bin (:key (nth @hook-events 3))))
+
+            ;; Test multi-assoc triggers hook (if supported)
+             (when (utils/multi-key-capable? store)
+               (<!! (k/multi-assoc store {:hook-m1 1 :hook-m2 2} opts))
+               (is (= 5 (count @hook-events)))
+               (is (= :multi-assoc (:api-op (nth @hook-events 4))))
+               (is (= {:hook-m1 1 :hook-m2 2} (:kvs (nth @hook-events 4))))
+              ;; Clean up multi-assoc keys
+               (<!! (k/dissoc store :hook-m1 opts))
+               (<!! (k/dissoc store :hook-m2 opts)))
+
+            ;; Test removing hook - should stop receiving events
+             (k/remove-write-hook! store ::test-hook)
+             (let [count-before (count @hook-events)]
+               (<!! (k/assoc-in store [:hook-after-remove] "test" opts))
+               (is (= count-before (count @hook-events))
+                   "No new events after hook removal"))
+
+            ;; Clean up
+             (<!! (k/dissoc store :hook-bin opts))
+             (<!! (k/dissoc store :hook-after-remove opts))))))))
 
 (defn async-compliance-test [store]
   (go

@@ -10,9 +10,11 @@
    [konserve.protocols :refer [PEDNKeyValueStore -exists?
                                PBinaryKeyValueStore
                                -serialize -deserialize
+                               PAssocSerializers
                                PKeyIterable
                                PMultiKeySupport
-                               PMultiKeyEDNValueStore]]
+                               PMultiKeyEDNValueStore
+                               PWriteHookStore]]
    [konserve.impl.storage-layout :refer [-atomic-move -create-store
                                          -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
@@ -366,7 +368,7 @@
        :processed-pairs results}))))
 
 (defrecord DefaultStore [version backing serializers default-serializer compressor encryptor
-                         read-handlers write-handlers buffer-size locks config]
+                         read-handlers write-handlers buffer-size locks config write-hooks]
   PEDNKeyValueStore
   (-exists? [_ key env]
     (async+sync
@@ -415,7 +417,8 @@
                                  :key  key}})))
 
   (-assoc-in [this key-vec meta-up val opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync?]} opts
+          key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
                      :operation  :write-edn
@@ -430,10 +433,11 @@
                      :buffer-size buffer-size
                      :overwrite? (empty? (rest key-vec))
                      :msg        {:type :write-edn-error
-                                  :key  (first key-vec)}})))
+                                  :key  key}})))
 
   (-update-in [this key-vec meta-up up-fn opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync?]} opts
+          key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
                      :operation  :write-edn
@@ -447,7 +451,7 @@
                      :sync? sync?
                      :buffer-size buffer-size
                      :msg        {:type :write-edn-error
-                                  :key  (first key-vec)}})))
+                                  :key  key}})))
   (-dissoc [_ key opts]
     (delete-blob backing
                  {:key-vec  [key]
@@ -494,6 +498,10 @@
                      :buffer-size buffer-size
                      :msg        {:type :write-binary-error
                                   :key  key}})))
+
+  PAssocSerializers
+  (-assoc-serializers [this serializers]
+    (assoc this :serializers serializers))
 
   PKeyIterable
   (-keys [this opts]
@@ -572,7 +580,12 @@
           ;; Map results back from store-keys to original keys
           (into {} (map (fn [key store-key]
                           [key (get result store-key false)])
-                        keys store-keys))))))))
+                        keys store-keys)))))))
+
+  PWriteHookStore
+  (-get-write-hooks [_] write-hooks)
+  (-set-write-hooks! [this hooks-atom]
+    (assoc this :write-hooks hooks-atom)))
 
 (defn connect-default-store
   "Create general store in given base of backing store."
@@ -610,5 +623,6 @@
                                                      :write-handlers      write-handlers
                                                      :buffer-size         buffer-size
                                                      :locks               (atom {})
-                                                     :config              complete-config})]
+                                                     :config              complete-config
+                                                     :write-hooks         (atom {})})]
           store))))))

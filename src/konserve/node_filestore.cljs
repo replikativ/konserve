@@ -218,7 +218,7 @@
                                 :start (+ meta-size storage-layout/header-size)
                                 :autoClose false}
                        _readable-fired? (atom false)
-                       rstream (fs.createReadStream nil opts)]
+                       rstream ^fs.ReadStream (fs.createReadStream nil opts)]
                    (.on rstream "readable"
                         (fn []
                           (when-not @_readable-fired?
@@ -337,8 +337,8 @@
 (defn check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
   [^string base]
-  (let [f         (io/file base)
-        test-file (io/file (path.join base (str (random-uuid))))]
+  (let [f         ^fs.File (io/file base)
+        test-file ^fs.File (io/file (path.join base (str (random-uuid))))]
     (when-not (.exists f)
       (.mkdir f))
     (when-not (.createNewFile test-file)
@@ -349,7 +349,7 @@
 (defn store-exists?
   "Check if underlying store already exists."
   [^string base]
-  (let [f (io/file base)]
+  (let [f ^fs.File (io/file base)]
     (if (.exists f)
       (do (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
           true)
