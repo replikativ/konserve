@@ -42,7 +42,7 @@
 (deftest tiered-store-filestore-backend-test
   (testing "Tiered Store with Filestore Backend"
     (let [folder "/tmp/konserve-tiered-fs-test"]
-      
+
       (testing "Compliance (Async)"
         (let [{:keys [frontend backend]} (create-tiered-stores folder)]
           (<!! (tiered-tests/test-tiered-compliance-async frontend backend))

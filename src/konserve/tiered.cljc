@@ -320,21 +320,21 @@
                      result)))))
 
   (-multi-dissoc [_this keys-to-remove opts]
-                 (trace "tiered multi-dissoc operation with" (count keys-to-remove) "keys")
-                 (when-not (and (multi-key-capable? frontend-store)
-                                (multi-key-capable? backend-store))
-                   (throw (ex-info "Both stores must support multi-key operations for tiered multi-dissoc"
-                                   {:frontend-supports (multi-key-capable? frontend-store)
-                                    :backend-supports (multi-key-capable? backend-store)})))
-                 (async+sync (:sync? opts)
-                             *default-sync-translation*
-                             (go-try-
-                              (let [backend-result (<?- (-multi-dissoc backend-store keys-to-remove opts))]
-                                (try
-                                  (<?- (-multi-dissoc frontend-store keys-to-remove opts))
-                                  (catch #?(:clj Exception :cljs js/Error) e
-                                    (warn "Frontend multi-dissoc failed" {:keys keys-to-remove :error e})))
-                                backend-result)))))
+    (trace "tiered multi-dissoc operation with" (count keys-to-remove) "keys")
+    (when-not (and (multi-key-capable? frontend-store)
+                   (multi-key-capable? backend-store))
+      (throw (ex-info "Both stores must support multi-key operations for tiered multi-dissoc"
+                      {:frontend-supports (multi-key-capable? frontend-store)
+                       :backend-supports (multi-key-capable? backend-store)})))
+    (async+sync (:sync? opts)
+                *default-sync-translation*
+                (go-try-
+                 (let [backend-result (<?- (-multi-dissoc backend-store keys-to-remove opts))]
+                   (try
+                     (<?- (-multi-dissoc frontend-store keys-to-remove opts))
+                     (catch #?(:clj Exception :cljs js/Error) e
+                       (warn "Frontend multi-dissoc failed" {:keys keys-to-remove :error e})))
+                   backend-result)))))
 
 ;; Constructor function following konserve patterns
 (defn connect-tiered-store

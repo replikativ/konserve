@@ -54,7 +54,7 @@
       ;; Clean up test key from previous test if stores are reused, though usually new stores are passed
       (<?- (k/dissoc frontend-store :test-key))
       (<?- (k/dissoc backend-store :test-key))
-      
+
       (let [store (<?- (tiered/connect-tiered-store frontend-store backend-store
                                                     :write-policy :write-around))]
         (<?- (k/assoc-in store [:test-key] {:value 44}))
@@ -119,8 +119,8 @@
 
     (let [tiered-store (<?- (tiered/connect-tiered-store frontend-store backend-store))
           sync-result (<?- (tiered/sync-on-connect tiered-store
-                                                  tiered/populate-missing-strategy
-                                                  {:sync? false}))]
+                                                   tiered/populate-missing-strategy
+                                                   {:sync? false}))]
 
       (is (= 2 (:synced-keys sync-result)))
       (is (= 0 (:frontend-keys sync-result)))
