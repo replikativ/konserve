@@ -6,11 +6,11 @@
             [konserve.memory :as memory]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
-                                                      -keys -multi-assoc -assoc-serializers
+                                                      -keys -multi-assoc -multi-dissoc -assoc-serializers
                                                       PEDNKeyValueStore PBinaryKeyValueStore
                                                       PKeyIterable PAssocSerializers PMultiKeySupport
                                                       PMultiKeyEDNValueStore]]
-            [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
+            [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace warn debug]]))
@@ -21,7 +21,7 @@
 ;; Write policies
 (def write-policies #{:write-through :write-around})
 
-;; Read policies  
+;; Read policies
 (def read-policies #{:frontend-first :frontend-only})
 
 ;; Default sync strategies
@@ -136,6 +136,10 @@
                            ;; Populate frontend asynchronously (fire-and-forget)
                            (go (try
                                  (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result opts))
+                                 (invoke-write-hooks! frontend-store {:api-op :assoc-in
+                                                                      :key (first key-vec)
+                                                                      :key-vec key-vec
+                                                                      :value backend-result})
                                  (catch #?(:clj Exception :cljs js/Error) e
                                    (debug "Async frontend population failed" {:key key-vec :error e})))))
                          (if (not= backend-result ::missing)
@@ -307,30 +311,47 @@
 
                    :write-around
                    (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))]
-                     ;; Invalidate all affected keys from frontend/ubc/cs/research/plai-scratch/
+                     ;; Invalidate all affected keys from frontend
                      (go (try
                            (doseq [k (clojure.core/keys kvs)]
                              (<?- (-dissoc frontend-store k opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (warn "Frontend invalidation failed" {:kvs-keys (clojure.core/keys kvs) :error e}))))
-                     result))))))
+                     result)))))
+
+  (-multi-dissoc [_this keys-to-remove opts]
+                 (trace "tiered multi-dissoc operation with" (count keys-to-remove) "keys")
+                 (when-not (and (multi-key-capable? frontend-store)
+                                (multi-key-capable? backend-store))
+                   (throw (ex-info "Both stores must support multi-key operations for tiered multi-dissoc"
+                                   {:frontend-supports (multi-key-capable? frontend-store)
+                                    :backend-supports (multi-key-capable? backend-store)})))
+                 (async+sync (:sync? opts)
+                             *default-sync-translation*
+                             (go-try-
+                              (let [backend-result (<?- (-multi-dissoc backend-store keys-to-remove opts))]
+                                (try
+                                  (<?- (-multi-dissoc frontend-store keys-to-remove opts))
+                                  (catch #?(:clj Exception :cljs js/Error) e
+                                    (warn "Frontend multi-dissoc failed" {:keys keys-to-remove :error e})))
+                                backend-result)))))
 
 ;; Constructor function following konserve patterns
 (defn connect-tiered-store
   "Create a tiered store with frontend and backend stores.
-   
+
    The backend store is the authoritative source of truth for durability.
    The frontend store acts as a performance cache layer.
-   
+
    Options:
    - :write-policy      #{:write-through :write-around} (default :write-through)
    - :read-policy       #{:frontend-first :frontend-only} (default :frontend-first)
    - :sync?             Boolean for synchronous/asynchronous operation (default false)
-  
+
    Write policies:
    - :write-through  Write to backend, then frontend synchronously
    - :write-around   Write only to backend, invalidate frontend
-   
+
    Read policies:
    - :frontend-first Check frontend first, fallback to backend (populates frontend)
    - :frontend-only  Only read from frontend."
