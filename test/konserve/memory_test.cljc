@@ -5,7 +5,8 @@
                                               async-compliance-test]]
             [konserve.memory :refer [new-mem-store map->MemoryStore]]
             [konserve.tests.cache :as ct]
-            [konserve.tests.gc :as gct]))
+            [konserve.tests.gc :as gct]
+            [konserve.tests.tiered :as tiered-tests]))
 
 (defn connect-mem-store
   [init-atom & {:as params opts :opts}]
@@ -20,6 +21,92 @@
 #?(:clj
    (deftest memory-store-compliance-test
      (compliance-test (<!! (new-mem-store)))))
+
+#!============
+#! Tiered Store tests (Memory + Memory)
+
+(defn create-tiered-mem-stores []
+  #?(:clj
+     {:frontend (<!! (new-mem-store))
+      :backend (<!! (new-mem-store))}
+     :cljs
+     (go
+       {:frontend (<! (new-mem-store (atom {})))
+        :backend (<! (new-mem-store (atom {})))})))
+
+(deftest tiered-store-memory-compliance-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-tiered-compliance-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-tiered-compliance-async frontend backend))
+                (done))))))
+
+#?(:clj
+   (deftest tiered-store-memory-compliance-sync-test
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (tiered-tests/test-tiered-compliance-sync frontend backend))))
+
+(deftest tiered-store-memory-write-policies-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-write-policies-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-write-policies-async frontend backend))
+                (done))))))
+
+(deftest tiered-store-memory-read-policies-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-read-policies-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-read-policies-async frontend backend))
+                (done))))))
+
+(deftest tiered-store-memory-key-operations-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-key-operations-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-key-operations-async frontend backend))
+                (done))))))
+
+(deftest tiered-store-memory-binary-operations-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-binary-operations-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-binary-operations-async frontend backend))
+                (done))))))
+
+(deftest tiered-store-memory-sync-on-connect-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-sync-on-connect-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-sync-on-connect-async frontend backend))
+                (done))))))
+
+(deftest tiered-store-memory-error-handling-test
+  (tiered-tests/test-error-handling nil nil))
 
 #!============
 #! Cache tests

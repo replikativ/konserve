@@ -39,6 +39,20 @@
   (and (satisfies? protocols/PWriteHookStore store)
        (some? (protocols/-get-write-hooks store))))
 
+(defn invoke-write-hooks!
+  "Invoke all registered write hooks with the operation details.
+   Hooks are called synchronously after a successful write."
+  [store hook-event]
+  (when-let [hooks-atom (protocols/-get-write-hooks store)]
+    (when-let [hooks @hooks-atom]
+      (when (seq hooks)
+        (doseq [[_id hook-fn] hooks]
+          (try
+            (hook-fn hook-event)
+            (catch #?(:clj Exception :cljs js/Error) _e
+              ;; Silently ignore hook errors to avoid breaking writes
+              nil)))))))
+
 (defmacro async+sync
   [sync? async->sync async-code]
   (let [async->sync (if (symbol? async->sync)

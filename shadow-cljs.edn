@@ -9,7 +9,7 @@
   :node-tests ; shadow-cljs release node-tests && node out/node-tests.js
   {:target    :node-test
    :output-to "out/node-tests.js"
-   :ns-regexp "^(?!konserve.indexeddb-test)"
+   :ns-regexp "^(?!konserve.indexeddb-test|konserve.electron-test)"
    :compiler-options {:infer-externs true
                       :externs ["cljs_node_io/externs.js"]
                       :closure-warnings   {:useless-code :off}}}
@@ -19,14 +19,14 @@
   ; http://localhost:8021/
   {:target :browser-test
    :test-dir "out/browser-tests"
-   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
+   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore|konserve.electron-test)"
    :compiler-options {:infer-externs true
                       :closure-warnings {:useless-code :off}}}
 
   :ci
   {:target :karma
    :output-to  "target/ci.js"
-   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore)"
+   :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore|konserve.electron-test)"
    :compiler-options {:infer-externs true
                       :compiler-options {:optimizations :advanced}
                       :closure-warnings {:useless-code :off}}}}}

@@ -6,7 +6,7 @@
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks]]
-            [konserve.utils :refer [meta-update multi-key-capable? #?(:clj async+sync) *default-sync-translation*]
+            [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.impl.defaults :as defaults]
@@ -60,20 +60,6 @@
   (when-let [hooks (-get-write-hooks store)]
     (swap! hooks clojure.core/dissoc hook-id))
   store)
-
-(defn- invoke-write-hooks!
-  "Invoke all registered write hooks with the operation details.
-   Hooks are called synchronously after a successful write."
-  [store hook-event]
-  (when-let [hooks-atom (-get-write-hooks store)]
-    (when-let [hooks @hooks-atom]
-      (when (seq hooks)
-        (doseq [[_id hook-fn] hooks]
-          (try
-            (hook-fn hook-event)
-            (catch #?(:clj Exception :cljs js/Error) _e
-              ;; Silently ignore hook errors to avoid breaking writes
-              nil)))))))
 
 ;; ============================================================================
 ;; Locking utilities

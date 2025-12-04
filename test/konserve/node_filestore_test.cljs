@@ -11,11 +11,15 @@
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
-            [konserve.tests.serializers :as st]))
+            [konserve.tests.serializers :as st]
+            [konserve.tests.tiered :as tiered-tests]
+            [konserve.memory :as memory]))
 
 (def store-path "/tmp/konserve-fs-nodejs-test")
+(def tiered-store-path "/tmp/konserve-tiered-nodefs-test")
 
-(use-fixtures :each {:before #(fs/rm-rf store-path)})
+(use-fixtures :each {:before #(do (fs/rm-rf store-path)
+                                  (fs/rm-rf tiered-store-path))})
 
 (deftest PEDNKeyValueStore-sync-test
   (let [opts {:sync? true}
@@ -223,6 +227,63 @@
                                                    (fn [{:keys [input-stream]}]
                                                      (to-chan! [(.read input-stream)]))))
            (done))))
+
+#!==================
+#! Tiered Store tests
+
+(defn create-tiered-stores []
+  (go
+    (fs/rm-rf tiered-store-path)
+    (let [f-atom (atom {})
+          frontend (<! (memory/new-mem-store f-atom))
+          backend (<! (connect-fs-store tiered-store-path))]
+      {:frontend frontend
+       :backend backend})))
+
+(deftest tiered-store-compliance-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-tiered-compliance-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-write-policies-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-write-policies-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-read-policies-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-read-policies-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-key-operations-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-key-operations-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-binary-operations-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-binary-operations-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-sync-on-connect-test
+  (async done
+         (go
+           (let [{:keys [frontend backend]} (<! (create-tiered-stores))]
+             (<! (tiered-tests/test-sync-on-connect-async frontend backend))
+             (done)))))
+
+(deftest tiered-store-error-handling-test
+  (tiered-tests/test-error-handling nil nil))
 
 #!==================
 #! Encryptor tests

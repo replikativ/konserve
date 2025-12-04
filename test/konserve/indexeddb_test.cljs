@@ -9,8 +9,77 @@
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
-            [konserve.tests.serializers :as st])
+            [konserve.tests.serializers :as st]
+            [konserve.tests.tiered :as tiered-tests]
+            [konserve.memory :as memory])
   (:import [goog userAgent]))
+
+(defn create-tiered-stores [db-name]
+  (go
+    (<! (idb/delete-idb db-name))
+    (let [f-atom (atom {})
+          frontend (<! (memory/new-mem-store f-atom))
+          backend (<! (idb/connect-idb-store db-name))]
+      {:frontend frontend
+       :backend backend
+       :db-name db-name})))
+
+(defn cleanup-tiered-stores [{:keys [backend db-name]}]
+  (go
+    (when (:backing backend)
+      (.close (:backing backend)))
+    (<! (idb/delete-idb db-name))))
+
+(deftest ^:browser tiered-store-compliance-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-comp-test"))]
+             (<! (tiered-tests/test-tiered-compliance-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-write-policies-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-write-test"))]
+             (<! (tiered-tests/test-write-policies-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-read-policies-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-read-test"))]
+             (<! (tiered-tests/test-read-policies-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-key-operations-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-keys-test"))]
+             (<! (tiered-tests/test-key-operations-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-binary-operations-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-binary-test"))]
+             (<! (tiered-tests/test-binary-operations-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-sync-on-connect-test
+  (async done
+         (go
+           (let [stores (<! (create-tiered-stores "tiered-sync-test"))]
+             (<! (tiered-tests/test-sync-on-connect-async (:frontend stores) (:backend stores)))
+             (<! (cleanup-tiered-stores stores))
+             (done)))))
+
+(deftest ^:browser tiered-store-error-handling-test
+  (tiered-tests/test-error-handling nil nil))
 
 (deftest ^:browser lifecycle-test
   (if ^boolean userAgent.GECKO
