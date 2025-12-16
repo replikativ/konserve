@@ -24,7 +24,7 @@
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
                                          PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
-                                        PMultiReadBackingStore -multi-read-blobs
+                                         PMultiReadBackingStore -multi-read-blobs
                                          default-version
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]

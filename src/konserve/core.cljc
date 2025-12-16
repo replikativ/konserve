@@ -239,8 +239,8 @@
    (trace "multi-get operation with " (count keys) " keys")
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
-                    #?(:clj {:store-type (type store)
-                             :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
+                                              #?(:clj {:store-type (type store)
+                                                       :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
@@ -279,8 +279,8 @@
    (trace "multi-assoc operation with " (count kvs) " keys")
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
-                    #?(:clj {:store-type (type store)
-                             :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
+                                              #?(:clj {:store-type (type store)
+                                                       :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
@@ -337,8 +337,8 @@
    (trace "multi-dissoc operation with " (count keys) " keys")
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
-                    #?(:clj {:store-type (type store)
-                             :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
+                                              #?(:clj {:store-type (type store)
+                                                       :reason "Store doesn't implement PMultiKeyEDNValueStore protocol or multi-key support is disabled"}))))
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
