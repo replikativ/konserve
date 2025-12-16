@@ -6,7 +6,7 @@
             [konserve.memory :as memory]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
-                                                      -keys -multi-assoc -multi-dissoc -assoc-serializers
+                                                      -keys -multi-get -multi-assoc -multi-dissoc -assoc-serializers
                                                       PEDNKeyValueStore PBinaryKeyValueStore
                                                       PKeyIterable PAssocSerializers PMultiKeySupport
                                                       PMultiKeyEDNValueStore]]
@@ -45,14 +45,12 @@
               *default-sync-translation*
               (go-try-
                (if (and (multi-key-capable? frontend-store)
+                        (multi-key-capable? backend-store)
                         (> (count keys-to-sync) 1))
-                 ;; Use multi-assoc for efficiency
-                 (let [kvs (loop [[k & r] keys-to-sync
-                                  kvs {}]
-                             (let [v (<?- (-get-in backend-store [k] nil opts))
-                                   kvs (clojure.core/assoc kvs k v)]
-                               (if-not (seq r) kvs (recur r kvs))))]
-                   (<?- (-multi-assoc frontend-store kvs meta-update opts)))
+                 ;; Use multi-get + multi-assoc for maximum efficiency
+                 (let [kvs (<?- (-multi-get backend-store keys-to-sync opts))]
+                   (when (seq kvs)
+                     (<?- (-multi-assoc frontend-store kvs meta-update opts))))
                  ;; Fall back to individual operations
                  (doseq [key keys-to-sync]
                    (let [value (<?- (-get-in backend-store [key] ::not-found opts))]
@@ -334,7 +332,41 @@
                      (<?- (-multi-dissoc frontend-store keys-to-remove opts))
                      (catch #?(:clj Exception :cljs js/Error) e
                        (warn "Frontend multi-dissoc failed" {:keys keys-to-remove :error e})))
-                   backend-result)))))
+                   backend-result))))
+
+  (-multi-get [_this keys opts]
+    (trace "tiered multi-get operation with" (count keys) "keys")
+    (when-not (and (multi-key-capable? frontend-store)
+                   (multi-key-capable? backend-store))
+      (throw (ex-info "Both stores must support multi-key operations for tiered multi-get"
+                      {:frontend-supports (multi-key-capable? frontend-store)
+                       :backend-supports (multi-key-capable? backend-store)})))
+    (async+sync (:sync? opts)
+                *default-sync-translation*
+                (go-try-
+                 (case read-policy
+                   :frontend-first
+                   (let [frontend-result (<?- (-multi-get frontend-store keys opts))
+                         ;; Find keys that were not in frontend (sparse map)
+                         missing-keys (remove (set (clojure.core/keys frontend-result)) keys)]
+                     (if (seq missing-keys)
+                       ;; Some keys missing from frontend, fetch from backend
+                       (let [backend-result (<?- (-multi-get backend-store missing-keys opts))]
+                         ;; Populate frontend asynchronously with found backend values (fire-and-forget)
+                         (when (seq backend-result)
+                           (go (try
+                                 (<?- (-multi-assoc frontend-store backend-result meta-update opts))
+                                 (invoke-write-hooks! frontend-store {:api-op :multi-assoc
+                                                                      :kvs backend-result})
+                                 (catch #?(:clj Exception :cljs js/Error) e
+                                   (debug "Async frontend population failed" {:keys (clojure.core/keys backend-result) :error e})))))
+                         ;; Merge frontend and backend results
+                         (merge frontend-result backend-result))
+                       ;; All keys found in frontend
+                       frontend-result))
+
+                   :frontend-only
+                   (<?- (-multi-get frontend-store keys opts)))))))
 
 ;; Constructor function following konserve patterns
 (defn connect-tiered-store

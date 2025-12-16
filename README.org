@@ -95,12 +95,13 @@ logging, or triggering side effects without wrapping the store.
 #+END_SRC
 
 The hook function receives a map with these keys:
-- =:api-op= - The operation (=:assoc-in=, =:update-in=, =:dissoc=, =:bassoc=, =:multi-assoc=)
+- =:api-op= - The operation (=:assoc-in=, =:update-in=, =:dissoc=, =:bassoc=, =:multi-assoc=, =:multi-dissoc=)
 - =:key= - The top-level key being written
 - =:key-vec= - Full key path (for =assoc-in= / =update-in=)
 - =:value= - The value written
 - =:old-value= - Previous value (for update operations)
 - =:kvs= - Map of key->value (for =multi-assoc=)
+- =:keys= - Collection of keys (for =multi-dissoc=)
 
 Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
 across all store backends. Stores must implement the =PWriteHookStore= protocol;
@@ -260,19 +261,26 @@ Usage:
               [konserve.indexeddb :refer [connect-idb-store]]
               [konserve.core :as k]))
 
-  (go 
+  (go
     (def my-idb-store (<! (connect-idb-store "example-db")))
-    
+
     ;; Regular operations
     (<! (k/assoc-in my-idb-store [:user] {:name "Alice" :age 30}))
     (<! (k/get-in my-idb-store [:user]))
-    
+
     ;; Multi-key atomic operations
-    (<! (k/multi-assoc my-idb-store {:user1 {:name "Alice"} 
-                                     :user2 {:name "Bob"}})))
+    (<! (k/multi-assoc my-idb-store {:user1 {:name "Alice"}
+                                     :user2 {:name "Bob"}}))
+
+    ;; Efficient bulk retrieval - returns sparse map of found keys
+    (<! (k/multi-get my-idb-store [:user1 :user2 :nonexistent]))
+    ;; => {:user1 {:name "Alice"} :user2 {:name "Bob"}}
+
+    ;; Atomic bulk delete
+    (<! (k/multi-dissoc my-idb-store [:user1 :user2])))
 #+END_SRC
 
-The IndexedDB implementation supports atomic multi-key operations through IndexedDB's native transaction model. This means you can write to multiple keys in a single atomic operation - all changes will either succeed or fail together.
+The IndexedDB implementation supports atomic multi-key operations (=multi-get=, =multi-assoc=, =multi-dissoc=) through IndexedDB's native transaction model. All operations in a single call either succeed or fail together. =multi-get= returns a sparse map containing only found keys, which is efficient for bulk retrieval during initialization.
 
 *** External Backends
     :PROPERTIES:
@@ -319,7 +327,9 @@ Read policies:
 - =:frontend-only= - Only read from frontend
 
 The tiered store also supports synchronization between layers and multi-key operations
-when both stores support them.
+(=multi-get=, =multi-assoc=, =multi-dissoc=) when both stores support them. During
+initialization, =multi-get= combined with =multi-assoc= enables efficient bulk sync
+from backend to frontend.
 
 **** Supported backends
 :PROPERTIES:

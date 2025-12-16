@@ -128,6 +128,22 @@
                                       [k (contains? old-state k)])
                                     keys)))))))
 
+  (-multi-get [_ keys opts]
+    (let [{:keys [sync?]} opts]
+      (async+sync sync?
+                  {go do}
+                  (go
+                    ;; Single deref for atomicity, extract multiple keys
+                    (let [current-state @state]
+                      ;; Return sparse map - only found keys with their values
+                      (reduce (fn [result key]
+                                (if-let [entry (get current-state key)]
+                                  (let [[_meta value] entry]
+                                    (assoc result key value))
+                                  result))
+                              {}
+                              keys))))))
+
   PWriteHookStore
   (-get-write-hooks [_] write-hooks)
   (-set-write-hooks! [this hooks-atom]

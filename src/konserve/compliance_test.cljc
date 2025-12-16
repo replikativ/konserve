@@ -124,7 +124,32 @@
            (let [result (<!! (k/multi-dissoc store [:multi3 :multi4 :nonexistent3] opts))]
              (is (= result {:multi3 true :multi4 true :nonexistent3 false}))
              (is (= nil (<!! (k/get store :multi3 nil opts))))
-             (is (= nil (<!! (k/get store :multi4 nil opts)))))))
+             (is (= nil (<!! (k/get store :multi4 nil opts)))))
+
+             ;; Test multi-get with existing keys
+           (<!! (k/multi-assoc store {:multi5 "value5" :multi6 {:nested "data"} :multi7 123} opts))
+           (let [result (<!! (k/multi-get store [:multi5 :multi6 :multi7] opts))]
+             (is (= result {:multi5 "value5" :multi6 {:nested "data"} :multi7 123})))
+
+             ;; Test multi-get with some missing keys (sparse map behavior)
+           (let [result (<!! (k/multi-get store [:multi5 :nonexistent :multi7] opts))]
+             ;; Should only contain found keys
+             (is (= result {:multi5 "value5" :multi7 123}))
+             ;; Verify missing key is not in result
+             (is (not (contains? result :nonexistent))))
+
+             ;; Test multi-get with all missing keys
+           (let [result (<!! (k/multi-get store [:missing1 :missing2 :missing3] opts))]
+             ;; Should return empty map
+             (is (= result {})))
+
+             ;; Test multi-get with empty key list
+           (let [result (<!! (k/multi-get store [] opts))]
+             ;; Should return empty map
+             (is (= result {})))
+
+             ;; Clean up multi-get test keys
+           (<!! (k/multi-dissoc store [:multi5 :multi6 :multi7] opts))))
 
       ;; Optional test for write hooks - runs if store supports it
        (when (utils/write-hooks-capable? store)
@@ -201,4 +226,36 @@
      (<! (k/update-in store [:baz :bar] #(+ % 2 3)))
      (is (= (<! (k/get-in store [:baz :bar])) 48))
      (<! (k/dissoc store :foo))
-     (is (= (<! (k/get-in store [:foo])) nil)))))
+     (is (= (<! (k/get-in store [:foo])) nil))
+
+     ;; Optional test for multi-key operations - runs if store supports it
+     (if (utils/multi-key-capable? store)
+       (do
+         ;; Test multi-assoc
+         (is (= {:multi1 true :multi2 true}
+                (<! (k/multi-assoc store {:multi1 42 :multi2 "value"}))))
+         (is (= 42 (<! (k/get store :multi1))))
+         (is (= "value" (<! (k/get store :multi2))))
+
+         ;; Test multi-get with existing keys
+         (<! (k/multi-assoc store {:multi5 "value5" :multi6 {:nested "data"} :multi7 123}))
+         (is (= {:multi5 "value5" :multi6 {:nested "data"} :multi7 123}
+                (<! (k/multi-get store [:multi5 :multi6 :multi7]))))
+
+         ;; Test multi-get with some missing keys (sparse map)
+         (is (= {:multi5 "value5" :multi7 123}
+                (<! (k/multi-get store [:multi5 :nonexistent :multi7]))))
+
+         ;; Test multi-get with all missing keys
+         (is (= {} (<! (k/multi-get store [:missing1 :missing2]))))
+
+         ;; Test multi-dissoc
+         (is (= {:multi1 true :multi2 true}
+                (<! (k/multi-dissoc store [:multi1 :multi2]))))
+         (is (= nil (<! (k/get store :multi1))))
+         (is (= nil (<! (k/get store :multi2))))
+
+         ;; Clean up
+         (<! (k/multi-dissoc store [:multi5 :multi6 :multi7]))
+         true)
+       true))))

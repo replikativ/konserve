@@ -173,6 +173,15 @@
      Returns a map of store-keys to boolean indicating if the blob existed before deletion.
      Backends must implement this to support multi-key operations."))
 
+(defprotocol PMultiReadBackingStore
+  "Protocol for backing stores that support atomic multi-key reads."
+  (-multi-read-blobs [this store-keys env]
+    "Read multiple blobs atomically in a single operation.
+     store-keys is a sequence of store-key strings to read.
+     Returns a sparse map of {store-key -> blob} for found keys only.
+     Missing keys are excluded from the result map.
+     Backends must implement this to support multi-key read operations."))
+
 (defprotocol PBackingBlob
   "Blob object that is backing a stored value and its metadata."
   (-sync [this env] "Synchronize this object and ensure it is stored. This is not necessary in many stores.")

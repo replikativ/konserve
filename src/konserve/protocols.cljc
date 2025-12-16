@@ -19,6 +19,11 @@
 (defprotocol PMultiKeyEDNValueStore
   "Allows to atomically update multiple key-value pairs with all-or-nothing semantics.
    This is an optional protocol that backends can implement to provide transactional operations."
+  (-multi-get [this keys opts]
+    "Atomically retrieves multiple values by keys.
+     Takes a collection of keys and returns a sparse map containing only found keys.
+     Uses flat keys only (not key-vecs).
+     Returns a map {key -> value} for all found keys. Missing keys are excluded from result.")
   (-multi-assoc [this kvs meta-up-fn opts]
     "Atomically associates multiple key-value pairs with flat keys.
      Takes a map of keys to values and stores them in a single atomic transaction.

@@ -24,6 +24,7 @@
                                          -write-header -write-meta -write-value -write-binary
                                          PBackingLock -release
                                          PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
+                                        PMultiReadBackingStore -multi-read-blobs
                                          default-version
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
@@ -520,7 +521,8 @@
 
   PMultiKeySupport
   (-supports-multi-key? [_]
-    (satisfies? PMultiWriteBackingStore backing))
+    (and (satisfies? PMultiWriteBackingStore backing)
+         (satisfies? PMultiReadBackingStore backing)))
 
   PMultiKeyEDNValueStore
   (-multi-assoc [this kvs meta-up-fn opts]
@@ -581,6 +583,40 @@
           (into {} (map (fn [key store-key]
                           [key (get result store-key false)])
                         keys store-keys)))))))
+
+  (-multi-get [this keys opts]
+    (let [{:keys [sync?]} opts]
+      ;; Check if backing store supports multi-reads
+      (when-not (satisfies? PMultiReadBackingStore backing)
+        (throw (ex-info "Backing store does not support multi-key read operations"
+                        {:store-type (type backing)
+                         :type :not-supported})))
+
+      (async+sync
+       sync? *default-sync-translation*
+       (go-try-
+        ;; Convert keys to store-keys and track the mapping
+        (let [keys-and-store-keys (map (fn [k] [k (key->store-key k)]) keys)
+              store-keys (map second keys-and-store-keys)
+              env (merge opts {:sync? sync?})
+
+              ;; Use backing store's multi-read capability to get blobs
+              store-key-to-blob (<?- (-multi-read-blobs backing store-keys env))]
+
+          ;; Deserialize each blob and build result map (sparse - only found keys)
+          (loop [result {}
+                 pending keys-and-store-keys]
+            (if-let [[key store-key] (first pending)]
+              (if-let [blob (get store-key-to-blob store-key)]
+                ;; Blob exists, deserialize it
+                (let [read-env (assoc env :store-key store-key
+                                      :operation :read-edn
+                                      :config config)
+                      value (<?- (read-blob blob read-handlers serializers read-env))]
+                  (recur (assoc result key value) (rest pending)))
+                ;; Blob doesn't exist, skip this key (sparse map)
+                (recur result (rest pending)))
+              result)))))))
 
   PWriteHookStore
   (-get-write-hooks [_] write-hooks)

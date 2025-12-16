@@ -168,6 +168,23 @@
                (is (= "value2" (<! (k/get store :key2 nil opts))))
                (is (= 42 (<! (k/get store :key3 nil opts)))))
 
+             ;; Test multi-get - retrieve multiple keys at once
+             (let [result (<! (k/multi-get store [:key1 :key2 :key3] opts))]
+               ;; Verify all values were retrieved correctly (sparse map with all found)
+               (is (= {:key1 "value1" :key2 "value2" :key3 42} result)))
+
+             ;; Test multi-get with some missing keys (sparse map behavior)
+             (let [result (<! (k/multi-get store [:key1 :missing-key :key3] opts))]
+               ;; Verify only existing keys are in result
+               (is (= {:key1 "value1" :key3 42} result))
+               ;; Verify missing key is not in result
+               (is (not (contains? result :missing-key))))
+
+             ;; Test multi-get with all missing keys
+             (let [result (<! (k/multi-get store [:missing1 :missing2] opts))]
+               ;; Should return empty map
+               (is (= {} result)))
+
              ;; Clean up
              (<! (.close (:backing store)))
              (<! (idb/delete-idb db-name))

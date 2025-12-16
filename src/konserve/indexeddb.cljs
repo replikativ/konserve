@@ -3,7 +3,7 @@
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
-            [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore]]
+            [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore PMultiReadBackingStore]]
             [konserve.serializers]
             [konserve.protocols :as protocols]
             [konserve.utils :refer-macros [with-promise]]))
@@ -269,6 +269,50 @@
 
 (defn open-backing-blob [db key] (BackingBlob. db key nil nil nil nil))
 
+(defn multi-read-blobs
+  "Execute multiple read operations in a single IndexedDB transaction.
+   Returns a sparse map of {store-key -> BackingBlob} for found keys only.
+   Missing keys are excluded from the result map."
+  [db store-keys]
+  (with-promise out
+    (let [tx (.transaction db #js[""] "readonly")
+          os (.objectStore tx "")
+          errors (atom [])
+          results (atom {})
+          remaining-count (atom (count store-keys))]
+
+      ;; Set up transaction event handlers
+      (set! (.-oncomplete tx)
+            #(if (empty? @errors)
+               (put! out @results)
+               (put! out (ex-info "Error in multi-read transaction"
+                                  {:type :not-supported
+                                   :reason "One or more read operations failed"
+                                   :errors @errors}))))
+
+      (set! (.-onerror tx)
+            #(put! out (ex-info "Transaction failed"
+                                {:type :not-supported
+                                 :reason "IndexedDB transaction error"
+                                 :cause %})))
+
+      ;; Process each key read in the transaction
+      (doseq [store-key store-keys]
+        (let [get-req (.get os store-key)]
+          (set! (.-onsuccess get-req)
+                (fn []
+                  (let [blob (.-result get-req)]
+                    ;; Only include found keys in result (sparse map)
+                    ;; BackingBlob will lazily load the buffer when needed
+                    (when (not (undefined? blob))
+                      (let [backing-blob (BackingBlob. db store-key nil nil nil nil)]
+                        (swap! results assoc store-key backing-blob)))
+                    (swap! remaining-count dec))))
+          (set! (.-onerror get-req)
+                (fn [err]
+                  (swap! errors conj {:key store-key :error err})
+                  (swap! remaining-count dec))))))))
+
 (defrecord IndexedDBackingStore [db-name db]
   Object
   ;; needed to unref conn before can cycle database construction
@@ -356,7 +400,12 @@
     (multi-write-blobs db store-key-values))
   (-multi-delete-blobs [_this store-keys env]
     (assert (not (:sync? env)))
-    (multi-delete-blobs db store-keys)))
+    (multi-delete-blobs db store-keys))
+
+  PMultiReadBackingStore
+  (-multi-read-blobs [_this store-keys env]
+    (assert (not (:sync? env)))
+    (multi-read-blobs db store-keys)))
 
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing
