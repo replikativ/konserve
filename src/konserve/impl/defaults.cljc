@@ -98,7 +98,7 @@
         (<?- (-write-meta new-blob meta-arr env))
         (if (= operation :write-binary)
           (<?- (-write-binary new-blob meta-size input env))
-          (let [value-arr            (to-array value)]
+          (let [value-arr (to-array value)]
             (<?- (-write-value new-blob value-arr meta-size env))))
 
         (when (:sync-blob? config)
@@ -113,6 +113,11 @@
         (when (:sync-blob? config)
           (trace "syncing store for " key)
           (<?- (-sync-store backing env)))
+
+        ;; Clean up backup after successful write
+        (when (and (:in-place? config) (not (:no-backup? config)))
+          (trace "deleting backup blob: " backup-store-key " for key " key)
+          (<?- (-delete-blob backing backup-store-key env)))
 
         (if (= operation :write-edn) [old-value value] true)
         (finally

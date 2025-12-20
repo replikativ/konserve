@@ -51,11 +51,14 @@
                  (let [kvs (<?- (-multi-get backend-store keys-to-sync opts))]
                    (when (seq kvs)
                      (<?- (-multi-assoc frontend-store kvs meta-update opts))))
-                 ;; Fall back to individual operations
-                 (doseq [key keys-to-sync]
-                   (let [value (<?- (-get-in backend-store [key] ::not-found opts))]
-                     (when (not= value ::not-found)
-                       (<?- (-assoc-in frontend-store [key] (partial meta-update key :edn) value opts)))))))))
+                 ;; Fall back to individual operations - use loop for proper async waiting
+                 (loop [remaining-keys (seq keys-to-sync)]
+                   (when remaining-keys
+                     (let [key (first remaining-keys)
+                           value (<?- (-get-in backend-store [key] ::not-found opts))]
+                       (when (not= value ::not-found)
+                         (<?- (-assoc-in frontend-store [key] (partial meta-update key :edn) value opts)))
+                       (recur (next remaining-keys)))))))))
 
 (defn perform-sync
   "Perform synchronization between frontend and backend stores."
@@ -86,6 +89,57 @@
   "Optionally perform sync when connecting to store."
   [{:keys [frontend-store backend-store]} sync-strategy opts]
   (perform-sync frontend-store backend-store sync-strategy opts))
+
+(defn sync-keys-to-frontend!
+  "Public API for syncing specific keys from backend to frontend.
+   Used by walk-based sync strategies that discover keys externally."
+  [frontend-store backend-store keys-to-sync opts]
+  (sync-keys-to-frontend frontend-store backend-store keys-to-sync opts))
+
+(defn perform-walk-sync
+  "Sync by walking from root key(s) and discovering reachable keys.
+
+   Arguments:
+   - frontend-store: The frontend (fast) store to sync to
+   - backend-store: The backend (durable) store to sync from
+   - root-keys: Collection of root keys to fetch and walk from
+   - walk-fn: (fn [backend-store root-values opts] -> channel-of-keys)
+              Given the root values, discovers all reachable keys asynchronously.
+              Should return a core.async channel that yields the set of keys to sync.
+   - opts: Options map, :sync? should be false for async backends
+
+   Returns a channel with {:synced-keys count :root-keys count}
+
+   This is useful for tree-structured data where you want to sync only
+   reachable nodes rather than all keys in the store."
+  [frontend-store backend-store root-keys walk-fn opts]
+  (async+sync (:sync? opts)
+              *default-sync-translation*
+              (go-try-
+               (let [;; 1. Fetch all root values from backend
+                     root-values (loop [keys (seq root-keys)
+                                        values {}]
+                                   (if-not keys
+                                     values
+                                     (let [k (first keys)
+                                           v (<?- (-get-in backend-store [k] nil opts))]
+                                       (recur (next keys)
+                                              (if v (clojure.core/assoc values k v) values)))))
+
+                     ;; 2. Walk to discover reachable keys
+                     reachable-keys (if (seq root-values)
+                                      (<?- (walk-fn backend-store root-values opts))
+                                      #{})
+
+                     ;; 3. Combine root keys with reachable keys
+                     all-keys-to-sync (into (set root-keys) reachable-keys)]
+
+                 (when (seq all-keys-to-sync)
+                   (<?- (sync-keys-to-frontend frontend-store backend-store all-keys-to-sync opts)))
+
+                 {:synced-keys (count all-keys-to-sync)
+                  :root-keys (count root-keys)
+                  :reachable-keys (count reachable-keys)}))))
 
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
   PEDNKeyValueStore
@@ -277,9 +331,12 @@
 
   PKeyIterable
   (-keys [_this opts]
-    (trace "tiered keys")
-    ;; Always get keys from backend (source of truth)
-    (-keys backend-store opts))
+    (trace "tiered keys, read-policy:" read-policy)
+    ;; Respect read-policy: frontend-only returns frontend keys only
+    ;; This is critical for performance when frontend has subset of backend keys
+    (case read-policy
+      :frontend-only (-keys frontend-store opts)
+      :frontend-first (-keys backend-store opts)))
 
   PMultiKeySupport
   (-supports-multi-key? [_this]

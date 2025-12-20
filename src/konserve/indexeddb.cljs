@@ -251,7 +251,8 @@
   (-write-header [this header _env]
     (go (set! (.-buf this) nil)
         (set! (.-header this) header)))
-  (-write-meta [this meta-arr _env] (go (set! (.-metadata this) meta-arr)))
+  (-write-meta [this meta-arr _env]
+    (go (set! (.-metadata this) meta-arr)))
   (-write-value [this value-arr _meta-size _env]
     (go (set! (.-value this) value-arr)))
   (-write-binary [this _meta-size blob _env]
@@ -319,10 +320,10 @@
   (close [_] (go (when (some? db) (.close db))))
   storage-layout/PBackingStore
   (-create-blob [_this store-key env]
-    (assert (not (:sync? env)))
+    (assert (not (:sync? env)) (str "-create-blob requires async, got env: " (pr-str env)))
     (go (open-backing-blob db store-key)))
   (-delete-blob [_this key env]
-    (assert (not (:sync? env)))
+    (assert (not (:sync? env)) (str "-delete-blob requires async, got env: " (pr-str env)))
     (let [req (.delete (.objectStore (.transaction db #js[""] "readwrite") "") key)]
       (with-promise out
         (set! (.-onsuccess req) #(close! out))
@@ -332,7 +333,7 @@
                                    :caller 'konserve.indexeddb/-delete-blob}))))))
   (-migratable [_this _key _store-key _env] (go false))
   (-blob-exists? [_this key env]
-    (assert (not (:sync? env)))
+    (assert (not (:sync? env)) (str "-blob-exists? requires async, got env: " (pr-str env)))
     (let [req (.getKey (.objectStore (.transaction db #js[""]) "") key)]
       (with-promise out
         (set! (.-onsuccess req) #(put! out (-> % .-target .-result boolean)))
@@ -341,7 +342,7 @@
                                   {:cause %
                                    :caller 'konserve.indexeddb/-blob-exists?}))))))
   (-keys [_this env]
-    (assert (not (:sync? env)))
+    (assert (not (:sync? env)) (str "-keys requires async, got env: " (pr-str env)))
     (let [req (.getAllKeys (.objectStore (.transaction db #js[""]) ""))]
       (with-promise out
         (set! (.-onsuccess req) #(put! out (-> % .-target .-result)))
@@ -354,10 +355,18 @@
     (with-promise out
       (take! (read-blob db from)
              (fn [res]
-               (if (instance? js/Error res)
+               (cond
+                 ;; Error reading source blob
+                 (instance? js/Error res)
                  (put! out (ex-info "error reading blob from objectStore"
                                     {:cause res
                                      :caller 'konserve.indexeddb/-copy}))
+                 ;; Source blob doesn't exist (nil means key not found)
+                 ;; This is OK for backup copies of new keys - just succeed
+                 (nil? res)
+                 (close! out)
+                 ;; Source blob exists, copy it
+                 :else
                  (take! (write-blob db to res)
                         (fn [?err]
                           (if ?err
@@ -366,7 +375,7 @@
                                                 :caller 'konserve.indexeddb/-copy}))
                             (close! out)))))))))
   (-create-store [this env]
-    (assert (not (:sync? env)))
+    (assert (not (:sync? env)) (str "-create-store requires async, got env: " (pr-str env)))
     (with-promise out
       (take! (connect-to-idb db-name)
              (fn [res]
@@ -478,6 +487,7 @@
                              :write-handlers     (atom {})
                              :config             {:sync-blob? true
                                                   :in-place? true
+                                                  :no-backup? true  ;; IndexedDB is transactional, no backup needed
                                                   :lock-blob? true}}
                             (dissoc params :config))
         backing            (IndexedDBackingStore. db-name nil)]

@@ -45,6 +45,8 @@
                                 (incognito-write-handlers write-handlers))
                                fress/associative-lookup
                                fress/inheritance-lookup)
+                      ;; CLJS fress expects flat {Type fn} format.
+                      ;; Custom handlers must provide this format directly.
                       :cljs (merge custom-write-handlers
                                    (incognito-write-handlers write-handlers)))]
       #?(:clj (let [writer (fress/create-writer bytes :handlers handlers)]
