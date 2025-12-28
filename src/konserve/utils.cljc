@@ -53,8 +53,8 @@
             (catch #?(:clj Exception :cljs js/Error) e
               ;; Log hook errors for debugging but don't break writes
               #?(:clj (timbre/warn e "Write hook error" {:hook-id hook-id
-                                                          :api-op (:api-op hook-event)
-                                                          :key (:key hook-event)})
+                                                         :api-op (:api-op hook-event)
+                                                         :key (:key hook-event)})
                  :cljs (js/console.warn "Write hook error:" hook-id (pr-str e))))))))))
 
 (defmacro async+sync

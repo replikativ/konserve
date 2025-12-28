@@ -5,7 +5,7 @@
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc
-                                                      -assoc-serializers -get-write-hooks]]
+                                                      -assoc-serializers -get-write-hooks -lock-free?]]
             [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
@@ -67,13 +67,13 @@
 
 (defn lock-free?
   "Returns true if the store does not require application-level locking.
-   MVCC stores like LMDB can set :locks to nil to indicate they handle
-   concurrency internally."
-  [{:keys [locks] :as _store}]
-  (nil? locks))
+   MVCC stores like LMDB implement the PLockFreeStore protocol to indicate
+   they handle concurrency internally."
+  [store]
+  (-lock-free? store))
 
-(defn get-lock [{:keys [locks] :as _store} key]
-  (if (nil? locks)
+(defn get-lock [{:keys [locks] :as store} key]
+  (if (lock-free? store)
     ;; For lock-free stores, create a fresh unlocked channel
     ;; This is used by operations that still need locking (assoc-in, update-in)
     (let [c (chan)]
