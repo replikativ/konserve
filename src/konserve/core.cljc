@@ -12,7 +12,7 @@
             [konserve.impl.defaults :as defaults]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
-  #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
+  #?(:cljs (:require-macros [konserve.core :refer [go-locked locked maybe-go-locked maybe-locked]])))
 
 ;; ACID
 
@@ -65,15 +65,29 @@
 ;; Locking utilities
 ;; ============================================================================
 
+(defn lock-free?
+  "Returns true if the store does not require application-level locking.
+   MVCC stores like LMDB can set :locks to nil to indicate they handle
+   concurrency internally."
+  [{:keys [locks] :as _store}]
+  (nil? locks))
+
 (defn get-lock [{:keys [locks] :as _store} key]
-  (or (clojure.core/get @locks key)
-      (let [c (chan)]
-        (put! c :unlocked)
-        (clojure.core/get (swap! locks (fn [old]
-                                         (trace "creating lock for: " key)
-                                         (if (old key) old
-                                             (clojure.core/assoc old key c))))
-                          key))))
+  (if (nil? locks)
+    ;; For lock-free stores, create a fresh unlocked channel
+    ;; This is used by operations that still need locking (assoc-in, update-in)
+    (let [c (chan)]
+      (put! c :unlocked)
+      c)
+    ;; Normal case: get or create persistent lock
+    (or (clojure.core/get @locks key)
+        (let [c (chan)]
+          (put! c :unlocked)
+          (clojure.core/get (swap! locks (fn [old]
+                                           (trace "creating lock for: " key)
+                                           (if (old key) old
+                                               (clojure.core/assoc old key c))))
+                            key)))))
 
 (defn wait [lock]
   #?(:clj (while (not (poll! lock))
@@ -103,6 +117,22 @@
           (trace "releasing go-lock for: " ~key)
           (put! l# :unlocked))))))
 
+;; Optional locking macros - skip locking for lock-free stores (MVCC backends)
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+(defmacro maybe-locked
+  "Like locked, but skips locking if store is lock-free."
+  [store key & code]
+  `(if (lock-free? ~store)
+     (do ~@code)
+     (locked ~store ~key ~@code)))
+
+(defmacro maybe-go-locked
+  "Like go-locked, but skips locking if store is lock-free."
+  [store key & code]
+  `(if (lock-free? ~store)
+     (go-try- ~@code)
+     (go-locked ~store ~key ~@code)))
+
 (defn exists?
   "Checks whether value is in the store."
   ([store key]
@@ -111,7 +141,7 @@
    (trace "exists? on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store key
                 (<?- (-exists? store key opts))))))
 
@@ -126,7 +156,7 @@
    (trace "get-in on key " key-vec)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store (first key-vec)
                 (<?- (-get-in store key-vec not-found opts))))))
 
@@ -151,7 +181,7 @@
    (trace "get-meta on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store key
                 (let [a (<?- (-get-meta store key opts))]
                   (if (some? a)
@@ -208,13 +238,21 @@
                   result)))))
 
 (defn assoc
-  "Associates the key-vec to the value, any missing collections for
- the key-vec (nested maps and vectors) are newly created."
+  "Associates the key to the value. This is a simple top-level overwrite
+   and does not require locking for MVCC stores. For nested paths, use assoc-in."
   ([store key val]
    (assoc store key val {:sync? false}))
   ([store key val opts]
    (trace "assoc on key " key)
-   (assoc-in store [key] val opts)))
+   (async+sync (:sync? opts)
+               *default-sync-translation*
+               (maybe-go-locked
+                store key
+                (let [result (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))]
+                  (invoke-write-hooks! store {:api-op :assoc
+                                              :key key
+                                              :value val})
+                  result)))))
 
 (defn multi-get
   "Atomically retrieves multiple values by keys.
@@ -310,7 +348,7 @@
    (trace "dissoc on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store key
                 (let [result (<?- (-dissoc store key opts))]
                   (when result
@@ -444,7 +482,7 @@
    (trace "bget on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store key
                 (<?- (-bget store key locked-cb opts))))))
 
@@ -457,7 +495,7 @@
    (trace "bassoc on key " key)
    (async+sync (:sync? opts)
                *default-sync-translation*
-               (go-locked
+               (maybe-go-locked
                 store key
                 (let [result (<?- (-bassoc store key (partial meta-update key :binary) val opts))]
                   (invoke-write-hooks! store {:api-op :bassoc

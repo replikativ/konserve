@@ -81,7 +81,8 @@
     go-try- try
     <!- do
     <?- do
-    go-locked locked})
+    go-locked locked
+    maybe-go-locked maybe-locked})
 
 (defmacro with-promise [sym & body]
   `(let [~sym (cljs.core.async/promise-chan)]
