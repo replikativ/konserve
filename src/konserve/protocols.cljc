@@ -63,6 +63,13 @@
   (-set-write-hooks! [this hooks-atom]
     "Set the write-hooks atom. Returns the modified store."))
 
+(defprotocol PLockFreeStore
+  "Protocol for stores that handle concurrency internally (e.g., MVCC backends like LMDB).
+   These stores don't need application-level locking for read/write operations."
+  (-lock-free? [this]
+    "Returns true if the store handles concurrency internally and doesn't need
+     application-level locking. Default is false for all stores."))
+
 ;; Default implementations for Object
 
 (extend-protocol PMultiKeySupport
@@ -73,4 +80,8 @@
   #?(:clj Object :cljs default)
   (-get-write-hooks [_] nil)
   (-set-write-hooks! [this _] this))
+
+(extend-protocol PLockFreeStore
+  #?(:clj Object :cljs default)
+  (-lock-free? [_] false))
 
