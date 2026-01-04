@@ -32,14 +32,14 @@
          base-path# "/test-store"
          ;; Create the base directory in Jimfs
          _# (Files/createDirectories
-              (.getPath jimfs# base-path# (into-array String []))
-              (into-array java.nio.file.attribute.FileAttribute []))
+             (.getPath jimfs# base-path# (into-array String []))
+             (into-array java.nio.file.attribute.FileAttribute []))
          ;; Note: Jimfs doesn't support AsynchronousFileChannel, so always use sync
          ~store-sym (fs/connect-fs-store
-                      base-path#
-                      :filesystem jimfs#
-                      :opts {:sync? true}
-                      ~@(mapcat identity opts))]
+                     base-path#
+                     :filesystem jimfs#
+                     :opts {:sync? true}
+                     ~@(mapcat identity opts))]
      (try
        ~@body
        (finally
@@ -80,12 +80,12 @@
     (let [jimfs (create-jimfs)
           base-path "/sync-store"
           _ (Files/createDirectories
-              (.getPath jimfs base-path (into-array String []))
-              (into-array java.nio.file.attribute.FileAttribute []))
+             (.getPath jimfs base-path (into-array String []))
+             (into-array java.nio.file.attribute.FileAttribute []))
           store (fs/connect-fs-store
-                  base-path
-                  :filesystem jimfs
-                  :opts {:sync? true})]
+                 base-path
+                 :filesystem jimfs
+                 :opts {:sync? true})]
       (try
         ;; Sync write and read
         (k/assoc store :sync-key {:sync true} {:sync? true})
@@ -259,8 +259,8 @@
 
         ;; Create and connect
         (Files/createDirectories
-          (.getPath jimfs base-path (into-array String []))
-          (into-array java.nio.file.attribute.FileAttribute []))
+         (.getPath jimfs base-path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
 
         ;; Now exists
         (is (fs/store-exists? jimfs base-path))
@@ -275,13 +275,13 @@
       (try
         ;; Create store
         (Files/createDirectories
-          (.getPath jimfs base-path (into-array String []))
-          (into-array java.nio.file.attribute.FileAttribute []))
+         (.getPath jimfs base-path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
 
         (let [store (fs/connect-fs-store
-                      base-path
-                      :filesystem jimfs
-                      :opts {:sync? true})]
+                     base-path
+                     :filesystem jimfs
+                     :opts {:sync? true})]
           ;; Write some data
           (k/assoc store :key {:v 1} {:sync? true})
 
