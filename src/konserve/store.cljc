@@ -6,7 +6,7 @@
 
    Built-in backends:
    - :memory - In-memory store
-   - :file - File-based store (JVM only)
+   - :file - File-based store (JVM and Node.js)
    - :indexeddb - Browser IndexedDB store (ClojureScript only)
 
    External backends (register via require):
@@ -30,6 +30,7 @@
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
             #?(:clj [konserve.filestore])
+            #?(:cljs [konserve.node-filestore])
             #?(:cljs [konserve.indexeddb :as idb])))
 
 ;; =============================================================================
@@ -103,28 +104,30 @@
   [_config _store]
   nil)
 
-;; ===== :file Backend (JVM only) =====
+;; ===== :file Backend (JVM and Node.js) =====
 
-#?(:clj
-   (do
-     (defmethod connect-store :file
-       [{:keys [path config filesystem] :as all-config}]
-       (konserve.filestore/connect-fs-store path
-                                            :config config
-                                            :filesystem filesystem
-                                            :opts (:opts all-config)))
+(defmethod connect-store :file
+  [{:keys [path config filesystem] :as all-config}]
+  #?(:clj  (konserve.filestore/connect-fs-store path
+                                                :config config
+                                                :filesystem filesystem
+                                                :opts (:opts all-config))
+     :cljs (konserve.node-filestore/connect-fs-store path
+                                                     :config config
+                                                     :opts (:opts all-config))))
 
-     (defmethod empty-store :file
-       [config]
-       (connect-store config))
+(defmethod empty-store :file
+  [config]
+  (connect-store config))
 
-     (defmethod delete-store :file
-       [{:keys [path filesystem]}]
-       (konserve.filestore/delete-store filesystem path))
+(defmethod delete-store :file
+  [{:keys [path filesystem]}]
+  #?(:clj  (konserve.filestore/delete-store filesystem path)
+     :cljs (konserve.node-filestore/delete-store path)))
 
-     (defmethod release-store :file
-       [_config _store]
-       nil)))
+(defmethod release-store :file
+  [_config _store]
+  nil)
 
 ;; ===== :indexeddb Backend (ClojureScript only) =====
 
@@ -156,7 +159,7 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM), :indexeddb (ClojureScript)"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
                "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
@@ -165,7 +168,7 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM), :indexeddb (ClojureScript)"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
                "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
@@ -174,7 +177,7 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM), :indexeddb (ClojureScript)"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
                "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
