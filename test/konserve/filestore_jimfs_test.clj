@@ -1,8 +1,13 @@
 (ns konserve.filestore-jimfs-test
   "Tests for FileStore using Jimfs - Google's in-memory NIO filesystem.
 
-   Jimfs enables testing FileStore's NIO path handling, concurrent access,
-   and error scenarios without touching the real filesystem.
+   Purpose: Verify correct usage of Java NIO filesystem APIs.
+
+   Jimfs enables testing scenarios that are hard on real filesystems:
+   - Multiple store instances on same path (file locking behavior)
+   - Rapid store lifecycle without OS cleanup delays
+   - Isolated filesystem instances (no cross-contamination)
+   - Path handling edge cases
 
    Note: Jimfs only supports synchronous FileChannel, not AsynchronousFileChannel,
    so all tests use sync mode."
@@ -11,7 +16,8 @@
             [konserve.core :as k])
   (:import [com.google.common.jimfs Jimfs Configuration]
            [java.nio.file Files FileSystem]
-           [java.util.concurrent CountDownLatch Executors TimeUnit]))
+           [java.util.concurrent CountDownLatch Executors TimeUnit CyclicBarrier]
+           [java.util.concurrent.atomic AtomicInteger AtomicBoolean]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -22,85 +28,40 @@
   ^FileSystem []
   (Jimfs/newFileSystem (Configuration/unix)))
 
+(defn create-store-path
+  "Create a directory in Jimfs and return a connected store."
+  [^FileSystem jimfs ^String path]
+  (Files/createDirectories
+   (.getPath jimfs path (into-array String []))
+   (into-array java.nio.file.attribute.FileAttribute []))
+  (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true}))
+
 (defmacro with-jimfs-store
-  "Execute body with a FileStore backed by Jimfs.
-   Jimfs only supports synchronous FileChannel, not AsynchronousFileChannel,
-   so we always use sync mode.
-   Bindings: [store-sym opts?]"
-  [[store-sym & [opts]] & body]
+  "Execute body with a FileStore backed by Jimfs."
+  [[store-sym] & body]
   `(let [jimfs# (create-jimfs)
-         base-path# "/test-store"
-         ;; Create the base directory in Jimfs
-         _# (Files/createDirectories
-             (.getPath jimfs# base-path# (into-array String []))
-             (into-array java.nio.file.attribute.FileAttribute []))
-         ;; Note: Jimfs doesn't support AsynchronousFileChannel, so always use sync
-         ~store-sym (fs/connect-fs-store
-                     base-path#
-                     :filesystem jimfs#
-                     :opts {:sync? true}
-                     ~@(mapcat identity opts))]
+         ~store-sym (create-store-path jimfs# "/test-store")]
      (try
        ~@body
        (finally
          (.close jimfs#)))))
 
 ;; =============================================================================
-;; Basic Operation Tests
+;; Basic NIO Path Handling
 ;; =============================================================================
 
-(deftest jimfs-basic-operations-test
-  (testing "Basic CRUD operations work on Jimfs"
+(deftest jimfs-basic-roundtrip-test
+  (testing "Basic CRUD roundtrip verifies path operations work"
     (with-jimfs-store [store]
-      ;; Create
       (k/assoc store :key {:value 1} {:sync? true})
       (is (= {:value 1} (k/get store :key nil {:sync? true})))
-
-      ;; Update
-      (k/assoc store :key {:value 2} {:sync? true})
-      (is (= {:value 2} (k/get store :key nil {:sync? true})))
-
-      ;; Delete
       (k/dissoc store :key {:sync? true})
       (is (nil? (k/get store :key nil {:sync? true}))))))
 
-(deftest jimfs-multiple-keys-test
-  (testing "Multiple keys work correctly on Jimfs"
+(deftest jimfs-binary-roundtrip-test
+  (testing "Binary operations use correct NIO channel APIs"
     (with-jimfs-store [store]
-      ;; Write multiple keys
-      (doseq [i (range 10)]
-        (k/assoc store (keyword (str "key-" i)) {:index i} {:sync? true}))
-
-      ;; Read all back
-      (doseq [i (range 10)]
-        (is (= {:index i} (k/get store (keyword (str "key-" i)) nil {:sync? true})))))))
-
-(deftest jimfs-sync-operations-test
-  (testing "Sync operations work on Jimfs"
-    (let [jimfs (create-jimfs)
-          base-path "/sync-store"
-          _ (Files/createDirectories
-             (.getPath jimfs base-path (into-array String []))
-             (into-array java.nio.file.attribute.FileAttribute []))
-          store (fs/connect-fs-store
-                 base-path
-                 :filesystem jimfs
-                 :opts {:sync? true})]
-      (try
-        ;; Sync write and read
-        (k/assoc store :sync-key {:sync true} {:sync? true})
-        (is (= {:sync true} (k/get store :sync-key nil {:sync? true})))
-        (finally
-          (.close jimfs))))))
-
-;; =============================================================================
-;; Binary Data Tests
-;; =============================================================================
-
-(deftest jimfs-binary-operations-test
-  (testing "Binary operations work on Jimfs"
-    (with-jimfs-store [store]
-      (let [data (byte-array [1 2 3 4 5])]
+      (let [data (byte-array (range 256))]
         (k/bassoc store :binary data {:sync? true})
         (let [result (k/bget store :binary
                              (fn [{:keys [input-stream]}]
@@ -114,182 +75,324 @@
                              {:sync? true})]
           (is (= (seq data) (seq result))))))))
 
-(deftest jimfs-large-binary-test
-  (testing "Large binary data works on Jimfs"
-    (with-jimfs-store [store]
-      (let [size 100000
-            data (byte-array (repeatedly size #(unchecked-byte (rand-int 256))))]
-        (k/bassoc store :large-binary data {:sync? true})
-        (let [result (k/bget store :large-binary
-                             (fn [{:keys [input-stream]}]
-                               (let [baos (java.io.ByteArrayOutputStream.)
-                                     buf (byte-array 8192)]
-                                 (loop []
-                                   (let [n (.read input-stream buf)]
-                                     (when (pos? n)
-                                       (.write baos buf 0 n)
-                                       (recur))))
-                                 (.toByteArray baos)))
-                             {:sync? true})]
-          (is (= size (count result)))
-          (is (= (seq data) (seq result))))))))
-
 ;; =============================================================================
-;; Concurrent Access Tests
+;; Multiple Store Instances - Same Path (File Locking)
 ;; =============================================================================
 
-(deftest jimfs-concurrent-writes-test
-  (testing "Concurrent writes work correctly on Jimfs"
+(deftest multiple-stores-same-path-test
+  (testing "Multiple store instances can access same path (tests file locking)"
+    (let [jimfs (create-jimfs)
+          path "/shared-store"]
+      (try
+        (Files/createDirectories
+         (.getPath jimfs path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        (let [store1 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})
+              store2 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+
+          ;; Write from store1, read from store2
+          (k/assoc store1 :from-store1 {:source 1} {:sync? true})
+          (is (= {:source 1} (k/get store2 :from-store1 nil {:sync? true})))
+
+          ;; Write from store2, read from store1
+          (k/assoc store2 :from-store2 {:source 2} {:sync? true})
+          (is (= {:source 2} (k/get store1 :from-store2 nil {:sync? true})))
+
+          ;; Both stores see all keys
+          (is (= 2 (count (k/keys store1 {:sync? true}))))
+          (is (= 2 (count (k/keys store2 {:sync? true})))))
+
+        (finally
+          (.close jimfs))))))
+
+(deftest concurrent-stores-same-key-test
+  (testing "Multiple stores writing to same key tests atomic move"
+    (let [jimfs (create-jimfs)
+          path "/concurrent-store"
+          n-stores 3
+          n-writes 50
+          latch (CountDownLatch. n-stores)
+          executor (Executors/newFixedThreadPool n-stores)
+          successful-writes (AtomicInteger. 0)]
+      (try
+        (Files/createDirectories
+         (.getPath jimfs path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        (dotimes [store-id n-stores]
+          (.submit executor
+                   ^Runnable
+                   (fn []
+                     (try
+                       (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+                         (dotimes [i n-writes]
+                           (try
+                             (k/assoc store :contested-key {:store store-id :write i} {:sync? true})
+                             (.incrementAndGet successful-writes)
+                             (catch Exception _e nil))))
+                       (finally
+                         (.countDown latch))))))
+
+        (.await latch 30 TimeUnit/SECONDS)
+
+        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})
+              v (k/get store :contested-key nil {:sync? true})]
+          (is (some? v) "Should have a value after concurrent writes")
+          (is (contains? (set (range n-stores)) (:store v))))
+
+        (finally
+          (.shutdown executor)
+          (.close jimfs))))))
+
+;; =============================================================================
+;; Filesystem Isolation
+;; =============================================================================
+
+(deftest separate-jimfs-instances-isolated-test
+  (testing "Separate Jimfs instances are completely isolated"
+    (let [jimfs1 (create-jimfs)
+          jimfs2 (create-jimfs)
+          path "/isolated-store"]
+      (try
+        (Files/createDirectories
+         (.getPath jimfs1 path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+        (Files/createDirectories
+         (.getPath jimfs2 path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        (let [store1 (fs/connect-fs-store path :filesystem jimfs1 :opts {:sync? true})
+              store2 (fs/connect-fs-store path :filesystem jimfs2 :opts {:sync? true})]
+
+          (k/assoc store1 :key {:from "jimfs1"} {:sync? true})
+          (k/assoc store2 :key {:from "jimfs2"} {:sync? true})
+
+          ;; Each sees only its own data
+          (is (= {:from "jimfs1"} (k/get store1 :key nil {:sync? true})))
+          (is (= {:from "jimfs2"} (k/get store2 :key nil {:sync? true}))))
+
+        (finally
+          (.close jimfs1)
+          (.close jimfs2))))))
+
+;; =============================================================================
+;; Rapid Store Lifecycle (Tests Path Creation/Deletion)
+;; =============================================================================
+
+(deftest rapid-store-creation-test
+  (testing "Rapidly creating many stores tests path operations"
+    (let [jimfs (create-jimfs)
+          n-stores 20]
+      (try
+        (doseq [i (range n-stores)]
+          (let [path (str "/store-" i)]
+            (Files/createDirectories
+             (.getPath jimfs path (into-array String []))
+             (into-array java.nio.file.attribute.FileAttribute []))
+            (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+              (k/assoc store :key {:store i} {:sync? true})
+              (is (= {:store i} (k/get store :key nil {:sync? true}))))))
+
+        ;; Verify all stores are independent
+        (doseq [i (range n-stores)]
+          (let [path (str "/store-" i)
+                store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+            (is (= {:store i} (k/get store :key nil {:sync? true})))))
+
+        (finally
+          (.close jimfs))))))
+
+(deftest store-reopen-persistence-test
+  (testing "Data persists when store is reopened (tests file persistence)"
+    (let [jimfs (create-jimfs)
+          path "/reopen-store"]
+      (try
+        (Files/createDirectories
+         (.getPath jimfs path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        ;; First store instance
+        (let [store1 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+          (k/assoc store1 :persistent {:value "survives"} {:sync? true}))
+
+        ;; Second store instance should see data
+        (let [store2 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+          (is (= {:value "survives"} (k/get store2 :persistent nil {:sync? true}))))
+
+        (finally
+          (.close jimfs))))))
+
+(deftest rapid-key-create-delete-cycle-test
+  (testing "Rapidly creating/deleting keys tests file create/delete operations"
     (with-jimfs-store [store]
-      (let [n-threads 5
-            n-writes 20
-            latch (CountDownLatch. n-threads)
-            executor (Executors/newFixedThreadPool n-threads)]
+      (dotimes [i 100]
+        (k/assoc store :cycling-key {:cycle i} {:sync? true})
+        (is (= {:cycle i} (k/get store :cycling-key nil {:sync? true})))
+        (k/dissoc store :cycling-key {:sync? true})
+        (is (nil? (k/get store :cycling-key nil {:sync? true})))))))
+
+;; =============================================================================
+;; Concurrent Read-Write (Tests File Channel Behavior)
+;; =============================================================================
+
+(deftest concurrent-read-write-same-key-test
+  (testing "Concurrent reads and writes test channel locking"
+    (with-jimfs-store [store]
+      (let [n-readers 3
+            n-writers 2
+            n-operations 30
+            barrier (CyclicBarrier. (+ n-readers n-writers))
+            latch (CountDownLatch. (+ n-readers n-writers))
+            executor (Executors/newFixedThreadPool (+ n-readers n-writers))
+            read-count (AtomicInteger. 0)
+            write-count (AtomicInteger. 0)]
+
         (try
-          ;; Each thread writes to its own key
-          (dotimes [t n-threads]
+          (k/assoc store :rw-key {:initial true} {:sync? true})
+
+          (dotimes [_ n-readers]
             (.submit executor
                      ^Runnable
                      (fn []
                        (try
-                         (dotimes [i n-writes]
-                           (k/assoc store
-                                    (keyword (str "thread-" t "-key"))
-                                    {:thread t :iteration i}
-                                    {:sync? true}))
+                         (.await barrier)
+                         (dotimes [_ n-operations]
+                           (try
+                             (when (k/get store :rw-key nil {:sync? true})
+                               (.incrementAndGet read-count))
+                             (catch Exception _e nil)))
+                         (finally
+                           (.countDown latch))))))
+
+          (dotimes [w n-writers]
+            (.submit executor
+                     ^Runnable
+                     (fn []
+                       (try
+                         (.await barrier)
+                         (dotimes [i n-operations]
+                           (try
+                             (k/assoc store :rw-key {:writer w :op i} {:sync? true})
+                             (.incrementAndGet write-count)
+                             (catch Exception _e nil)))
                          (finally
                            (.countDown latch))))))
 
           (.await latch 30 TimeUnit/SECONDS)
 
-          ;; Verify all threads' final values exist
-          (dotimes [t n-threads]
-            (let [v (k/get store (keyword (str "thread-" t "-key")) nil {:sync? true})]
-              (is (= t (:thread v)))))
+          (is (pos? (.get read-count)) "Should have successful reads")
+          (is (pos? (.get write-count)) "Should have successful writes")
+          (is (some? (k/get store :rw-key nil {:sync? true})) "Key should exist")
 
           (finally
             (.shutdown executor)))))))
 
-(deftest jimfs-concurrent-same-key-test
-  (testing "Concurrent writes to same key serialize correctly on Jimfs"
+(deftest concurrent-keys-enumeration-test
+  (testing "Enumerating keys while writing tests directory stream handling"
     (with-jimfs-store [store]
-      (let [n-threads 5
-            n-writes 10
-            latch (CountDownLatch. n-threads)
-            executor (Executors/newFixedThreadPool n-threads)]
+      (let [writer-running (AtomicBoolean. true)
+            latch (CountDownLatch. 1)
+            executor (Executors/newFixedThreadPool 2)]
+
         (try
-          ;; All threads write to same key
-          (dotimes [t n-threads]
-            (.submit executor
-                     ^Runnable
-                     (fn []
-                       (try
-                         (dotimes [i n-writes]
-                           (k/assoc store :shared {:thread t :iteration i} {:sync? true}))
-                         (finally
-                           (.countDown latch))))))
+          (.submit executor
+                   ^Runnable
+                   (fn []
+                     (try
+                       (loop [i 0]
+                         (when (.get writer-running)
+                           (let [key (keyword (str "key-" (mod i 50)))]
+                             (if (even? i)
+                               (k/assoc store key {:i i} {:sync? true})
+                               (k/dissoc store key {:sync? true})))
+                           (recur (inc i))))
+                       (finally
+                         (.countDown latch)))))
 
-          (.await latch 30 TimeUnit/SECONDS)
+          ;; Enumerate keys while writer is active
+          (dotimes [_ 20]
+            (let [ks (k/keys store {:sync? true})]
+              (is (set? ks) "keys should return a set")))
 
-          ;; Final value should be from one of the threads
-          (let [v (k/get store :shared nil {:sync? true})]
-            (is (some? v))
-            (is (contains? (set (range n-threads)) (:thread v))))
+          (.set writer-running false)
+          (.await latch 5 TimeUnit/SECONDS)
 
           (finally
             (.shutdown executor)))))))
 
 ;; =============================================================================
-;; Keys Listing Tests
+;; Store Lifecycle (Tests delete-store, store-exists?)
 ;; =============================================================================
 
-(deftest jimfs-keys-listing-test
-  (testing "Keys listing works on Jimfs"
-    (with-jimfs-store [store]
-      ;; Write some keys
-      (k/assoc store :key1 {:v 1} {:sync? true})
-      (k/assoc store :key2 {:v 2} {:sync? true})
-      (k/assoc store :key3 {:v 3} {:sync? true})
-
-      ;; List keys
-      (let [keys-list (k/keys store {:sync? true})]
-        (is (= 3 (count keys-list)))))))
-
-;; =============================================================================
-;; Path Edge Cases
-;; =============================================================================
-
-(deftest jimfs-special-key-names-test
-  (testing "Special key names work on Jimfs"
-    (with-jimfs-store [store]
-      ;; Keys with various characters (hashed, so should work)
-      (let [keys [:simple
-                  :with-dash
-                  :with_underscore
-                  (keyword "with space")
-                  :CamelCase
-                  :123numeric]]
-        (doseq [k keys]
-          (k/assoc store k {:key k} {:sync? true})
-          (is (= {:key k} (k/get store k nil {:sync? true}))
-              (str "Key " k " should work")))))))
-
-(deftest jimfs-nested-data-test
-  (testing "Deeply nested data works on Jimfs"
-    (with-jimfs-store [store]
-      (let [nested-data {:level1
-                         {:level2
-                          {:level3
-                           {:level4
-                            {:value "deep"}}}}}]
-        (k/assoc store :nested nested-data {:sync? true})
-        (is (= nested-data (k/get store :nested nil {:sync? true})))))))
-
-;; =============================================================================
-;; Store Lifecycle Tests
-;; =============================================================================
-
-(deftest jimfs-store-exists-test
-  (testing "Store exists check works on Jimfs"
+(deftest store-exists-test
+  (testing "store-exists? correctly checks path existence"
     (let [jimfs (create-jimfs)
-          base-path "/exists-test"]
+          path "/exists-test"]
       (try
-        ;; Initially doesn't exist
-        (is (not (fs/store-exists? jimfs base-path)))
+        (is (not (fs/store-exists? jimfs path)))
 
-        ;; Create and connect
         (Files/createDirectories
-         (.getPath jimfs base-path (into-array String []))
+         (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        ;; Now exists
-        (is (fs/store-exists? jimfs base-path))
+        (is (fs/store-exists? jimfs path))
 
         (finally
           (.close jimfs))))))
 
-(deftest jimfs-delete-store-test
-  (testing "Delete store works on Jimfs"
+(deftest delete-store-test
+  (testing "delete-store removes directory and contents"
     (let [jimfs (create-jimfs)
-          base-path "/delete-test"]
+          path "/delete-test"]
       (try
-        ;; Create store
         (Files/createDirectories
-         (.getPath jimfs base-path (into-array String []))
+         (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store (fs/connect-fs-store
-                     base-path
-                     :filesystem jimfs
-                     :opts {:sync? true})]
-          ;; Write some data
-          (k/assoc store :key {:v 1} {:sync? true})
+        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+          (k/assoc store :key {:value 1} {:sync? true}))
 
-          ;; Delete store
-          (fs/delete-store jimfs base-path)
-
-          ;; Verify deleted
-          (is (not (fs/store-exists? jimfs base-path))))
+        (fs/delete-store jimfs path)
+        (is (not (fs/store-exists? jimfs path)))
 
         (finally
           (.close jimfs))))))
+
+(deftest delete-recreate-store-test
+  (testing "Deleting and recreating store clears old data"
+    (let [jimfs (create-jimfs)
+          path "/delete-recreate"]
+      (try
+        (Files/createDirectories
+         (.getPath jimfs path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+          (k/assoc store :key {:value 1} {:sync? true}))
+
+        (fs/delete-store jimfs path)
+
+        (Files/createDirectories
+         (.getPath jimfs path (into-array String []))
+         (into-array java.nio.file.attribute.FileAttribute []))
+
+        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+          (is (nil? (k/get store :key nil {:sync? true})))
+          (is (= 0 (count (k/keys store {:sync? true})))))
+
+        (finally
+          (.close jimfs))))))
+
+;; =============================================================================
+;; Many Keys (Tests Directory Listing at Scale)
+;; =============================================================================
+
+(deftest many-keys-directory-listing-test
+  (testing "Store handles many keys (tests directory stream at scale)"
+    (with-jimfs-store [store]
+      (let [n-keys 200]
+        (dotimes [i n-keys]
+          (k/assoc store (keyword (str "key-" i)) {:index i} {:sync? true}))
+
+        (is (= n-keys (count (k/keys store {:sync? true}))))))))
