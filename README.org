@@ -233,6 +233,12 @@ is not critical for you (e.g. for a session store). Note that the database will
 not be corrupted in this case, you can just lose some write operations before
 the crash.
 
+The JVM file store is thoroughly tested using [[https://github.com/google/jimfs][Jimfs]], Google's in-memory NIO
+filesystem. This enables testing of file locking, atomic moves, concurrent
+access from multiple store instances, and rapid lifecycle operations in a
+controlled environment. The file store also supports custom =java.nio.file.FileSystem=
+instances via the =:filesystem= parameter for testing or specialized deployments.
+
 Usage:
 
 #+BEGIN_SRC clojure
