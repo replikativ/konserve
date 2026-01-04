@@ -18,52 +18,94 @@
    [java.io ByteArrayInputStream FileInputStream Closeable]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
-   [java.nio.file Files StandardCopyOption FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
+   [java.nio.file Files StandardCopyOption FileSystem FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
    [java.util Date UUID]))
+
+;; =============================================================================
+;; Path Helpers - Support for custom FileSystems (e.g., Jimfs for testing)
+;; =============================================================================
+
+(defn- get-path
+  "Get a Path from the given filesystem. If filesystem is nil, uses default."
+  ^Path [^FileSystem filesystem ^String base & parts]
+  (if filesystem
+    (.getPath filesystem base (into-array String (or parts [])))
+    (Paths/get base (into-array String (or parts [])))))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
          '{AsynchronousFileChannel FileChannel}))
 
 (defn- sync-base
-  "Helper Function to synchronize the base of the filestore"
-  [base]
-  (let [p (.getPath (FileSystems/getDefault) base (into-array String []))
-        fc (FileChannel/open p (into-array OpenOption []))]
-    (.force fc true)
-    (.close fc)))
+  "Helper Function to synchronize the base of the filestore.
+   Note: Jimfs doesn't support directory sync via FileChannel, so we skip it."
+  ([base] (sync-base nil base))
+  ([filesystem base]
+   ;; Only sync directories on the default filesystem (Jimfs doesn't support this)
+   (when-not filesystem
+     (let [p (get-path filesystem base)
+           fc (FileChannel/open p (into-array OpenOption []))]
+       (.force fc true)
+       (.close fc)))))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
-  [base]
-  (let [f         (io/file base)
-        test-file (io/file (str base "/" (UUID/randomUUID)))]
-    (when-not (.exists f)
-      (.mkdir f))
-    (when-not (.createNewFile test-file)
-      (throw (ex-info "Cannot write to base." {:type   :not-writable
-                                               :base base})))
-    (.delete test-file)))
+  ([base] (check-and-create-backing-store nil base))
+  ([filesystem base]
+   (if filesystem
+     ;; For custom filesystems (like Jimfs), use NIO APIs
+     (let [base-path (get-path filesystem base)
+           test-path (.resolve base-path (str (UUID/randomUUID)))]
+       (when-not (Files/exists base-path (into-array LinkOption []))
+         (Files/createDirectories base-path (into-array java.nio.file.attribute.FileAttribute [])))
+       (Files/createFile test-path (into-array java.nio.file.attribute.FileAttribute []))
+       (Files/delete test-path))
+     ;; For default filesystem, use io/file for compatibility
+     (let [f         (io/file base)
+           test-file (io/file (str base "/" (UUID/randomUUID)))]
+       (when-not (.exists f)
+         (.mkdir f))
+       (when-not (.createNewFile test-file)
+         (throw (ex-info "Cannot write to base." {:type   :not-writable
+                                                  :base base})))
+       (.delete test-file)))))
 
 (defn delete-store
   "Permanently deletes the base of the store with all files."
-  [base]
-  (let [f             (io/file base)
-        parent-base (.getParent f)]
-    (doseq [c (.list (io/file base))]
-      (.delete (io/file (str base "/" c))))
-    (.delete f)
-    (try
-      (sync-base parent-base)
-      (catch Exception e
-        e))))
+  ([base] (delete-store nil base))
+  ([filesystem base]
+   (if filesystem
+     ;; For custom filesystems, use NIO APIs
+     (let [base-path (get-path filesystem base)
+           parent-path (.getParent base-path)]
+       (when (Files/exists base-path (into-array LinkOption []))
+         (let [ds (Files/newDirectoryStream base-path)]
+           (doseq [child ds]
+             (Files/delete child))
+           (.close ds))
+         (Files/delete base-path))
+       (when parent-path
+         (try
+           (sync-base filesystem (str parent-path))
+           (catch Exception e e))))
+     ;; For default filesystem, use io/file
+     (let [f           (io/file base)
+           parent-base (.getParent f)]
+       (doseq [c (.list (io/file base))]
+         (.delete (io/file (str base "/" c))))
+       (.delete f)
+       (try
+         (sync-base parent-base)
+         (catch Exception e e))))))
 
 (defn list-files
   "Lists all files on the first level of a directory."
   ([directory]
-   (list-files directory (fn [_] false)))
+   (list-files nil directory (fn [_] false)))
   ([directory ephemeral?]
-   (let [root (Paths/get directory (into-array String []))
+   (list-files nil directory ephemeral?))
+  ([filesystem directory ephemeral?]
+   (let [root (get-path filesystem directory)
          ds (Files/newDirectoryStream root)
          files (mapv (fn [^Path path] (str (.relativize root path)))
                      (remove ephemeral? ds))]
@@ -72,28 +114,32 @@
 
 (defn count-konserve-keys
   "Counts konserve files in the directory."
-  [dir]
-  (reduce (fn [c path] (if (.endsWith ^String path ".ksv") (inc c) c))
-          0
-          (list-files dir)))
+  ([dir] (count-konserve-keys nil dir))
+  ([filesystem dir]
+   (reduce (fn [c path] (if (.endsWith ^String path ".ksv") (inc c) c))
+           0
+           (list-files filesystem dir (fn [_] false)))))
 
 (defn store-exists?
   "Checks if path exists."
-  [base]
-  (let [f (io/file base)]
-    (if (.exists f)
-      (do (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
-          true)
-      (do (info "Store directory at " (str base) " does not exist.")
-          false))))
+  ([base] (store-exists? nil base))
+  ([filesystem base]
+   (let [exists? (if filesystem
+                   (Files/exists (get-path filesystem base) (into-array LinkOption []))
+                   (.exists (io/file base)))]
+     (if exists?
+       (do (info "Store directory at " (str base) " exists with " (count-konserve-keys filesystem base) " konserve keys.")
+           true)
+       (do (info "Store directory at " (str base) " does not exist.")
+           false)))))
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
-(defrecord BackingFilestore [base detected-old-blobs ephemeral?]
+(defrecord BackingFilestore [base detected-old-blobs ephemeral? filesystem]
   PBackingStore
   (-create-blob [_this store-key env]
     (let [{:keys [sync?]} env
-          path (Paths/get base (into-array String [store-key]))
+          path (get-path filesystem base store-key)
           standard-open-option (into-array StandardOpenOption
                                            [StandardOpenOption/WRITE
                                             StandardOpenOption/READ
@@ -104,10 +150,10 @@
       (if sync? ac (go ac))))
   (-delete-blob [_this store-key env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/delete (Paths/get base (into-array String [store-key]))))))
+                (go-try- (Files/delete (get-path filesystem base store-key)))))
   (-blob-exists? [_this store-key env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (Files/exists (Paths/get base (into-array String [store-key])) (into-array LinkOption [])))))
+                (go-try- (Files/exists (get-path filesystem base store-key) (into-array LinkOption [])))))
 
   (-migratable [_this _key store-key env]                    ;; or importable
     (async+sync (:sync? env) *default-sync-translation*
@@ -133,41 +179,42 @@
 
   (-keys [_this env]
     (async+sync (:sync? env) *default-sync-translation*
-                (go-try- (into [] (list-files base ephemeral?)))))
+                (go-try- (into [] (list-files filesystem base ephemeral?)))))
 
   (-copy [_this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                   ;; TODO throws java.lang.ClassNotFoundException:
-                   ;; java.nio.file.Files {}
-                   ;; in native-image compilation
-                 #_(Files/copy ^Path from1 ^Path to1
+                 (if filesystem
+                   ;; For custom filesystems, use NIO copy
+                   (Files/copy (get-path filesystem base from)
+                               (get-path filesystem base to)
                                (into-array [StandardCopyOption/REPLACE_EXISTING]))
-                 ;; work-around with clojure.java.io for now:
-                 (io/copy (.toFile (Paths/get base (into-array String [from])))
-                          (.toFile (Paths/get base (into-array String [to])))))))
+                   ;; For default filesystem, use io/copy (native-image compatible)
+                   (io/copy (.toFile (get-path nil base from))
+                            (.toFile (get-path nil base to)))))))
   (-atomic-move [_this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (Files/move (Paths/get base (into-array String [from]))
-                             (Paths/get base (into-array String [to]))
-                             (into-array [StandardCopyOption/ATOMIC_MOVE])))))
+                 (Files/move (get-path filesystem base from)
+                             (get-path filesystem base to)
+                             (into-array [StandardCopyOption/ATOMIC_MOVE
+                                          StandardCopyOption/REPLACE_EXISTING])))))
   (-create-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (check-and-create-backing-store base))))
+                 (check-and-create-backing-store filesystem base))))
   (-delete-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (delete-store (:base env)))))
+                 (delete-store filesystem base))))
   (-store-exists? [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (store-exists? (:base env)))))
+                 (store-exists? filesystem base))))
   (-sync-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (sync-base base)))))
+                 (sync-base filesystem base)))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
@@ -588,34 +635,43 @@
                                          env))]
            key)])))))
 
-(defn detect-old-file-schema [base]
-  (reduce
-   (fn [old-list path]
-     (let [store-key (-> ^Path path .toString)]
-       (cond
-         (or
-          (includes? store-key "data")
-          (ends-with? store-key ".ksv"))    old-list
-         (re-find #"meta(?!\S)" store-key) (into old-list (detect-old-file-schema store-key))
-         :else                             (into old-list [store-key]))))
-   #{}
-   (Files/newDirectoryStream (Paths/get base (into-array String [])))))
+(defn detect-old-file-schema
+  "Detect files using old storage schema for migration."
+  ([base] (detect-old-file-schema nil base))
+  ([filesystem base]
+   (reduce
+    (fn [old-list path]
+      (let [store-key (-> ^Path path .toString)]
+        (cond
+          (or
+           (includes? store-key "data")
+           (ends-with? store-key ".ksv"))    old-list
+          (re-find #"meta(?!\S)" store-key) (into old-list (detect-old-file-schema filesystem store-key))
+          :else                             (into old-list [store-key]))))
+    #{}
+    (Files/newDirectoryStream (get-path filesystem base)))))
 
 (defn connect-fs-store
   "Create Filestore in given path.
   Optional serializer, read-handlers, write-handlers, buffer-size and config (for fsync) can be changed.
+
+  The :filesystem option allows using a custom java.nio.file.FileSystem (e.g., Jimfs for testing).
+  When provided, all path operations will use that filesystem instead of the default.
+
   Defaults are
   {:base           path
    :serializer     fressian-serializer
    :read-handlers  empty
    :write-handlers empty
    :buffer-size    1 MB
+   :filesystem     nil (uses default filesystem)
    :config         config} "
-  [path & {:keys [detect-old-file-schema? ephemeral? config]
+  [path & {:keys [detect-old-file-schema? ephemeral? config filesystem]
            :or {detect-old-file-schema? false
                 ephemeral? (fn [^Path path]
                              (some #(re-matches % (-> path .getFileName .toString))
-                                   [#"\.nfs.*"]))}
+                                   [#"\.nfs.*"]))
+                filesystem nil}
            :as params}]
   ;; check config
   (let [store-config (merge {:default-serializer :FressianSerializer
@@ -629,13 +685,13 @@
                                                          :in-place? false
                                                          :lock-blob? true}
                                                         config)}
-                            (dissoc params :config))
+                            (dissoc params :config :filesystem))
         detect-old-blob (when detect-old-file-schema?
-                          (atom (detect-old-file-schema path)))
+                          (atom (detect-old-file-schema filesystem path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-blob)
                                (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
-        backing            (BackingFilestore. path detect-old-blob ephemeral?)]
+        backing            (BackingFilestore. path detect-old-blob ephemeral? filesystem)]
     (connect-default-store backing store-config)))
 
 (comment
