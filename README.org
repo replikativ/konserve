@@ -116,7 +116,7 @@ Add to your dependencies: [![Clojars Project](https://img.shields.io/clojars/v/i
 
 *Note:* Konserve supports two API styles:
 1. *Direct backend imports* - Traditional approach shown below
-2. *Unified dispatch* - New polymorphic interface via =konserve.store= (see [[#h:unified-store-interface][Unified Store Interface]])
+2. *Unified dispatch* - New polymorphic interface via =konserve.core/connect-store= (see [[#h:unified-store-interface][Unified Store Interface]])
 
 Both approaches are supported and work identically. The unified interface is recommended
 for applications that need to switch between backends dynamically or support multiple backends.
@@ -205,49 +205,49 @@ the code.
    :END:
 
 Konserve provides a unified multimethod-based interface for connecting to any backend
-through the =konserve.store= namespace. All backends dispatch on a =:backend= key in
+through =konserve.core/connect-store=. All backends dispatch on a =:backend= key in
 the configuration map.
 
 *** Basic Usage
 
 #+BEGIN_SRC clojure
-  (require '[konserve.store :as store])
+  (require '[konserve.core :as k])
 
   ;; Memory store
-  (def store (store/connect-store {:backend :memory :opts {:sync? true}}))
+  (def store (k/connect-store {:backend :memory :opts {:sync? true}}))
 
   ;; File store (JVM and Node.js)
-  (def store (store/connect-store {:backend :file
-                                   :path "/tmp/konserve"
-                                   :opts {:sync? true}}))
+  (def store (k/connect-store {:backend :file
+                               :path "/tmp/konserve"
+                               :opts {:sync? true}}))
 
   ;; IndexedDB (browser)
-  (go (def store (<! (store/connect-store {:backend :indexeddb
-                                           :name "my-db"
-                                           :opts {:sync? false}}))))
+  (go (def store (<! (k/connect-store {:backend :indexeddb
+                                       :name "my-db"
+                                       :opts {:sync? false}}))))
 
   ;; External backends (after requiring the backend module)
   (require '[konserve-s3.core])
-  (def store (store/connect-store {:backend :s3
-                                   :bucket "my-bucket"
-                                   :region "us-east-1"
-                                   :opts {:sync? true}}))
+  (def store (k/connect-store {:backend :s3
+                               :bucket "my-bucket"
+                               :region "us-east-1"
+                               :opts {:sync? true}}))
 #+END_SRC
 
 *** Store Lifecycle
 
 #+BEGIN_SRC clojure
   ;; Connect to a store
-  (def store (store/connect-store config))
+  (def store (k/connect-store config))
 
   ;; Create new empty store (equivalent to connect for most backends)
-  (def store (store/empty-store config))
+  (def store (k/empty-store config))
 
   ;; Clean up resources
-  (store/release-store config store)
+  (k/release-store config store)
 
   ;; Delete underlying storage
-  (store/delete-store config)
+  (k/delete-store config)
 #+END_SRC
 
 *** Available Backends
@@ -330,11 +330,10 @@ Usage (unified interface):
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.store :as store]
-              [konserve.core :as k]))
+    (:require [konserve.core :as k]))
 
-  (def my-db (store/connect-store {:backend :file
-                                   :path "path/to/folder"}))
+  (def my-db (k/connect-store {:backend :file
+                               :path "path/to/folder"}))
 #+END_SRC
 
 *** IndexedDB
@@ -381,19 +380,19 @@ The IndexedDB implementation supports atomic multi-key operations (=multi-get=, 
 
 External backends integrate seamlessly with konserve through the unified store
 interface. After requiring a backend module, it automatically registers with the
-=konserve.store= multimethod dispatch system.
+multimethod dispatch system and becomes available via =konserve.core/connect-store=.
 
 Usage pattern:
 
 #+BEGIN_SRC clojure
-  (require '[konserve.store :as store])
+  (require '[konserve.core :as k])
   (require '[konserve-s3.core])  ;; Registers :s3 backend
 
   ;; Now you can use the backend
-  (def s3-store (store/connect-store {:backend :s3
-                                      :bucket "my-bucket"
-                                      :region "us-east-1"
-                                      :store-id "my-app"}))
+  (def s3-store (k/connect-store {:backend :s3
+                                  :bucket "my-bucket"
+                                  :region "us-east-1"
+                                  :store-id "my-app"}))
 #+END_SRC
 
 Each backend also exposes its own direct API for advanced use cases. See individual

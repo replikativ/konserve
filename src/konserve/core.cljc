@@ -10,6 +10,7 @@
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.impl.defaults :as defaults]
+            [konserve.store :as store]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked maybe-go-locked maybe-locked]])))
@@ -515,3 +516,64 @@
   "Assoc the given serializers onto the store, taking effect immediately."
   [store serializers]
   (-assoc-serializers store serializers))
+
+;; =============================================================================
+;; Unified Store Interface (re-exported from konserve.store)
+;; =============================================================================
+
+(def connect-store
+  "Connect to a konserve store based on :backend key in config.
+
+   Dispatches to the appropriate backend implementation based on the :backend key.
+   All backends support :opts {:sync? true/false} for synchronous or asynchronous
+   execution.
+
+   Built-in backends:
+   - :memory - In-memory store (all platforms)
+   - :file - File-based store (JVM and Node.js)
+   - :indexeddb - Browser IndexedDB (ClojureScript/browser only)
+
+   External backends (require the module first):
+   - :s3 - AWS S3 (konserve-s3)
+   - :dynamodb - AWS DynamoDB (konserve-dynamodb)
+   - :redis - Redis (konserve-redis)
+   - :lmdb - LMDB (konserve-lmdb)
+   - :rocksdb - RocksDB (konserve-rocksdb)
+
+   Example:
+     (connect-store {:backend :memory :opts {:sync? true}})
+     (connect-store {:backend :file :path \"/tmp/store\" :opts {:sync? true}})
+     (connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})
+
+   See konserve.store namespace for multimethod definitions and backend registration."
+  store/connect-store)
+
+(def empty-store
+  "Create a new empty store (equivalent to connect-store for most backends).
+
+   See connect-store for usage and available backends."
+  store/empty-store)
+
+(def delete-store
+  "Delete/clean up an existing store (removes underlying storage).
+
+   Takes the same config map used with connect-store.
+
+   Example:
+     (delete-store {:backend :file :path \"/tmp/store\"})
+
+   See connect-store for available backends."
+  store/delete-store)
+
+(def release-store
+  "Release connections and resources held by a store.
+
+   Args:
+     config - The config map used to create the store
+     store - The store instance to release
+
+   Example:
+     (release-store {:backend :file :path \"/tmp/store\"} store)
+
+   See connect-store for available backends."
+  store/release-store)
