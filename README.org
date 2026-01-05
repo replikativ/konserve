@@ -244,11 +244,20 @@ the configuration map.
 *** Store Lifecycle
 
 #+BEGIN_SRC clojure
-  ;; Connect to a store
-  (def store (k/connect-store config))
+  ;; Check if store exists
+  (k/store-exists? config)  ;; => true/false
 
-  ;; Create new empty store (equivalent to connect for most backends)
-  (def store (k/empty-store config))
+  ;; Create new store (errors if already exists for backends with strict semantics)
+  (def store (k/create-store config))
+
+  ;; Or connect to existing store (errors if doesn't exist for backends with strict semantics)
+  ;; (def store (k/connect-store config))
+
+  ;; Note: For backends without creation steps (Redis, LMDB, RocksDB, file),
+  ;; create-store and connect-store behave identically.
+
+  ;; Use the store...
+  (k/assoc-in store [:key] value {:sync? true})
 
   ;; Clean up resources
   (k/release-store config store)
@@ -256,6 +265,20 @@ the configuration map.
   ;; Delete underlying storage
   (k/delete-store config)
 #+END_SRC
+
+*** Create vs Connect Semantics
+
+All backends now follow consistent strict semantics:
+
+*Strict semantics* (All backends: File, S3, DynamoDB, Redis, LMDB, RocksDB, IndexedDB, Memory with :id):
+- =create-store= - Creates new store, errors if already exists
+- =connect-store= - Connects to existing store, errors if doesn't exist
+- =store-exists?= - Checks for existence before create/connect
+
+*Ephemeral semantics* (Memory without :id only):
+- Each call creates a fresh in-memory store
+- =store-exists?= always returns false
+- Used for testing and temporary storage
 
 *** Available Backends
 
