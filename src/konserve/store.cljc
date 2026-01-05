@@ -7,6 +7,7 @@
    Built-in backends:
    - :memory - In-memory store (all platforms)
    - :file - File-based store (JVM only)
+   - :tiered - Tiered store with frontend cache and backend persistence (all platforms)
 
    External backends (register via require):
    - :file - File-based store for Node.js (konserve.node-filestore)
@@ -30,6 +31,7 @@
      ;; After requiring konserve-s3:
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
+            [konserve.tiered :as tiered]
             #?(:clj [konserve.filestore])
             [zufall.core]
             #?(:clj  [clojure.core.async :refer [go <!]]
@@ -157,11 +159,14 @@
    (defmethod connect-store :file
      [{:keys [path config filesystem opts] :as all-config}]
      (let [opts (or opts {:sync? false})]
-       ;; Auto-create if doesn't exist (backwards compatibility)
-       (konserve.filestore/connect-fs-store path
-                                            :config config
-                                            :filesystem filesystem
-                                            :opts opts))))
+       (let [exists (konserve.filestore/store-exists? filesystem path)]
+         (when-not exists
+           (throw (ex-info (str "File store does not exist at path: " path)
+                           {:path path :config all-config})))
+         (konserve.filestore/connect-fs-store path
+                                              :config config
+                                              :filesystem filesystem
+                                              :opts opts)))))
 
 #?(:clj
    (defmethod create-store :file
@@ -202,7 +207,7 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
                "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
@@ -211,7 +216,7 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
                "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
@@ -220,16 +225,85 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
                "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
+
+;; ===== :tiered Backend (built-in) =====
+;; Tiered store combines a fast frontend cache with a durable backend
+
+(defmethod create-store :tiered
+  [{:keys [frontend backend write-policy read-policy opts] :as config}]
+  (let [opts (or opts {:sync? false})]
+    (if (:sync? opts)
+      ;; Synchronous mode
+      (let [frontend-store (create-store (assoc frontend :opts opts))
+            backend-store (create-store (assoc backend :opts opts))]
+        (tiered/connect-tiered-store frontend-store backend-store
+                                     :write-policy (or write-policy :write-through)
+                                     :read-policy (or read-policy :frontend-first)
+                                     :opts opts))
+      ;; Asynchronous mode
+      (go
+        (let [frontend-store (<! (create-store (assoc frontend :opts opts)))
+              backend-store (<! (create-store (assoc backend :opts opts)))]
+          (<! (tiered/connect-tiered-store frontend-store backend-store
+                                           :write-policy (or write-policy :write-through)
+                                           :read-policy (or read-policy :frontend-first)
+                                           :opts opts)))))))
+
+(defmethod connect-store :tiered
+  [{:keys [frontend backend write-policy read-policy opts] :as config}]
+  (let [opts (or opts {:sync? false})]
+    (if (:sync? opts)
+      ;; Synchronous mode
+      (let [frontend-store (connect-store (assoc frontend :opts opts))
+            backend-store (connect-store (assoc backend :opts opts))]
+        (tiered/connect-tiered-store frontend-store backend-store
+                                     :write-policy (or write-policy :write-through)
+                                     :read-policy (or read-policy :frontend-first)
+                                     :opts opts))
+      ;; Asynchronous mode
+      (go
+        (let [frontend-store (<! (connect-store (assoc frontend :opts opts)))
+              backend-store (<! (connect-store (assoc backend :opts opts)))]
+          (<! (tiered/connect-tiered-store frontend-store backend-store
+                                           :write-policy (or write-policy :write-through)
+                                           :read-policy (or read-policy :frontend-first)
+                                           :opts opts)))))))
+
+(defmethod store-exists? :tiered
+  [{:keys [backend opts] :as config}]
+  ;; Tiered store exists if backend exists (frontend is just a cache)
+  (store-exists? (assoc backend :opts (or opts {:sync? false}))))
+
+(defmethod delete-store :tiered
+  [{:keys [backend frontend] :as config}]
+  ;; Delete backend (authoritative source)
+  ;; Optionally delete frontend if it's persistent
+  (delete-store backend)
+  ;; Only delete frontend if it has persistence (e.g., file-based)
+  (when (and frontend (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend)))
+    (delete-store frontend))
+  nil)
+
+(defmethod release-store :tiered
+  [{:keys [frontend backend]} store]
+  ;; Release both stores
+  (when frontend
+    (release-store frontend (:frontend-store store)))
+  (when backend
+    (release-store backend (:backend-store store)))
+  nil)
+
+;; ===== Default handlers for unsupported backends =====
 
 (defmethod delete-store :default
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
                "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
