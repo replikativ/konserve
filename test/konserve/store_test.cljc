@@ -30,9 +30,9 @@
              (is (= val 42))))))))
 
 #?(:clj
-   (deftest memory-store-empty-sync
-     (testing "empty-store :memory creates new store"
-       (let [store-inst (store/empty-store {:backend :memory :opts {:sync? true}})]
+   (deftest memory-store-create-sync
+     (testing "create-store :memory creates new store"
+       (let [store-inst (store/create-store {:backend :memory :opts {:sync? true}})]
          (is (some? store-inst))))))
 
 #?(:clj
@@ -84,11 +84,11 @@
                              (store/connect-store {:backend :unknown}))))))
 
 #?(:clj
-   (deftest unsupported-backend-empty
-     (testing "empty-store with unsupported backend throws"
+   (deftest unsupported-backend-create
+     (testing "create-store with unsupported backend throws"
        (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
                              #"Unsupported store backend: :unknown"
-                             (store/empty-store {:backend :unknown}))))))
+                             (store/create-store {:backend :unknown}))))))
 
 #?(:clj
    (deftest unsupported-backend-delete
