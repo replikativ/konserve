@@ -549,11 +549,31 @@
    See konserve.store namespace for multimethod definitions and backend registration."
   store/connect-store)
 
-(def empty-store
-  "Create a new empty store (equivalent to connect-store for most backends).
+(def create-store
+  "Create a new store.
+
+   Note: Most backends auto-create on connect-store, so this is often equivalent.
+   Use this when you explicitly want to create a new store. Will error if store
+   already exists.
 
    See connect-store for usage and available backends."
-  store/empty-store)
+  store/create-store)
+
+(def store-exists?
+  "Check if a store exists at the given configuration.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+
+   Returns:
+     true if store exists, false otherwise (or channel in async mode)
+
+   Example:
+     (store-exists? {:backend :memory :id \"my-store\" :opts {:sync? true}})
+     (store-exists? {:backend :file :path \"/tmp/store\" :opts {:sync? true}})
+
+   See connect-store for available backends."
+  store/store-exists?)
 
 (def delete-store
   "Delete/clean up an existing store (removes underlying storage).
