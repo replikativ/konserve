@@ -30,7 +30,10 @@
      ;; After requiring konserve-s3:
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
-            #?(:clj [konserve.filestore])))
+            #?(:clj [konserve.filestore])
+            [zufall.core]
+            #?(:clj  [clojure.core.async :refer [go <!]]
+               :cljs [cljs.core.async :refer [go <!]])))
 
 ;; =============================================================================
 ;; Multimethod Definitions
@@ -49,14 +52,27 @@
      A store instance (or channel if async mode, determined by :opts {:sync? false})"
   :backend)
 
-(defmulti empty-store
-  "Create a new empty store (equivalent to connect-store for most backends).
+(defmulti create-store
+  "Create a new store.
+
+   Note: Most backends auto-create on connect-store, so this is often equivalent.
+   Use this when you explicitly want to create a new store.
 
    Args:
      config - A map with :backend key and backend-specific configuration
 
    Returns:
      A new store instance"
+  :backend)
+
+(defmulti store-exists?
+  "Check if a store exists at the given configuration.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+
+   Returns:
+     true if store exists, false otherwise (or channel in async mode)"
   :backend)
 
 (defmulti delete-store
@@ -88,16 +104,43 @@
 ;; ===== :memory Backend =====
 
 (defmethod connect-store :memory
-  [{:keys [opts] :as config}]
-  (konserve.memory/new-mem-store (atom {}) (or opts {:sync? false})))
+  [{:keys [id opts] :as config}]
+  (let [id (or id (zufall.core/rand-german-mammal))
+        opts (or opts {:sync? false})
+        store (konserve.memory/connect-mem-store id opts)]
+    (if (:sync? opts)
+      (or store
+          (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                          {:id id :config config})))
+      (go (or (<! store)
+              (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                              {:id id :config config})))))))
 
-(defmethod empty-store :memory
-  [config]
-  (connect-store config))
+(defmethod create-store :memory
+  [{:keys [id opts] :as config}]
+  (let [id (or id (zufall.core/rand-german-mammal))
+        opts (or opts {:sync? false})
+        existing (get @konserve.memory/memory-store-registry id)]
+    (when existing
+      (throw (ex-info (str "Memory store with ID '" id "' already exists.")
+                      {:id id :config config})))
+    (konserve.memory/new-mem-store (atom {}) (assoc opts :id id))))
+
+(defmethod store-exists? :memory
+  [{:keys [id opts] :as config}]
+  (let [id (or id (zufall.core/rand-german-mammal))
+        opts (or opts {:sync? false})
+        exists (contains? @konserve.memory/memory-store-registry id)]
+    (if (:sync? opts)
+      exists
+      (go exists))))
 
 (defmethod delete-store :memory
-  [_config]
-  nil)
+  [{:keys [id] :as config}]
+  (if id
+    (konserve.memory/delete-mem-store id)
+    (throw (ex-info "Cannot delete memory store without :id"
+                    {:config config}))))
 
 (defmethod release-store :memory
   [_config _store]
@@ -108,16 +151,37 @@
 
 #?(:clj
    (defmethod connect-store :file
-     [{:keys [path config filesystem] :as all-config}]
-     (konserve.filestore/connect-fs-store path
-                                          :config config
-                                          :filesystem filesystem
-                                          :opts (:opts all-config))))
+     [{:keys [path config filesystem opts] :as all-config}]
+     (let [opts (or opts {:sync? false})
+           exists (konserve.filestore/store-exists? filesystem path)]
+       (when-not exists
+         (throw (ex-info (str "File store does not exist at path: " path)
+                         {:path path :config all-config})))
+       (konserve.filestore/connect-fs-store path
+                                            :config config
+                                            :filesystem filesystem
+                                            :opts opts))))
 
 #?(:clj
-   (defmethod empty-store :file
-     [config]
-     (connect-store config)))
+   (defmethod create-store :file
+     [{:keys [path config filesystem opts] :as all-config}]
+     (let [opts (or opts {:sync? false})
+           exists (konserve.filestore/store-exists? filesystem path)]
+       (when exists
+         (throw (ex-info (str "File store already exists at path: " path)
+                         {:path path :config all-config})))
+       (konserve.filestore/connect-fs-store path
+                                            :config config
+                                            :filesystem filesystem
+                                            :opts opts))))
+
+#?(:clj
+   (defmethod store-exists? :file
+     [{:keys [path filesystem opts]}]
+     (let [exists (konserve.filestore/store-exists? filesystem path)]
+       (if (:sync? opts)
+         exists
+         (go exists)))))
 
 #?(:clj
    (defmethod delete-store :file
@@ -142,7 +206,16 @@
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
-(defmethod empty-store :default
+(defmethod create-store :default
+  [{:keys [backend] :as config}]
+  (throw (ex-info
+          (str "Unsupported store backend: " backend
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\nMake sure the corresponding backend module is required before use.")
+          {:backend backend :config config})))
+
+(defmethod store-exists? :default
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend

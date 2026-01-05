@@ -6,7 +6,17 @@
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
                                         PAssocSerializers PWriteHookStore]]
-            [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
+            [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]
+            [zufall.core :refer [rand-german-mammal]]))
+
+;; =============================================================================
+;; Memory Store Registry
+;; =============================================================================
+
+(def ^{:doc "Global registry of memory stores by ID.
+             Allows multiple parts of an application to connect to the same memory store."}
+  memory-store-registry
+  (atom {}))
 
 (defrecord MemoryStore [state read-handlers write-handlers locks write-hooks]
   PEDNKeyValueStore
@@ -156,14 +166,55 @@
 
 (defn new-mem-store
   "Create in memory store. Binaries are not properly locked yet and
-  the read and write-handlers are dummy ones for compatibility."
-  ([] (new-mem-store (atom {})))
+  the read and write-handlers are dummy ones for compatibility.
+
+  If :id is provided in opts, the store will be registered globally and can be
+  retrieved later via connect-mem-store. If no :id is provided, generates a
+  random ID using rand-german-mammal.
+
+  Options:
+    :id     - String ID for the store (optional, generates random if not provided)
+    :sync?  - Boolean for sync/async operation (default false)"
+  ([] (new-mem-store (atom {}) {:sync? false}))
   ([init-atom] (new-mem-store init-atom {:sync? false}))
   ([init-atom opts]
-   (let [store
+   (let [id (or (:id opts) (rand-german-mammal))
+         store
          (map->MemoryStore {:state init-atom
                             :read-handlers (atom {})
                             :write-handlers (atom {})
                             :locks (atom {})
-                            :write-hooks (atom {})})]
-     (if (:sync? opts) store (go store)))))
+                            :write-hooks (atom {})})
+         result (if (:sync? opts) store (go store))]
+     ;; Register the store if ID is provided
+     (swap! memory-store-registry assoc id result)
+     result)))
+
+(defn connect-mem-store
+  "Connect to an existing memory store by ID. Returns nil if not found.
+
+  Args:
+    id   - String ID of the store to connect to
+    opts - Options map with :sync? boolean
+
+  Returns:
+    Store instance if found, nil otherwise (or channel in async mode)"
+  [id opts]
+  (if-let [store (get @memory-store-registry id)]
+    store
+    (if (:sync? opts) nil (go nil))))
+
+(defn delete-mem-store
+  "Delete a memory store from the registry by ID.
+
+  Args:
+    id - String ID of the store to delete
+
+  Returns:
+    true if store was deleted, false if not found"
+  [id]
+  (if (contains? @memory-store-registry id)
+    (do
+      (swap! memory-store-registry dissoc id)
+      true)
+    false))

@@ -574,14 +574,33 @@
 ;; =============================================================================
 
 (defmethod store/connect-store :file
-  [{:keys [path config] :as all-config}]
-  (connect-fs-store path
-                    :config config
-                    :opts (:opts all-config)))
+  [{:keys [path config opts] :as all-config}]
+  (let [opts (or opts {:sync? false})
+        exists (store-exists? path)]
+    (when-not exists
+      (throw (ex-info (str "File store does not exist at path: " path)
+                      {:path path :config all-config})))
+    (connect-fs-store path
+                      :config config
+                      :opts opts)))
 
-(defmethod store/empty-store :file
-  [config]
-  (store/connect-store config))
+(defmethod store/create-store :file
+  [{:keys [path config opts] :as all-config}]
+  (let [opts (or opts {:sync? false})
+        exists (store-exists? path)]
+    (when exists
+      (throw (ex-info (str "File store already exists at path: " path)
+                      {:path path :config all-config})))
+    (connect-fs-store path
+                      :config config
+                      :opts opts)))
+
+(defmethod store/store-exists? :file
+  [{:keys [path opts]}]
+  (let [exists (store-exists? path)]
+    (if (:sync? opts)
+      exists
+      (go exists))))
 
 (defmethod store/delete-store :file
   [{:keys [path]}]
