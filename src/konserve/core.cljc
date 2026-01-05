@@ -530,9 +530,10 @@
 
    Built-in backends:
    - :memory - In-memory store (all platforms)
-   - :file - File-based store (JVM and Node.js)
+   - :file - File-based store (JVM only)
 
    External backends (require the module first):
+   - :file - File-based store for Node.js (konserve.node-filestore)
    - :indexeddb - Browser IndexedDB (konserve.indexeddb - browser only)
    - :s3 - AWS S3 (konserve-s3)
    - :dynamodb - AWS DynamoDB (konserve-dynamodb)

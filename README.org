@@ -216,12 +216,19 @@ the configuration map.
   ;; Memory store
   (def store (k/connect-store {:backend :memory :opts {:sync? true}}))
 
-  ;; File store (JVM and Node.js)
+  ;; File store (JVM)
   (def store (k/connect-store {:backend :file
                                :path "/tmp/konserve"
                                :opts {:sync? true}}))
 
-  ;; IndexedDB (browser)
+  ;; File store (Node.js - requires konserve.node-filestore)
+  (require '[konserve.node-filestore])
+  (def store (k/connect-store {:backend :file
+                               :path "/tmp/konserve"
+                               :opts {:sync? false}}))
+
+  ;; IndexedDB (browser - requires konserve.indexeddb)
+  (require '[konserve.indexeddb])
   (go (def store (<! (k/connect-store {:backend :indexeddb
                                        :name "my-db"
                                        :opts {:sync? false}}))))
@@ -254,9 +261,10 @@ the configuration map.
 
 Built-in:
 - =:memory= - In-memory store (all platforms)
-- =:file= - File-based store (JVM and Node.js)
+- =:file= - File-based store (JVM only)
 
 External (require the corresponding module first):
+- =:file= - File-based store for Node.js (=konserve.node-filestore=)
 - =:indexeddb= - Browser IndexedDB (=konserve.indexeddb= - browser only)
 - =:s3= - AWS S3 ([[https://github.com/replikativ/konserve-s3][konserve-s3]])
 - =:dynamodb= - AWS DynamoDB ([[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]])

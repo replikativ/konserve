@@ -6,9 +6,10 @@
 
    Built-in backends:
    - :memory - In-memory store (all platforms)
-   - :file - File-based store (JVM and Node.js)
+   - :file - File-based store (JVM only)
 
    External backends (register via require):
+   - :file - File-based store for Node.js (konserve.node-filestore)
    - :indexeddb - Browser IndexedDB (konserve.indexeddb - browser only)
    - :s3 - AWS S3 backend (konserve-s3)
    - :dynamodb - AWS DynamoDB backend (konserve-dynamodb)
@@ -29,8 +30,7 @@
      ;; After requiring konserve-s3:
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
-            #?(:clj [konserve.filestore])
-            #?(:cljs [konserve.node-filestore])))
+            #?(:clj [konserve.filestore])))
 
 ;; =============================================================================
 ;; Multimethod Definitions
@@ -103,30 +103,31 @@
   [_config _store]
   nil)
 
-;; ===== :file Backend (JVM and Node.js) =====
+;; ===== :file Backend (JVM only) =====
+;; ClojureScript/Node.js :file backend is external - require konserve.node-filestore
 
-(defmethod connect-store :file
-  [{:keys [path config filesystem] :as all-config}]
-  #?(:clj  (konserve.filestore/connect-fs-store path
-                                                :config config
-                                                :filesystem filesystem
-                                                :opts (:opts all-config))
-     :cljs (konserve.node-filestore/connect-fs-store path
-                                                     :config config
-                                                     :opts (:opts all-config))))
+#?(:clj
+   (defmethod connect-store :file
+     [{:keys [path config filesystem] :as all-config}]
+     (konserve.filestore/connect-fs-store path
+                                          :config config
+                                          :filesystem filesystem
+                                          :opts (:opts all-config))))
 
-(defmethod empty-store :file
-  [config]
-  (connect-store config))
+#?(:clj
+   (defmethod empty-store :file
+     [config]
+     (connect-store config)))
 
-(defmethod delete-store :file
-  [{:keys [path filesystem]}]
-  #?(:clj  (konserve.filestore/delete-store filesystem path)
-     :cljs (konserve.node-filestore/delete-store path)))
+#?(:clj
+   (defmethod delete-store :file
+     [{:keys [path filesystem]}]
+     (konserve.filestore/delete-store filesystem path)))
 
-(defmethod release-store :file
-  [_config _store]
-  nil)
+#?(:clj
+   (defmethod release-store :file
+     [_config _store]
+     nil))
 
 ;; =============================================================================
 ;; Default Error Handling
@@ -136,8 +137,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
-               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
@@ -145,8 +146,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
-               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
@@ -154,8 +155,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
-               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only)"
+               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
