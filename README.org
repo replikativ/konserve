@@ -559,17 +559,43 @@ See individual backend documentation for configuration details and advanced feat
 :END:
 
 Konserve supports tiered storage with a frontend cache layer and backend persistence layer.
-The tiered store combines a fast frontend store (e.g., in-memory) with a durable backend 
+The tiered store combines a fast frontend store (e.g., in-memory) with a durable backend
 store (e.g., filesystem) to optimize for both performance and persistence.
 
-Usage:
+Usage (recommended - unified interface):
 
 #+BEGIN_SRC clojure
   (ns test-db
-    (:require [konserve.tiered :refer [connect-tiered-store]]
-              [konserve.memory :refer [new-mem-store]]
-              [konserve.filestore :refer [connect-fs-store]]
-              [clojure.core.async :refer [go <!]]))
+    (:require [konserve.core :as k]))
+
+  ;; Synchronous tiered store
+  (def config {:backend :tiered
+               :frontend {:backend :memory}
+               :backend {:backend :file :path "/tmp/store"}
+               :write-policy :write-through
+               :read-policy :frontend-first
+               :opts {:sync? true}})
+
+  ;; Create tiered store (creates both frontend and backend)
+  (def tiered-store (k/create-store config))
+
+  ;; Or connect to existing tiered setup
+  ;; (def tiered-store (k/connect-store config))
+
+  ;; Use the store
+  (k/assoc-in tiered-store [:data] {:value 42} {:sync? true})
+
+  ;; Clean up
+  (k/delete-store config)
+#+END_SRC
+
+Legacy direct API (still supported):
+
+#+BEGIN_SRC clojure
+  (require '[konserve.tiered :refer [connect-tiered-store]]
+           '[konserve.memory :refer [new-mem-store]]
+           '[konserve.filestore :refer [connect-fs-store]]
+           '[clojure.core.async :refer [go <!]])
 
   (go
     (def frontend-store (<! (new-mem-store)))
