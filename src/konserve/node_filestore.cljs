@@ -573,8 +573,8 @@
 ;; Multimethod Registration for konserve.store dispatch
 ;; =============================================================================
 
-(defmethod store/connect-store :file
-  [{:keys [path config opts] :as all-config}]
+(defmethod store/-connect-store :file
+  [{:keys [path config] :as all-config} opts]
   (let [opts (or opts {:sync? false})
         exists (store-exists? path)]
     (when-not exists
@@ -584,8 +584,8 @@
                       :config config
                       :opts opts)))
 
-(defmethod store/create-store :file
-  [{:keys [path config opts] :as all-config}]
+(defmethod store/-create-store :file
+  [{:keys [path config] :as all-config} opts]
   (let [opts (or opts {:sync? false})
         exists (store-exists? path)]
     (when exists
@@ -595,17 +595,17 @@
                       :config config
                       :opts opts)))
 
-(defmethod store/store-exists? :file
-  [{:keys [path opts]}]
+(defmethod store/-store-exists? :file
+  [{:keys [path]} opts]
   (let [exists (store-exists? path)]
     (if (:sync? opts)
       exists
       (go exists))))
 
-(defmethod store/delete-store :file
-  [{:keys [path]}]
+(defmethod store/-delete-store :file
+  [{:keys [path]} opts]
   (delete-store path))
 
-(defmethod store/release-store :file
-  [_config _store]
+(defmethod store/-release-store :file
+  [_config _store opts]
   nil)

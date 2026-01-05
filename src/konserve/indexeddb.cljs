@@ -498,8 +498,8 @@
 ;; Multimethod Registration for konserve.store dispatch
 ;; =============================================================================
 
-(defmethod store/connect-store :indexeddb
-  [{:keys [name opts] :as config}]
+(defmethod store/-connect-store :indexeddb
+  [{:keys [name] :as config} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store connections must be async (set :sync? to false)")
   (go
@@ -509,8 +509,8 @@
                         {:name name :config config})))
       (<! (connect-to-idb name)))))
 
-(defmethod store/create-store :indexeddb
-  [{:keys [name opts] :as config}]
+(defmethod store/-create-store :indexeddb
+  [{:keys [name] :as config} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store creation must be async (set :sync? to false)")
   (go
@@ -520,16 +520,16 @@
                         {:name name :config config})))
       (<! (connect-to-idb name)))))
 
-(defmethod store/store-exists? :indexeddb
-  [{:keys [name opts]}]
+(defmethod store/-store-exists? :indexeddb
+  [{:keys [name]} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store existence checks must be async (set :sync? to false)")
   (db-exists? name))
 
-(defmethod store/delete-store :indexeddb
-  [{:keys [name]}]
+(defmethod store/-delete-store :indexeddb
+  [{:keys [name]} opts]
   (delete-idb name))
 
-(defmethod store/release-store :indexeddb
-  [_config _store]
+(defmethod store/-release-store :indexeddb
+  [_config _store opts]
   nil)
