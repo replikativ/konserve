@@ -105,16 +105,19 @@
 
 (defmethod connect-store :memory
   [{:keys [id opts] :as config}]
-  (let [id (or id (zufall.core/rand-german-mammal))
-        opts (or opts {:sync? false})
-        store (konserve.memory/connect-mem-store id opts)]
-    (if (:sync? opts)
-      (or store
-          (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
-                          {:id id :config config})))
-      (go (or (<! store)
+  (let [opts (or opts {:sync? false})]
+    (if id
+      ;; Strict mode with :id - must exist in registry
+      (let [store (konserve.memory/connect-mem-store id opts)]
+        (if (:sync? opts)
+          (or store
               (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
-                              {:id id :config config})))))))
+                              {:id id :config config})))
+          (go (or (<! store)
+                  (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                                  {:id id :config config}))))))
+      ;; No :id - ephemeral mode (backwards compatible)
+      (konserve.memory/new-mem-store (atom {}) opts))))
 
 (defmethod create-store :memory
   [{:keys [id opts] :as config}]
@@ -128,19 +131,20 @@
 
 (defmethod store-exists? :memory
   [{:keys [id opts] :as config}]
-  (let [id (or id (zufall.core/rand-german-mammal))
-        opts (or opts {:sync? false})
-        exists (contains? @konserve.memory/memory-store-registry id)]
-    (if (:sync? opts)
-      exists
-      (go exists))))
+  (let [opts (or opts {:sync? false})]
+    (if id
+      ;; Check registry if :id provided
+      (let [exists (contains? @konserve.memory/memory-store-registry id)]
+        (if (:sync? opts) exists (go exists)))
+      ;; No :id - ephemeral stores don't "exist" in persistent sense
+      (if (:sync? opts) false (go false)))))
 
 (defmethod delete-store :memory
   [{:keys [id] :as config}]
-  (if id
-    (konserve.memory/delete-mem-store id)
-    (throw (ex-info "Cannot delete memory store without :id"
-                    {:config config}))))
+  ;; Only delete from registry if :id provided
+  (when id
+    (konserve.memory/delete-mem-store id))
+  nil)
 
 (defmethod release-store :memory
   [_config _store]
@@ -152,11 +156,8 @@
 #?(:clj
    (defmethod connect-store :file
      [{:keys [path config filesystem opts] :as all-config}]
-     (let [opts (or opts {:sync? false})
-           exists (konserve.filestore/store-exists? filesystem path)]
-       (when-not exists
-         (throw (ex-info (str "File store does not exist at path: " path)
-                         {:path path :config all-config})))
+     (let [opts (or opts {:sync? false})]
+       ;; Auto-create if doesn't exist (backwards compatibility)
        (konserve.filestore/connect-fs-store path
                                             :config config
                                             :filesystem filesystem
