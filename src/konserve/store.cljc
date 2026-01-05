@@ -73,10 +73,54 @@
       :else config)))
 
 ;; =============================================================================
-;; Multimethod Definitions
+;; Private Multimethods (fixed arity, both config and opts)
 ;; =============================================================================
 
-(defmulti connect-store
+(defmulti -connect-store
+  "Private multimethod for connecting to stores with fixed arity.
+
+   Dispatch is based on :backend in config."
+  (fn [config _opts]
+    (validate-store-config config)
+    (:backend config)))
+
+(defmulti -create-store
+  "Private multimethod for creating stores with fixed arity.
+
+   Dispatch is based on :backend in config."
+  (fn [config _opts]
+    (validate-store-config config)
+    (:backend config)))
+
+(defmulti -store-exists?
+  "Private multimethod for checking store existence with fixed arity.
+
+   Dispatch is based on :backend in config."
+  (fn [config _opts]
+    (validate-store-config config)
+    (:backend config)))
+
+(defmulti -delete-store
+  "Private multimethod for deleting stores with fixed arity.
+
+   Dispatch is based on :backend in config."
+  (fn [config _opts]
+    (validate-store-config config)
+    (:backend config)))
+
+(defmulti -release-store
+  "Private multimethod for releasing stores with fixed arity.
+
+   Dispatch is based on :backend in config."
+  (fn [config _store _opts]
+    (validate-store-config config)
+    (:backend config)))
+
+;; =============================================================================
+;; Public Functions with Variable Arity (defaults to async)
+;; =============================================================================
+
+(defn connect-store
   "Connect to a konserve store based on :backend key in config.
 
    Each backend expects different config keys. See documentation for specific backend
@@ -84,14 +128,18 @@
 
    Args:
      config - A map with :backend key and backend-specific configuration
+     opts - (optional) Runtime options map. Defaults to {:sync? false}
+            Common options:
+            - :sync? - true for synchronous, false for async (default: false)
 
    Returns:
-     A store instance (or channel if async mode, determined by :opts {:sync? false})"
-  (fn [config]
-    (validate-store-config config)
-    (:backend config)))
+     A store instance (or channel if async mode)"
+  ([config]
+   (connect-store config {:sync? false}))
+  ([config opts]
+   (-connect-store config (or opts {:sync? false}))))
 
-(defmulti create-store
+(defn create-store
   "Create a new store.
 
    Note: Most backends auto-create on connect-store, so this is often equivalent.
@@ -99,49 +147,57 @@
 
    Args:
      config - A map with :backend key and backend-specific configuration
+     opts - (optional) Runtime options map. Defaults to {:sync? false}
 
    Returns:
      A new store instance"
-  (fn [config]
-    (validate-store-config config)
-    (:backend config)))
+  ([config]
+   (create-store config {:sync? false}))
+  ([config opts]
+   (-create-store config (or opts {:sync? false}))))
 
-(defmulti store-exists?
+(defn store-exists?
   "Check if a store exists at the given configuration.
 
    Args:
      config - A map with :backend key and backend-specific configuration
+     opts - (optional) Runtime options map. Defaults to {:sync? false}
 
    Returns:
      true if store exists, false otherwise (or channel in async mode)"
-  (fn [config]
-    (validate-store-config config)
-    (:backend config)))
+  ([config]
+   (store-exists? config {:sync? false}))
+  ([config opts]
+   (-store-exists? config (or opts {:sync? false}))))
 
-(defmulti delete-store
+(defn delete-store
   "Delete/clean up an existing store (removes underlying storage).
 
    Args:
      config - A map with :backend key and backend-specific configuration
+     opts - (optional) Runtime options map. Defaults to {:sync? false}
 
    Returns:
      nil or cleanup status"
-  (fn [config]
-    (validate-store-config config)
-    (:backend config)))
+  ([config]
+   (delete-store config {:sync? false}))
+  ([config opts]
+   (-delete-store config (or opts {:sync? false}))))
 
-(defmulti release-store
+(defn release-store
   "Release connections and resources held by a store.
 
    Args:
      config - A map with :backend key
      store - The store instance to release
+     opts - (optional) Runtime options map. Defaults to {:sync? false}
 
    Returns:
      nil or completion indicator"
-  (fn [config _store]
-    (validate-store-config config)
-    (:backend config)))
+  ([config store]
+   (release-store config store {:sync? false}))
+  ([config store opts]
+   (-release-store config store (or opts {:sync? false}))))
 
 ;; =============================================================================
 ;; Built-in Backend Implementations
@@ -149,74 +205,68 @@
 
 ;; ===== :memory Backend =====
 
-(defmethod connect-store :memory
-  [{:keys [id opts] :as config}]
-  (let [opts (or opts {:sync? false})]
-    (if id
-      ;; Strict mode with :id - must exist in registry
-      (let [store (konserve.memory/connect-mem-store id opts)]
-        (if (:sync? opts)
-          (or store
-              (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
-                              {:id id :config config})))
-          (go (or (<! store)
-                  (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
-                                  {:id id :config config}))))))
-      ;; No :id - ephemeral mode (backwards compatible)
-      (konserve.memory/new-mem-store (atom {}) opts))))
+(defmethod -connect-store :memory
+  [{:keys [id] :as config} opts]
+  (if id
+    ;; Strict mode with :id - must exist in registry
+    (let [store (konserve.memory/connect-mem-store id opts)]
+      (if (:sync? opts)
+        (or store
+            (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                            {:id id :config config})))
+        (go (or (<! store)
+                (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                                {:id id :config config}))))))
+    ;; No :id - ephemeral mode (backwards compatible)
+    (konserve.memory/new-mem-store (atom {}) opts)))
 
-(defmethod create-store :memory
-  [{:keys [id opts] :as config}]
-  (let [id (:id config)
-        opts (or opts {:sync? false})
-        existing (get @konserve.memory/memory-store-registry id)]
+(defmethod -create-store :memory
+  [{:keys [id] :as config} opts]
+  (let [existing (get @konserve.memory/memory-store-registry id)]
     (when existing
       (throw (ex-info (str "Memory store with ID '" id "' already exists.")
                       {:id id :config config})))
     (konserve.memory/new-mem-store (atom {}) (assoc opts :id id))))
 
-(defmethod store-exists? :memory
-  [{:keys [id opts] :as config}]
-  (let [opts (or opts {:sync? false})]
-    (if id
-      ;; Check registry if :id provided
-      (let [exists (contains? @konserve.memory/memory-store-registry id)]
-        (if (:sync? opts) exists (go exists)))
-      ;; No :id - ephemeral stores don't "exist" in persistent sense
-      (if (:sync? opts) false (go false)))))
+(defmethod -store-exists? :memory
+  [{:keys [id] :as config} opts]
+  (if id
+    ;; Check registry if :id provided
+    (let [exists (contains? @konserve.memory/memory-store-registry id)]
+      (if (:sync? opts) exists (go exists)))
+    ;; No :id - ephemeral stores don't "exist" in persistent sense
+    (if (:sync? opts) false (go false))))
 
-(defmethod delete-store :memory
-  [{:keys [id] :as config}]
+(defmethod -delete-store :memory
+  [{:keys [id] :as config} _opts]
   ;; Only delete from registry if :id provided
   (when id
     (konserve.memory/delete-mem-store id))
   nil)
 
-(defmethod release-store :memory
-  [_config _store]
+(defmethod -release-store :memory
+  [_config _store _opts]
   nil)
 
 ;; ===== :file Backend (JVM only) =====
 ;; ClojureScript/Node.js :file backend is external - require konserve.node-filestore
 
 #?(:clj
-   (defmethod connect-store :file
-     [{:keys [path config filesystem opts] :as all-config}]
-     (let [opts (or opts {:sync? false})]
-       (let [exists (konserve.filestore/store-exists? filesystem path)]
-         (when-not exists
-           (throw (ex-info (str "File store does not exist at path: " path)
-                           {:path path :config all-config})))
-         (konserve.filestore/connect-fs-store path
-                                              :config config
-                                              :filesystem filesystem
-                                              :opts opts)))))
+   (defmethod -connect-store :file
+     [{:keys [path config filesystem] :as all-config} opts]
+     (let [exists (konserve.filestore/store-exists? filesystem path)]
+       (when-not exists
+         (throw (ex-info (str "File store does not exist at path: " path)
+                         {:path path :config all-config})))
+       (konserve.filestore/connect-fs-store path
+                                            :config config
+                                            :filesystem filesystem
+                                            :opts opts))))
 
 #?(:clj
-   (defmethod create-store :file
-     [{:keys [path config filesystem opts] :as all-config}]
-     (let [opts (or opts {:sync? false})
-           exists (konserve.filestore/store-exists? filesystem path)]
+   (defmethod -create-store :file
+     [{:keys [path config filesystem] :as all-config} opts]
+     (let [exists (konserve.filestore/store-exists? filesystem path)]
        (when exists
          (throw (ex-info (str "File store already exists at path: " path)
                          {:path path :config all-config})))
@@ -226,29 +276,29 @@
                                             :opts opts))))
 
 #?(:clj
-   (defmethod store-exists? :file
-     [{:keys [path filesystem opts] :as config}]
+   (defmethod -store-exists? :file
+     [{:keys [path filesystem] :as config} opts]
      (let [exists (konserve.filestore/store-exists? filesystem path)]
        (if (:sync? opts)
          exists
          (go exists)))))
 
 #?(:clj
-   (defmethod delete-store :file
-     [{:keys [path filesystem] :as config}]
+   (defmethod -delete-store :file
+     [{:keys [path filesystem] :as config} _opts]
      (konserve.filestore/delete-store filesystem path)))
 
 #?(:clj
-   (defmethod release-store :file
-     [_config _store]
+   (defmethod -release-store :file
+     [_config _store _opts]
      nil))
 
 ;; =============================================================================
 ;; Default Error Handling
 ;; =============================================================================
 
-(defmethod connect-store :default
-  [{:keys [backend] :as config}]
+(defmethod -connect-store :default
+  [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
                "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
@@ -256,8 +306,8 @@
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
-(defmethod create-store :default
-  [{:keys [backend] :as config}]
+(defmethod -create-store :default
+  [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
                "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
@@ -265,8 +315,8 @@
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
-(defmethod store-exists? :default
-  [{:keys [backend] :as config}]
+(defmethod -store-exists? :default
+  [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
                "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
@@ -277,53 +327,51 @@
 ;; ===== :tiered Backend (built-in) =====
 ;; Tiered store combines a fast frontend cache with a durable backend
 
-(defmethod create-store :tiered
-  [{:keys [frontend backend write-policy read-policy opts] :as config}]
-  (let [opts (or opts {:sync? false})]
-    (if (:sync? opts)
-      ;; Synchronous mode
-      (let [frontend-store (create-store (assoc frontend :opts opts))
-            backend-store (create-store (assoc backend :opts opts))]
-        (tiered/connect-tiered-store frontend-store backend-store
-                                     :write-policy (or write-policy :write-through)
-                                     :read-policy (or read-policy :frontend-first)
-                                     :opts opts))
-      ;; Asynchronous mode
-      (go
-        (let [frontend-store (<! (create-store (assoc frontend :opts opts)))
-              backend-store (<! (create-store (assoc backend :opts opts)))]
-          (<! (tiered/connect-tiered-store frontend-store backend-store
-                                           :write-policy (or write-policy :write-through)
-                                           :read-policy (or read-policy :frontend-first)
-                                           :opts opts)))))))
+(defmethod -create-store :tiered
+  [{:keys [frontend backend write-policy read-policy] :as config} opts]
+  (if (:sync? opts)
+    ;; Synchronous mode
+    (let [frontend-store (create-store frontend opts)
+          backend-store (create-store backend opts)]
+      (tiered/connect-tiered-store frontend-store backend-store
+                                   :write-policy (or write-policy :write-through)
+                                   :read-policy (or read-policy :frontend-first)
+                                   :opts opts))
+    ;; Asynchronous mode
+    (go
+      (let [frontend-store (<! (create-store frontend opts))
+            backend-store (<! (create-store backend opts))]
+        (<! (tiered/connect-tiered-store frontend-store backend-store
+                                         :write-policy (or write-policy :write-through)
+                                         :read-policy (or read-policy :frontend-first)
+                                         :opts opts))))))
 
-(defmethod connect-store :tiered
-  [{:keys [frontend backend write-policy read-policy opts] :as config}]
-  (let [opts (or opts {:sync? false})]
-    (if (:sync? opts)
-      ;; Synchronous mode
-      (let [frontend-store (connect-store (assoc frontend :opts opts))
-            backend-store (connect-store (assoc backend :opts opts))]
-        (tiered/connect-tiered-store frontend-store backend-store
-                                     :write-policy (or write-policy :write-through)
-                                     :read-policy (or read-policy :frontend-first)
-                                     :opts opts))
-      ;; Asynchronous mode
-      (go
-        (let [frontend-store (<! (connect-store (assoc frontend :opts opts)))
-              backend-store (<! (connect-store (assoc backend :opts opts)))]
-          (<! (tiered/connect-tiered-store frontend-store backend-store
-                                           :write-policy (or write-policy :write-through)
-                                           :read-policy (or read-policy :frontend-first)
-                                           :opts opts)))))))
+(defmethod -connect-store :tiered
+  [{:keys [frontend backend write-policy read-policy] :as config} opts]
+  (if (:sync? opts)
+    ;; Synchronous mode
+    (let [frontend-store (connect-store frontend opts)
+          backend-store (connect-store backend opts)]
+      (tiered/connect-tiered-store frontend-store backend-store
+                                   :write-policy (or write-policy :write-through)
+                                   :read-policy (or read-policy :frontend-first)
+                                   :opts opts))
+    ;; Asynchronous mode
+    (go
+      (let [frontend-store (<! (connect-store frontend opts))
+            backend-store (<! (connect-store backend opts))]
+        (<! (tiered/connect-tiered-store frontend-store backend-store
+                                         :write-policy (or write-policy :write-through)
+                                         :read-policy (or read-policy :frontend-first)
+                                         :opts opts))))))
 
-(defmethod store-exists? :tiered
-  [{:keys [backend opts] :as config}]
+(defmethod -store-exists? :tiered
+  [{:keys [backend] :as config} opts]
   ;; Tiered store exists if backend exists (frontend is just a cache)
-  (store-exists? (assoc backend :opts (or opts {:sync? false}))))
+  (store-exists? backend opts))
 
-(defmethod delete-store :tiered
-  [{:keys [backend frontend] :as config}]
+(defmethod -delete-store :tiered
+  [{:keys [backend frontend] :as config} _opts]
   ;; Delete backend (authoritative source)
   ;; Optionally delete frontend if it's persistent
   (delete-store backend)
@@ -332,8 +380,8 @@
     (delete-store frontend))
   nil)
 
-(defmethod release-store :tiered
-  [{:keys [frontend backend]} store]
+(defmethod -release-store :tiered
+  [{:keys [frontend backend]} store _opts]
   ;; Release both stores
   (when frontend
     (release-store frontend (:frontend-store store)))
@@ -343,8 +391,8 @@
 
 ;; ===== Default handlers for unsupported backends =====
 
-(defmethod delete-store :default
-  [{:keys [backend] :as config}]
+(defmethod -delete-store :default
+  [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
                "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
@@ -352,6 +400,6 @@
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
-(defmethod release-store :default
-  [_config _store]
+(defmethod -release-store :default
+  [_config _store _opts]
   nil)

@@ -42,11 +42,10 @@ Add to your dependencies: [[https://clojars.org/io.replikativ/konserve][https://
   ;; Generate once: (java.util.UUID/randomUUID) or (random-uuid)
   ;; Then use the literal in your config
   (def config {:backend :memory
-               :id #uuid "550e8400-e29b-41d4-a716-446655440000"
-               :opts {:sync? true}})
+               :id #uuid "550e8400-e29b-41d4-a716-446655440000"})
 
-  ;; Create new store
-  (def store (k/create-store config))
+  ;; Create new store, pass opts as separate argument
+  (def store (k/create-store config {:sync? true}))
 
   ;; Use the store
   (k/assoc-in store [:user] {:name "Alice"} {:sync? true})
@@ -85,11 +84,13 @@ machines, and synchronization contexts.
 
   ;; 2. Copy the UUID and use it as a literal in your config
   {:backend :memory
-   :id #uuid "550e8400-e29b-41d4-a716-446655440000"
-   :opts {:sync? true}}
+   :id #uuid "550e8400-e29b-41d4-a716-446655440000"}
 
-  ;; 3. Use the SAME UUID every time for the same logical store
-  ;; 4. Use DIFFERENT UUIDs for different stores (dev, test, prod)
+  ;; 3. Pass opts as separate argument to store functions
+  (k/create-store config {:sync? true})
+
+  ;; 4. Use the SAME UUID every time for the same logical store
+  ;; 5. Use DIFFERENT UUIDs for different stores (dev, test, prod)
 #+END_SRC
 
 *Important:*
@@ -122,10 +123,9 @@ Konserve supports both synchronous and asynchronous execution modes via =core.as
 
 #+BEGIN_SRC clojure
   (def config {:backend :memory
-               :id #uuid "550e8400-e29b-41d4-a716-446655440000"
-               :opts {:sync? true}})
+               :id #uuid "550e8400-e29b-41d4-a716-446655440000"})
 
-  (def store (k/create-store config))
+  (def store (k/create-store config {:sync? true}))
 
   (k/assoc-in store [:key] "value" {:sync? true})
   (k/get-in store [:key] nil {:sync? true})
@@ -138,11 +138,10 @@ Konserve supports both synchronous and asynchronous execution modes via =core.as
   (require '[clojure.core.async :refer [go <!]])
 
   (def config {:backend :memory
-               :id #uuid "550e8400-e29b-41d4-a716-446655440001"
-               :opts {:sync? false}})
+               :id #uuid "550e8400-e29b-41d4-a716-446655440001"})
 
   (go
-    (def store (<! (k/create-store config)))
+    (def store (<! (k/create-store config {:sync? false})))
 
     (<! (k/assoc-in store [:key] "value"))
     (println (<! (k/get-in store [:key]))))
@@ -162,29 +161,28 @@ Konserve provides five key lifecycle functions:
 #+BEGIN_SRC clojure
   (def config {:backend :file
                :id #uuid "550e8400-e29b-41d4-a716-446655440002"
-               :path "/tmp/my-store"
-               :opts {:sync? true}})
+               :path "/tmp/my-store"})
 
   ;; Check if store exists
-  (k/store-exists? config)  ;; => false
+  (k/store-exists? config {:sync? true})  ;; => false
 
   ;; Create new store (errors if already exists)
-  (def store (k/create-store config))
+  (def store (k/create-store config {:sync? true}))
 
   ;; Use the store...
   (k/assoc-in store [:data] {:value 42} {:sync? true})
 
   ;; Later, connect to existing store (errors if doesn't exist)
-  ;; (def store (k/connect-store config))
+  ;; (def store (k/connect-store config {:sync? true}))
 
   ;; Clean up resources
-  (k/release-store config store)
+  (k/release-store config store {:sync? true})
 
   ;; Delete underlying storage
-  (k/delete-store config)
+  (k/delete-store config {:sync? true})
 
   ;; Verify deletion
-  (k/store-exists? config)  ;; => false
+  (k/store-exists? config {:sync? true})  ;; => false
 #+END_SRC
 
 *** Create vs Connect Semantics
@@ -207,13 +205,12 @@ An in-memory store wrapping an Atom, available for both Clojure and ClojureScrip
 
   ;; Persistent registry-based store with ID
   (def config {:backend :memory
-               :id #uuid "550e8400-e29b-41d4-a716-446655440003"
-               :opts {:sync? true}})
+               :id #uuid "550e8400-e29b-41d4-a716-446655440003"})
 
-  (def my-db (k/create-store config))
+  (def my-db (k/create-store config {:sync? true}))
 
   ;; Later sessions can reconnect:
-  ;; (def my-db (k/connect-store config))
+  ;; (def my-db (k/connect-store config {:sync? true}))
 #+END_SRC
 
 *** File Store (JVM)
@@ -225,14 +222,13 @@ A file-system store using [[https://github.com/clojure/data.fressian][fressian]]
 
   (def config {:backend :file
                :id #uuid "550e8400-e29b-41d4-a716-446655440004"
-               :path "/tmp/konserve-store"
-               :opts {:sync? true}})
+               :path "/tmp/konserve-store"})
 
   ;; Create new store
-  (def my-db (k/create-store config))
+  (def my-db (k/create-store config {:sync? true}))
 
   ;; Or connect to existing
-  ;; (def my-db (k/connect-store config))
+  ;; (def my-db (k/connect-store config {:sync? true}))
 #+END_SRC
 
 The file store supports:
@@ -252,10 +248,9 @@ For Node.js environments, require the Node.js-specific file store:
   (go
     (def config {:backend :file
                  :id #uuid "550e8400-e29b-41d4-a716-446655440005"
-                 :path "/tmp/konserve-store"
-                 :opts {:sync? false}})
+                 :path "/tmp/konserve-store"})
 
-    (def my-db (<! (k/create-store config))))
+    (def my-db (<! (k/create-store config {:sync? false}))))
 #+END_SRC
 
 *** IndexedDB (Browser)
@@ -270,11 +265,10 @@ For Node.js environments, require the Node.js-specific file store:
   (go
     (def config {:backend :indexeddb
                  :id #uuid "550e8400-e29b-41d4-a716-446655440006"
-                 :name "my-app-db"
-                 :opts {:sync? false}})
+                 :name "my-app-db"})
 
     ;; Create new store
-    (def my-idb-store (<! (k/create-store config)))
+    (def my-idb-store (<! (k/create-store config {:sync? false})))
 
     ;; Use the store
     (<! (k/assoc-in my-idb-store [:user] {:name "Alice" :age 30}))
@@ -292,7 +286,7 @@ For Node.js environments, require the Node.js-specific file store:
     (<! (k/multi-dissoc my-idb-store [:user1 :user2]))
 
     ;; Clean up
-    (<! (k/delete-store config)))
+    (<! (k/delete-store config {:sync? false})))
 #+END_SRC
 
 The IndexedDB implementation supports atomic multi-key operations through IndexedDB's native transaction model.
@@ -311,20 +305,19 @@ After requiring a backend module, it automatically registers with the multimetho
   (def config {:backend :s3
                :id #uuid "550e8400-e29b-41d4-a716-446655440007"
                :bucket "my-bucket"
-               :region "us-east-1"
-               :opts {:sync? true}})
+               :region "us-east-1"})
 
   ;; Create new store
-  (def s3-store (k/create-store config))
+  (def s3-store (k/create-store config {:sync? true}))
 
   ;; Use the store
   (k/assoc-in s3-store [:data] {:value 42} {:sync? true})
 
   ;; Later, connect to existing store
-  ;; (def s3-store (k/connect-store config))
+  ;; (def s3-store (k/connect-store config {:sync? true}))
 
   ;; Clean up
-  (k/delete-store config)
+  (k/delete-store config {:sync? true})
 #+END_SRC
 
 *** Available External Backends
@@ -366,17 +359,16 @@ Combines a fast frontend store (e.g., in-memory) with a durable backend store (e
                         :id #uuid "550e8400-e29b-41d4-a716-44665544000a"
                         :path "/tmp/store"}
                :write-policy :write-through
-               :read-policy :frontend-first
-               :opts {:sync? true}})
+               :read-policy :frontend-first})
 
   ;; Create tiered store (creates both frontend and backend)
-  (def tiered-store (k/create-store config))
+  (def tiered-store (k/create-store config {:sync? true}))
 
   ;; Use the store
   (k/assoc-in tiered-store [:data] {:value 42} {:sync? true})
 
   ;; Clean up
-  (k/delete-store config)
+  (k/delete-store config {:sync? true})
 #+END_SRC
 
 *Write policies:*
@@ -429,10 +421,9 @@ like store synchronization, change logging, or triggering side effects.
   (require '[konserve.core :as k])
 
   (def config {:backend :memory
-               :id #uuid "550e8400-e29b-41d4-a716-44665544000b"
-               :opts {:sync? true}})
+               :id #uuid "550e8400-e29b-41d4-a716-44665544000b"})
 
-  (def store (k/create-store config))
+  (def store (k/create-store config {:sync? true}))
 
   ;; Register a hook to log all writes
   (k/add-write-hook! store ::my-logger
@@ -486,10 +477,9 @@ used by all current backends except lmdb and memory.
                :path "/tmp/secure-store"
                :config {:encryptor {:type :aes
                                    :key "s3cr3t"}
-                       :compressor {:type :lz4}}
-               :opts {:sync? true}})
+                       :compressor {:type :lz4}}})
 
-  (def store (k/create-store config))
+  (def store (k/create-store config {:sync? true}))
 #+END_SRC
 
 *Compression:*
