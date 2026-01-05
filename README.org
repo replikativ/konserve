@@ -19,10 +19,7 @@ generally serialized with [[https://github.com/edn-format/edn][edn]] semantics o
 and can be accessed similarly to =clojure.core= functions =get-in=, =assoc-in=
 and =update-in=. =update-in= especially allows to run functions atomically and
 returns old and new value. Each operation is run atomically and must be
-consistent (in fact ACID), but further consistency is not supported (Riak,
-CouchDB and many scalable solutions don't have transactions over keys for that
-reason). This is meant to be a building block for more sophisticated storage
-solutions (Datomic also builds on kv-stores).
+consistent (in fact ACID), but further consistency across keys is, depending on the backend, only optionally supported. 
 
 *** Key Features
 
@@ -198,11 +195,6 @@ All backends follow consistent strict semantics:
 - =create-store= - Creates new store, errors if already exists
 - =connect-store= - Connects to existing store, errors if doesn't exist
 - =store-exists?= - Checks for existence before create/connect
-
-*Ephemeral semantics* (Memory without :id only):
-- Each call creates a fresh in-memory store
-- =store-exists?= always returns false
-- Used for testing and temporary storage
 
 ** Built-in Backends
 
@@ -485,7 +477,7 @@ and a whitelist for keys that should be kept.
 *** Compression and Encryption
 
 Compression and encryption are supported by the default store implementation
-used by all current backends.
+used by all current backends except lmdb and memory.
 
 #+BEGIN_SRC clojure
   ;; Store configuration with compression and encryption
@@ -576,7 +568,7 @@ like CouchDB, Redis and Riak.
    :CUSTOM_ID: h:8153b6f6-d253-4863-86b4-038dd383b6fe
    :END:
 
-Copyright © 2014-2025 Christian Weilbach and contributors
+Copyright © 2014-2026 Christian Weilbach and contributors
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
