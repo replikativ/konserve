@@ -1,5 +1,5 @@
 (ns konserve.indexeddb
-  (:require [clojure.core.async :refer [go take! put! close!]]
+  (:require [clojure.core.async :refer [go take! put! close!] :include-macros true]
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
