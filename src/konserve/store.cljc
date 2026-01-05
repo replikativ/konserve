@@ -33,9 +33,44 @@
   (:require [konserve.memory]
             [konserve.tiered :as tiered]
             #?(:clj [konserve.filestore])
-            [zufall.core]
             #?(:clj  [clojure.core.async :refer [go <!]]
                :cljs [cljs.core.async :refer [go <!]])))
+
+;; =============================================================================
+;; Validation
+;; =============================================================================
+
+(defn validate-store-config
+  "Validates that store config has a valid UUID :id.
+
+   All stores require an :id field containing a UUID type for proper
+   identification and matching across different backends and machines.
+
+   Args:
+     config - Store configuration map
+
+   Returns:
+     config if valid
+
+   Throws:
+     ex-info if :id is missing or not a UUID type"
+  [config]
+  (let [id (:id config)]
+    (cond
+      (nil? id)
+      (throw (ex-info
+              (str "Store :id is required. Please add :id with a UUID to your store config.\n"
+                   "Generate a UUID with: #?(:clj (java.util.UUID/randomUUID) :cljs (random-uuid))\n"
+                   "Example: {:backend :memory :id #uuid \"550e8400-e29b-41d4-a716-446655440000\" ...}")
+              {:config config :error :missing-id}))
+
+      (not (uuid? id))
+      (throw (ex-info
+              (str "Store :id must be a UUID type. Got: " (type id) "\n"
+                   "Use #uuid \"...\" literal or generate with: #?(:clj (java.util.UUID/randomUUID) :cljs (random-uuid))")
+              {:config config :id id :error :invalid-id-type}))
+
+      :else config)))
 
 ;; =============================================================================
 ;; Multimethod Definitions
@@ -52,7 +87,9 @@
 
    Returns:
      A store instance (or channel if async mode, determined by :opts {:sync? false})"
-  :backend)
+  (fn [config]
+    (validate-store-config config)
+    (:backend config)))
 
 (defmulti create-store
   "Create a new store.
@@ -65,7 +102,9 @@
 
    Returns:
      A new store instance"
-  :backend)
+  (fn [config]
+    (validate-store-config config)
+    (:backend config)))
 
 (defmulti store-exists?
   "Check if a store exists at the given configuration.
@@ -75,7 +114,9 @@
 
    Returns:
      true if store exists, false otherwise (or channel in async mode)"
-  :backend)
+  (fn [config]
+    (validate-store-config config)
+    (:backend config)))
 
 (defmulti delete-store
   "Delete/clean up an existing store (removes underlying storage).
@@ -85,7 +126,9 @@
 
    Returns:
      nil or cleanup status"
-  :backend)
+  (fn [config]
+    (validate-store-config config)
+    (:backend config)))
 
 (defmulti release-store
   "Release connections and resources held by a store.
@@ -97,6 +140,7 @@
    Returns:
      nil or completion indicator"
   (fn [config _store]
+    (validate-store-config config)
     (:backend config)))
 
 ;; =============================================================================
@@ -123,7 +167,7 @@
 
 (defmethod create-store :memory
   [{:keys [id opts] :as config}]
-  (let [id (or id (zufall.core/rand-german-mammal))
+  (let [id (:id config)
         opts (or opts {:sync? false})
         existing (get @konserve.memory/memory-store-registry id)]
     (when existing
@@ -183,7 +227,7 @@
 
 #?(:clj
    (defmethod store-exists? :file
-     [{:keys [path filesystem opts]}]
+     [{:keys [path filesystem opts] :as config}]
      (let [exists (konserve.filestore/store-exists? filesystem path)]
        (if (:sync? opts)
          exists
@@ -191,7 +235,7 @@
 
 #?(:clj
    (defmethod delete-store :file
-     [{:keys [path filesystem]}]
+     [{:keys [path filesystem] :as config}]
      (konserve.filestore/delete-store filesystem path)))
 
 #?(:clj

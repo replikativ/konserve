@@ -114,6 +114,40 @@ the built-in memory store and default file store both support hooks.
 
 Add to your dependencies: [![Clojars Project](https://img.shields.io/clojars/v/io.replikativ/konserve.svg)](https://clojars.org/io.replikativ/konserve)
 
+*** Store Identification (UUID Requirement)
+    :PROPERTIES:
+    :CUSTOM_ID: h:uuid-requirement
+    :END:
+
+All konserve stores require a globally unique =:id= field containing a UUID type.
+This ensures stores can be uniquely identified and matched across different backends,
+machines, and synchronization contexts.
+
+*Why UUID IDs are required:*
+- *Global identifiability*: Match stores regardless of backend type or file path
+- *Cross-machine sync*: Identify the same logical store across different systems
+- *High entropy*: 128-bit UUIDs prevent collisions
+- *Backend-agnostic*: Same ID works for memory, file, S3, Redis, etc.
+
+*How to use UUIDs:*
+
+#+BEGIN_SRC clojure
+  ;; Use UUID literal in config
+  {:backend :memory
+   :id #uuid "550e8400-e29b-41d4-a716-446655440000"}
+
+  ;; Generate new UUID
+  (java.util.UUID/randomUUID)  ;; Clojure
+  (random-uuid)                 ;; ClojureScript
+#+END_SRC
+
+*Important:*
+- Generate a UUID once and use it consistently for the same store
+- Store the UUID in your application config (EDN files support =#uuid= literals)
+- Different stores (dev, test, prod) should have different UUIDs
+- The same logical store should always use the same UUID
+- For external (non-Clojure) APIs, strings can be converted to UUIDs
+
 *Recommended:* Use the unified multimethod-based store interface for all new code. Simply require the backend namespace to register it, then use =konserve.core= functions (=create-store=, =connect-store=, =store-exists?=, =delete-store=) with config maps.
 
 *Note:* Direct backend imports (e.g., =konserve.filestore/connect-fs-store=) are still supported for backwards compatibility but are considered legacy. The examples below show the recommended unified interface approach.
@@ -217,8 +251,9 @@ the backend namespace to register it, then use =konserve.core= functions.
 #+BEGIN_SRC clojure
   (require '[konserve.core :as k])
 
-  ;; Define configuration
+  ;; Define configuration (all stores require a UUID :id)
   (def config {:backend :memory
+               :id #uuid "550e8400-e29b-41d4-a716-446655440000"
                :opts {:sync? true}})
 
   ;; Create new store

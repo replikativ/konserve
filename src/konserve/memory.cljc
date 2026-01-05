@@ -6,8 +6,7 @@
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
                                         PAssocSerializers PWriteHookStore]]
-            [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]
-            [zufall.core :refer [rand-german-mammal]]))
+            [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
 
 ;; =============================================================================
 ;; Memory Store Registry
@@ -168,17 +167,16 @@
   "Create in memory store. Binaries are not properly locked yet and
   the read and write-handlers are dummy ones for compatibility.
 
-  If :id is provided in opts, the store will be registered globally and can be
-  retrieved later via connect-mem-store. If no :id is provided, generates a
-  random ID using rand-german-mammal.
+  The store will be registered globally by :id and can be retrieved later
+  via connect-mem-store.
 
   Options:
-    :id     - String ID for the store (optional, generates random if not provided)
+    :id     - String UUID for the store (required)
     :sync?  - Boolean for sync/async operation (default false)"
   ([] (new-mem-store (atom {}) {:sync? false}))
   ([init-atom] (new-mem-store init-atom {:sync? false}))
   ([init-atom opts]
-   (let [id (or (:id opts) (rand-german-mammal))
+   (let [id (:id opts)
          store
          (map->MemoryStore {:state init-atom
                             :read-handlers (atom {})
