@@ -255,9 +255,9 @@ the configuration map.
 Built-in:
 - =:memory= - In-memory store (all platforms)
 - =:file= - File-based store (JVM and Node.js)
-- =:indexeddb= - Browser IndexedDB (ClojureScript/browser only)
 
 External (require the corresponding module first):
+- =:indexeddb= - Browser IndexedDB (=konserve.indexeddb= - browser only)
 - =:s3= - AWS S3 ([[https://github.com/replikativ/konserve-s3][konserve-s3]])
 - =:dynamodb= - AWS DynamoDB ([[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]])
 - =:redis= - Redis ([[https://github.com/replikativ/konserve-redis][konserve-redis]])
@@ -341,10 +341,11 @@ Usage (unified interface):
     :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
     :END:
 
-[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as reference implementation for
-ClojureScript browser backends. The IndexedDB store is restricted to the async api only.
+[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as a browser-only backend for
+ClojureScript applications. The IndexedDB store is restricted to the async api only and must
+be explicitly required (it is not auto-loaded to avoid Node.js compatibility issues).
 
-Usage:
+Usage (direct import):
 
 #+BEGIN_SRC clojure
   (ns test-db
@@ -369,6 +370,28 @@ Usage:
 
     ;; Atomic bulk delete
     (<! (k/multi-dissoc my-idb-store [:user1 :user2])))
+#+END_SRC
+
+Usage (unified interface):
+
+#+BEGIN_SRC clojure
+  (ns test-db
+    (:require [clojure.core.async :refer [go <!]]
+              [konserve.indexeddb]  ;; Register :indexeddb backend
+              [konserve.core :as k]))
+
+  (go
+    (def my-idb-store (<! (k/connect-store {:backend :indexeddb
+                                            :name "example-db"
+                                            :opts {:sync? false}})))
+
+    ;; Regular operations
+    (<! (k/assoc-in my-idb-store [:user] {:name "Alice" :age 30}))
+    (<! (k/get-in my-idb-store [:user]))
+
+    ;; Multi-key atomic operations
+    (<! (k/multi-assoc my-idb-store {:user1 {:name "Alice"}
+                                     :user2 {:name "Bob"}})))
 #+END_SRC
 
 The IndexedDB implementation supports atomic multi-key operations (=multi-get=, =multi-assoc=, =multi-dissoc=) through IndexedDB's native transaction model. All operations in a single call either succeed or fail together. =multi-get= returns a sparse map containing only found keys, which is efficient for bulk retrieval during initialization.

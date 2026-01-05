@@ -6,6 +6,7 @@
             [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore PMultiReadBackingStore]]
             [konserve.serializers]
             [konserve.protocols :as protocols]
+            [konserve.store :as store]
             [konserve.utils :refer-macros [with-promise]]))
 
 (defn connect-to-idb [db-name]
@@ -492,3 +493,25 @@
                             (dissoc params :config))
         backing            (IndexedDBackingStore. db-name nil)]
     (defaults/connect-default-store backing store-config)))
+
+;; =============================================================================
+;; Multimethod Registration for konserve.store dispatch
+;; =============================================================================
+
+(defmethod store/connect-store :indexeddb
+  [{:keys [name opts] :as config}]
+  (assert (false? (:sync? opts))
+          "IndexedDB store connections must be async (set :sync? to false)")
+  (connect-to-idb name))
+
+(defmethod store/empty-store :indexeddb
+  [config]
+  (store/connect-store config))
+
+(defmethod store/delete-store :indexeddb
+  [{:keys [name]}]
+  (delete-idb name))
+
+(defmethod store/release-store :indexeddb
+  [_config _store]
+  nil)

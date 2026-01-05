@@ -5,11 +5,11 @@
    konserve backend stores using a `:backend` key in the configuration map.
 
    Built-in backends:
-   - :memory - In-memory store
+   - :memory - In-memory store (all platforms)
    - :file - File-based store (JVM and Node.js)
-   - :indexeddb - Browser IndexedDB store (ClojureScript only)
 
    External backends (register via require):
+   - :indexeddb - Browser IndexedDB (konserve.indexeddb - browser only)
    - :s3 - AWS S3 backend (konserve-s3)
    - :dynamodb - AWS DynamoDB backend (konserve-dynamodb)
    - :redis - Redis backend (konserve-redis)
@@ -30,8 +30,7 @@
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
             #?(:clj [konserve.filestore])
-            #?(:cljs [konserve.node-filestore])
-            #?(:cljs [konserve.indexeddb :as idb])))
+            #?(:cljs [konserve.node-filestore])))
 
 ;; =============================================================================
 ;; Multimethod Definitions
@@ -129,28 +128,6 @@
   [_config _store]
   nil)
 
-;; ===== :indexeddb Backend (ClojureScript only) =====
-
-#?(:cljs
-   (do
-     (defmethod connect-store :indexeddb
-       [{:keys [name opts] :as config}]
-       (assert (false? (:sync? opts))
-               "IndexedDB store connections must be async (set :sync? to false)")
-       (idb/connect-to-idb name))
-
-     (defmethod empty-store :indexeddb
-       [config]
-       (connect-store config))
-
-     (defmethod delete-store :indexeddb
-       [{:keys [name]}]
-       (idb/delete-idb name))
-
-     (defmethod release-store :indexeddb
-       [_config _store]
-       nil)))
-
 ;; =============================================================================
 ;; Default Error Handling
 ;; =============================================================================
@@ -159,8 +136,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
-               "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
+               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
@@ -168,8 +145,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
-               "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
+               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 
@@ -177,8 +154,8 @@
   [{:keys [backend] :as config}]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nSupported backends: :memory, :file (JVM/Node.js), :indexeddb (ClojureScript)"
-               "\nExternal backends: :s3, :dynamodb, :redis, :lmdb, :rocksdb"
+               "\n\nSupported backends: :memory, :file (JVM/Node.js)"
+               "\nExternal backends: :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
                "\nMake sure the corresponding backend module is required before use.")
           {:backend backend :config config})))
 

@@ -139,26 +139,5 @@
 ;; =============================================================================
 ;; ClojureScript IndexedDB Tests
 ;; =============================================================================
-
-#?(:cljs
-   (deftest indexeddb-store-connect-async
-     (async done
-            (testing "connect-store :indexeddb"
-              (go
-                (try
-                  (let [store-inst (<! (store/connect-store
-                                        {:backend :indexeddb :name "test-db" :opts {:sync? false}}))]
-                    (is (some? store-inst))
-                    (done))
-                  (catch js/Error e
-                    ;; IndexedDB might not be available in all test environments
-                    (js/console.warn "IndexedDB test skipped:" e)
-                    (done))))))))
-
-#?(:cljs
-   (deftest indexeddb-store-connect-sync-fails
-     (testing "connect-store :indexeddb requires async"
-       (is (thrown-with-msg? js/Error
-                             #"async"
-                             (store/connect-store
-                              {:backend :indexeddb :name "test-db" :opts {:sync? true}}))))))
+;; Note: IndexedDB tests are in indexeddb_test.cljs which only runs in browsers.
+;; IndexedDB is now treated as an external backend that must be explicitly required.
