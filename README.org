@@ -8,8 +8,9 @@
 [[https://circleci.com/gh/replikativ/konserve][https://circleci.com/gh/replikativ/konserve.svg?style=shield]]
 [[https://github.com/replikativ/konserve/tree/development][https://img.shields.io/github/last-commit/replikativ/konserve/main.svg]]
 
-
 [[https://whilo.github.io/old/articles/16/unified-storage-io][Simple durability, made flexible.]]
+
+** What is konserve?
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
 semantics to allow Clojuresque collection operations on associative key-value
@@ -21,103 +22,51 @@ returns old and new value. Each operation is run atomically and must be
 consistent (in fact ACID), but further consistency is not supported (Riak,
 CouchDB and many scalable solutions don't have transactions over keys for that
 reason). This is meant to be a building block for more sophisticated storage
-solutions (Datomic also builds on kv-stores). A simple append-log for fast
-write operations is also implemented.
+solutions (Datomic also builds on kv-stores).
 
-** Features
-   :PROPERTIES:
-   :CUSTOM_ID: h:115591f9-90d2-4c25-8499-6f53a8ae4bc6
-   :END:
+*** Key Features
 
 - /cross-platform/ between Clojure and ClojureScript
-- /lowest-common denominator interface/ for an associative datastructure
-  with =edn= semantics
+- /lowest-common denominator interface/ for an associative datastructure with =edn= semantics
 - /thread-safety with atomicity over key operations/
-- /consistent error handling/ for core.async
-- /fast serialization/ options (fressian, transit, ...), independent of
-  the underlying kv-store
-- /very low overhead/ protocol, including direct binary access for high
-  throughput
-- /no additional dependencies and setup/ required for IndexedDB in the
-  browser and the file backend on the JVM and Node.js
-- /avoids blocking io/, the filestore for instance will not block any
-  thread on reading. Fully asynchronous support for writing and other
-  stores is in the pipeline.
+- /fast serialization/ options (fressian, transit, ...), independent of the underlying kv-store
+- /very low overhead/ protocol, including direct binary access for high throughput
+- /no additional dependencies and setup/ required for IndexedDB in the browser and the file backend on the JVM and Node.js
+- /avoids blocking io/, the filestore for instance will not block any thread on reading
 
-*** Garbage Collector
-:PROPERTIES:
-:CUSTOM_ID: h:5529aa34-11b1-4499-bf62-7fc7be2b8a12
-:END:
+** Quick Start
 
-Konserve has a garbage collector that can be called manually when the store gets
-too crowded. For that, the function =konserve.gc/sweep!= allows you to provide a
-cut-off date to evict old keys and a whitelist for keys that should be kept.
-
-*** Error handling
-:PROPERTIES:
-:CUSTOM_ID: h:10edb2cf-b2fc-4cc5-8854-77e6e8a1d82d
-:END:
-
-For synchronous execution normal exceptions will be thrown. For asynchronous
-error handling we follow the semantics of =go-try= and =<?= introduced [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][here]]. We
-have the [[https://github.com/replikativ/superv.async/][superv.async]] library around the error handling in core.async, but since
-there is no need to push it onto the users of konserve, you just need these two
-macros that properly handle the errors. =<?= needs to check for an exception and
-rethrow and =go-try= needs to catch and pass it along as a return value such
-that it does not get lost.
-
-*** Write Hooks
-:PROPERTIES:
-:CUSTOM_ID: h:c3d7f8a2-9e1b-4d5c-a012-3b4e5f6a7c8d
-:END:
-
-Konserve supports write hooks that are invoked after every successful write
-operation. This enables reactive patterns like store synchronization, change
-logging, or triggering side effects without wrapping the store.
+Add to your dependencies: [[https://clojars.org/io.replikativ/konserve][https://img.shields.io/clojars/v/io.replikativ/konserve.svg]]
 
 #+BEGIN_SRC clojure
-  (require '[konserve.core :as k]
-           '[konserve.memory :refer [new-mem-store]])
+  (require '[konserve.core :as k])
 
-  (def store (new-mem-store (atom {}) {:sync? true}))
+  ;; All stores require a UUID :id for global identification
+  ;; Generate once: (java.util.UUID/randomUUID) or (random-uuid)
+  ;; Then use the literal in your config
+  (def config {:backend :memory
+               :id #uuid "550e8400-e29b-41d4-a716-446655440000"
+               :opts {:sync? true}})
 
-  ;; Register a hook to log all writes
-  (k/add-write-hook! store ::my-logger
-    (fn [{:keys [api-op key value]}]
-      (println "Write:" api-op key "->" value)))
+  ;; Create new store
+  (def store (k/create-store config))
 
-  ;; Writes now trigger the hook
+  ;; Use the store
   (k/assoc-in store [:user] {:name "Alice"} {:sync? true})
-  ;; Prints: Write: :assoc-in :user -> {:name "Alice"}
+  (k/get-in store [:user] nil {:sync? true})
+  ;; => {:name "Alice"}
 
-  ;; Remove hook when done
-  (k/remove-write-hook! store ::my-logger)
+  (k/update-in store [:user :age] (fnil inc 0) {:sync? true})
+  ;; => [nil 1]
+
+  ;; Clean up
+  (k/delete-store config)
 #+END_SRC
 
-The hook function receives a map with these keys:
-- =:api-op= - The operation (=:assoc-in=, =:update-in=, =:dissoc=, =:bassoc=, =:multi-assoc=, =:multi-dissoc=)
-- =:key= - The top-level key being written
-- =:key-vec= - Full key path (for =assoc-in= / =update-in=)
-- =:value= - The value written
-- =:old-value= - Previous value (for update operations)
-- =:kvs= - Map of key->value (for =multi-assoc=)
-- =:keys= - Collection of keys (for =multi-dissoc=)
-
-Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
-across all store backends. Stores must implement the =PWriteHookStore= protocol;
-the built-in memory store and default file store both support hooks.
-
-** Usage
+** Store Identification (UUID Requirement)
    :PROPERTIES:
-   :CUSTOM_ID: h:07b8872b-1b84-412b-8133-4dbb9d2a7430
+   :CUSTOM_ID: h:uuid-requirement
    :END:
-
-Add to your dependencies: [![Clojars Project](https://img.shields.io/clojars/v/io.replikativ/konserve.svg)](https://clojars.org/io.replikativ/konserve)
-
-*** Store Identification (UUID Requirement)
-    :PROPERTIES:
-    :CUSTOM_ID: h:uuid-requirement
-    :END:
 
 All konserve stores require a globally unique =:id= field containing a UUID type.
 This ensures stores can be uniquely identified and matched across different backends,
@@ -132,157 +81,100 @@ machines, and synchronization contexts.
 *How to use UUIDs:*
 
 #+BEGIN_SRC clojure
-  ;; Use UUID literal in config
-  {:backend :memory
-   :id #uuid "550e8400-e29b-41d4-a716-446655440000"}
-
-  ;; Generate new UUID
+  ;; 1. Generate a UUID once (in your REPL or terminal)
   (java.util.UUID/randomUUID)  ;; Clojure
   (random-uuid)                 ;; ClojureScript
+  ;; => #uuid "550e8400-e29b-41d4-a716-446655440000"
+
+  ;; 2. Copy the UUID and use it as a literal in your config
+  {:backend :memory
+   :id #uuid "550e8400-e29b-41d4-a716-446655440000"
+   :opts {:sync? true}}
+
+  ;; 3. Use the SAME UUID every time for the same logical store
+  ;; 4. Use DIFFERENT UUIDs for different stores (dev, test, prod)
 #+END_SRC
 
 *Important:*
-- Generate a UUID once and use it consistently for the same store
+- Generate a UUID *once* and use it consistently for the same store
 - Store the UUID in your application config (EDN files support =#uuid= literals)
 - Different stores (dev, test, prod) should have different UUIDs
-- The same logical store should always use the same UUID
-- For external (non-Clojure) APIs, strings can be converted to UUIDs
+- Never generate UUIDs dynamically in your code - use fixed literals
 
-*Recommended:* Use the unified multimethod-based store interface for all new code. Simply require the backend namespace to register it, then use =konserve.core= functions (=create-store=, =connect-store=, =store-exists?=, =delete-store=) with config maps.
+** Installation
 
-*Note:* Direct backend imports (e.g., =konserve.filestore/connect-fs-store=) are still supported for backwards compatibility but are considered legacy. The examples below show the recommended unified interface approach.
-
-*** Synchronous Execution
-:PROPERTIES:
-:CUSTOM_ID: h:e290028c-78d8-4af6-8742-18b6d46680e3
-:END:
-
-Run the following synchronous code if you are not using core.async in your scope:
+Add to your =deps.edn=:
 
 #+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.core :as k]))
-
-  ;; Create a file-based store (built-in on JVM)
-  (def config {:backend :file
-               :path "/tmp/store"
-               :opts {:sync? true}})
-
-  ;; Check if store exists
-  (k/store-exists? config) ;; => false
-
-  ;; Create new store
-  (def store (k/create-store config))
-
-  ;; Use the store
-  (k/assoc-in store ["foo" :bar] {:foo "baz"} {:sync? true})
-  (k/get-in store ["foo"] nil {:sync? true})
-  (k/exists? store "foo" {:sync? true})
-
-  (k/assoc-in store [:bar] 42 {:sync? true})
-  (k/update-in store [:bar] inc {:sync? true})
-  (k/get-in store [:bar] nil {:sync? true})
-  (k/dissoc store :bar {:sync? true})
-
-  (k/append store :error-log {:type :horrible} {:sync? true})
-  (k/log store :error-log {:sync? true})
-
-  (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-    (time (k/bassoc store "banana" ba {:sync? true})))
-
-  (k/bget store "banana"
-          (fn [{is :input-stream}]
-            (your-read-does-all-work-here is))
-          {:sync? true})
-
-  ;; Clean up
-  (k/delete-store config)
+{:deps {io.replikativ/konserve {:mvn/version "LATEST"}}}
 #+END_SRC
 
-*** Asynchronous Execution
-:PROPERTIES:
-:CUSTOM_ID: h:929c501d-2a31-4f05-b231-132f79ee6cb5
-:END:
-
-In a ClojureScript REPL or when using core.async in Clojure, you can evaluate
-the expressions wrapped in a go-block:
+Or to your =project.clj=:
 
 #+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.core :as k]
-              [clojure.core.async :refer [go <!]]))
-
-  (go
-    ;; Create a memory store for async use
-    (def config {:backend :memory
-                 :opts {:sync? false}})
-
-    ;; Create new store
-    (def store (<! (k/create-store config)))
-
-    ;; Use the store
-    (<! (k/assoc-in store ["foo" :bar] {:foo "baz"}))
-    (<! (k/get-in store ["foo"]))
-    (<! (k/exists? store "foo"))
-
-    (<! (k/assoc-in store [:bar] 42))
-    (<! (k/update-in store [:bar] inc))
-    (<! (k/get-in store [:bar]))
-    (<! (k/dissoc store :bar))
-
-    (<! (k/append store :error-log {:type :horrible}))
-    (<! (k/log store :error-log))
-
-    (let [ba (byte-array (* 10 1024 1024) (byte 42))]
-      (time (<! (k/bassoc store "banana" ba)))))
+[io.replikativ/konserve "LATEST"]
 #+END_SRC
 
-** Unified Store Interface
-   :PROPERTIES:
-   :CUSTOM_ID: h:unified-store-interface
-   :END:
+** Core Concepts
 
-Konserve provides a unified multimethod-based interface for all backend operations.
-All backends dispatch on a =:backend= key in the configuration map. Simply require
-the backend namespace to register it, then use =konserve.core= functions.
+*** Synchronous vs Asynchronous
 
-*** Quick Start
+Konserve supports both synchronous and asynchronous execution modes via =core.async=.
+
+*Synchronous mode* (=:sync? true=):
 
 #+BEGIN_SRC clojure
-  (require '[konserve.core :as k])
-
-  ;; Define configuration (all stores require a UUID :id)
   (def config {:backend :memory
                :id #uuid "550e8400-e29b-41d4-a716-446655440000"
                :opts {:sync? true}})
 
-  ;; Create new store
   (def store (k/create-store config))
 
-  ;; Use the store
-  (k/assoc-in store [:user] {:name "Alice"} {:sync? true})
-  (k/get-in store [:user] nil {:sync? true})
-
-  ;; Delete store when done
-  (k/delete-store config)
+  (k/assoc-in store [:key] "value" {:sync? true})
+  (k/get-in store [:key] nil {:sync? true})
+  ;; => "value"
 #+END_SRC
 
-*** Complete Lifecycle Example
+*Asynchronous mode* (=:sync? false=):
 
 #+BEGIN_SRC clojure
-  (require '[konserve.core :as k])
+  (require '[clojure.core.async :refer [go <!]])
 
+  (def config {:backend :memory
+               :id #uuid "550e8400-e29b-41d4-a716-446655440001"
+               :opts {:sync? false}})
+
+  (go
+    (def store (<! (k/create-store config)))
+
+    (<! (k/assoc-in store [:key] "value"))
+    (println (<! (k/get-in store [:key]))))
+  ;; => "value"
+#+END_SRC
+
+*** Store Lifecycle
+
+Konserve provides five key lifecycle functions:
+
+- =create-store= - Create a new store, errors if already exists
+- =connect-store= - Connect to existing store, errors if doesn't exist
+- =store-exists?= - Check if store exists at the given configuration
+- =release-store= - Release connections and resources held by a store
+- =delete-store= - Delete underlying storage
+
+#+BEGIN_SRC clojure
   (def config {:backend :file
+               :id #uuid "550e8400-e29b-41d4-a716-446655440002"
                :path "/tmp/my-store"
                :opts {:sync? true}})
 
   ;; Check if store exists
-  (k/store-exists? config) ;; => false
+  (k/store-exists? config)  ;; => false
 
   ;; Create new store (errors if already exists)
   (def store (k/create-store config))
 
-  ;; Use the store
+  ;; Use the store...
   (k/assoc-in store [:data] {:value 42} {:sync? true})
 
   ;; Later, connect to existing store (errors if doesn't exist)
@@ -295,84 +187,12 @@ the backend namespace to register it, then use =konserve.core= functions.
   (k/delete-store config)
 
   ;; Verify deletion
-  (k/store-exists? config) ;; => false
-#+END_SRC
-
-*** Backend Examples
-
-#+BEGIN_SRC clojure
-  (require '[konserve.core :as k])
-
-  ;; Memory store (built-in)
-  (def mem-config {:backend :memory :opts {:sync? true}})
-  (def mem-store (k/create-store mem-config))
-
-  ;; File store (JVM - built-in)
-  (def file-config {:backend :file
-                    :path "/tmp/konserve"
-                    :opts {:sync? true}})
-  (def file-store (k/create-store file-config))
-
-  ;; File store (Node.js - requires konserve.node-filestore)
-  (require '[konserve.node-filestore])
-  (def node-config {:backend :file
-                    :path "/tmp/konserve"
-                    :opts {:sync? false}})
-  (go (def node-store (<! (k/create-store node-config))))
-
-  ;; IndexedDB (browser - requires konserve.indexeddb)
-  (require '[konserve.indexeddb])
-  (def idb-config {:backend :indexeddb
-                   :name "my-db"
-                   :opts {:sync? false}})
-  (go (def idb-store (<! (k/create-store idb-config))))
-
-  ;; External backends (after requiring the backend module)
-  (require '[konserve-s3.core])
-  (def s3-config {:backend :s3
-                  :bucket "my-bucket"
-                  :region "us-east-1"
-                  :store-id "my-app"
-                  :opts {:sync? true}})
-  (def s3-store (k/create-store s3-config))
-#+END_SRC
-
-*** Store Lifecycle Functions
-
-Konserve provides four key lifecycle functions:
-
-- =create-store= - Create a new store, errors if already exists
-- =connect-store= - Connect to existing store, errors if doesn't exist
-- =store-exists?= - Check if store exists at the given configuration
-- =delete-store= - Delete underlying storage
-- =release-store= - Release connections and resources held by a store
-
-All backends follow strict semantics for =create-store= and =connect-store=.
-Use =store-exists?= to check before creating or connecting if you're unsure.
-
-#+BEGIN_SRC clojure
-  ;; Check if store exists
-  (k/store-exists? config)  ;; => true/false
-
-  ;; Create new store (errors if already exists)
-  (def store (k/create-store config))
-
-  ;; Or connect to existing store (errors if doesn't exist)
-  ;; (def store (k/connect-store config))
-
-  ;; Use the store...
-  (k/assoc-in store [:key] value {:sync? true})
-
-  ;; Clean up resources
-  (k/release-store config store)
-
-  ;; Delete underlying storage
-  (k/delete-store config)
+  (k/store-exists? config)  ;; => false
 #+END_SRC
 
 *** Create vs Connect Semantics
 
-All backends now follow consistent strict semantics:
+All backends follow consistent strict semantics:
 
 *Strict semantics* (All backends: File, S3, DynamoDB, Redis, LMDB, RocksDB, IndexedDB, Memory with :id):
 - =create-store= - Creates new store, errors if already exists
@@ -384,92 +204,36 @@ All backends now follow consistent strict semantics:
 - =store-exists?= always returns false
 - Used for testing and temporary storage
 
-*** Available Backends
+** Built-in Backends
 
-Built-in:
-- =:memory= - In-memory store (all platforms)
-- =:file= - File-based store (JVM only)
+*** Memory Store
 
-External (require the corresponding module first):
-- =:file= - File-based store for Node.js (=konserve.node-filestore=)
-- =:indexeddb= - Browser IndexedDB (=konserve.indexeddb= - browser only)
-- =:s3= - AWS S3 ([[https://github.com/replikativ/konserve-s3][konserve-s3]])
-- =:dynamodb= - AWS DynamoDB ([[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]])
-- =:redis= - Redis ([[https://github.com/replikativ/konserve-redis][konserve-redis]])
-- =:lmdb= - LMDB ([[https://github.com/replikativ/konserve-lmdb][konserve-lmdb]])
-- =:rocksdb= - RocksDB ([[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]])
-
-Each backend has specific configuration requirements. See the individual backend
-documentation for details.
-
-** Supported Backends
-   :PROPERTIES:
-   :CUSTOM_ID: h:387ed727-24da-41df-b0f6-cfa03f95bbdd
-   :END:
-
-*** In-Memory Store
-:PROPERTIES:
-:CUSTOM_ID: h:63d979c0-4c4b-41fd-b1e2-e447adee3908
-:END:
-
-For simple purposes a memory store wrapping an Atom is implemented for Clojure and ClojureScript.
-
-Usage (recommended - unified interface):
+An in-memory store wrapping an Atom, available for both Clojure and ClojureScript.
 
 #+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.core :as k]))
+  (require '[konserve.core :as k])
 
-  ;; Ephemeral store (for testing)
-  (def my-db (k/create-store {:backend :memory :opts {:sync? true}}))
+  ;; Persistent registry-based store with ID
+  (def config {:backend :memory
+               :id #uuid "550e8400-e29b-41d4-a716-446655440003"
+               :opts {:sync? true}})
 
-  ;; Or persistent registry-based store with ID
-  (def config {:backend :memory :id "my-app-store" :opts {:sync? true}})
   (def my-db (k/create-store config))
+
   ;; Later sessions can reconnect:
   ;; (def my-db (k/connect-store config))
 #+END_SRC
 
-Legacy direct API (still supported):
+*** File Store (JVM)
+
+A file-system store using [[https://github.com/clojure/data.fressian][fressian]] serialization. No setup or additional dependencies needed.
 
 #+BEGIN_SRC clojure
-  (require '[konserve.memory :refer [new-mem-store]])
-  (def my-db (new-mem-store))
-#+END_SRC
-
-*** fs-store
-    :PROPERTIES:
-    :CUSTOM_ID: h:c88f8eb7-27b1-46ff-bc64-918dd1eb30bc
-    :END:
-
-A file-system store in Clojure and for Node are provided as
-elementary reference implementations for the two most important platforms. No
-setup and no additional dependencies are needed.
-
-The file-system store currently uses [[https://github.com/clojure/data.fressian][fressian]] in Clojure and [[https://github.com/pkpkpk/fress][fress]] in
-ClojureScript and is quite efficient. Both implementations use the same on-disk
-format and can load the same store (but not concurrently). It also allows to
-access values as a normal file-system file, e.g. to open it with a native
-database like HDF5 in Java. You can decide not to fsync on every write by a
-configuration of ={:sync-blob? false}=, if a potential, but unlikely data loss
-is not critical for you (e.g. for a session store). Note that the database will
-not be corrupted in this case, you can just lose some write operations before
-the crash.
-
-The JVM file store is thoroughly tested using [[https://github.com/google/jimfs][Jimfs]], Google's in-memory NIO
-filesystem. This enables testing of file locking, atomic moves, concurrent
-access from multiple store instances, and rapid lifecycle operations in a
-controlled environment. The file store also supports custom =java.nio.file.FileSystem=
-instances via the =:filesystem= parameter for testing or specialized deployments.
-
-Usage (recommended - unified interface):
-
-#+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.core :as k]))
+  (require '[konserve.core :as k])
 
   (def config {:backend :file
-               :path "path/to/folder"
+               :id #uuid "550e8400-e29b-41d4-a716-446655440004"
+               :path "/tmp/konserve-store"
                :opts {:sync? true}})
 
   ;; Create new store
@@ -479,44 +243,48 @@ Usage (recommended - unified interface):
   ;; (def my-db (k/connect-store config))
 #+END_SRC
 
-Legacy direct API (still supported):
+The file store supports:
+- Optional fsync control via =:sync-blob? false= for better performance
+- Custom =java.nio.file.FileSystem= instances via =:filesystem= parameter
+- Thoroughly tested using [[https://github.com/google/jimfs][Jimfs]] (Google's in-memory NIO filesystem)
+
+*** File Store (Node.js)
+
+For Node.js environments, require the Node.js-specific file store:
 
 #+BEGIN_SRC clojure
-  (require '[#?(:clj  konserve.filestore
-                :cljs konserve.node-filestore) :refer [connect-fs-store]])
+  (require '[konserve.core :as k]
+           '[konserve.node-filestore]  ;; Registers :file backend for Node.js
+           '[clojure.core.async :refer [go <!]])
 
-  (def my-db (connect-fs-store "path/to/folder"))
+  (go
+    (def config {:backend :file
+                 :id #uuid "550e8400-e29b-41d4-a716-446655440005"
+                 :path "/tmp/konserve-store"
+                 :opts {:sync? false}})
+
+    (def my-db (<! (k/create-store config))))
 #+END_SRC
 
-*** IndexedDB
-    :PROPERTIES:
-    :CUSTOM_ID: h:ccbb272e-24b1-4f1e-b525-dd07c4e0e9b4
-    :END:
+*** IndexedDB (Browser)
 
-[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] is provided as a browser-only backend for
-ClojureScript applications. The IndexedDB store is restricted to the async api only and must
-be explicitly required (it is not auto-loaded to avoid Node.js compatibility issues).
-
-Usage (recommended - unified interface):
+[[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] backend for ClojureScript browser applications. Async-only, must be explicitly required.
 
 #+BEGIN_SRC clojure
-  (ns test-db
-    (:require [clojure.core.async :refer [go <!]]
-              [konserve.indexeddb]  ;; Register :indexeddb backend
-              [konserve.core :as k]))
+  (require '[konserve.core :as k]
+           '[konserve.indexeddb]  ;; Register :indexeddb backend
+           '[clojure.core.async :refer [go <!]])
 
   (go
     (def config {:backend :indexeddb
-                 :name "example-db"
+                 :id #uuid "550e8400-e29b-41d4-a716-446655440006"
+                 :name "my-app-db"
                  :opts {:sync? false}})
 
     ;; Create new store
     (def my-idb-store (<! (k/create-store config)))
 
-    ;; Or connect to existing
-    ;; (def my-idb-store (<! (k/connect-store config)))
-
-    ;; Regular operations
+    ;; Use the store
     (<! (k/assoc-in my-idb-store [:user] {:name "Alice" :age 30}))
     (<! (k/get-in my-idb-store [:user]))
 
@@ -535,42 +303,24 @@ Usage (recommended - unified interface):
     (<! (k/delete-store config)))
 #+END_SRC
 
-Legacy direct API (still supported):
+The IndexedDB implementation supports atomic multi-key operations through IndexedDB's native transaction model.
 
-#+BEGIN_SRC clojure
-  (require '[konserve.indexeddb :refer [connect-idb-store]])
+** External Backends
 
-  (go
-    (def my-idb-store (<! (connect-idb-store "example-db")))
-    ;; ... use store
-    )
-#+END_SRC
+External backends integrate seamlessly through the unified store interface.
+After requiring a backend module, it automatically registers with the multimethod dispatch system.
 
-The IndexedDB implementation supports atomic multi-key operations (=multi-get=, =multi-assoc=, =multi-dissoc=) through IndexedDB's native transaction model. All operations in a single call either succeed or fail together. =multi-get= returns a sparse map containing only found keys, which is efficient for bulk retrieval during initialization.
-
-*** External Backends
-    :PROPERTIES:
-    :CUSTOM_ID: h:a8505bd7-5e7a-4e1c-a851-20f11ca9affe
-    :END:
-
-External backends integrate seamlessly with konserve through the unified store
-interface. After requiring a backend module, it automatically registers with the
-multimethod dispatch system.
-
-Usage pattern:
+*** Usage Pattern
 
 #+BEGIN_SRC clojure
   (require '[konserve.core :as k])
   (require '[konserve-s3.core])  ;; Registers :s3 backend
 
   (def config {:backend :s3
+               :id #uuid "550e8400-e29b-41d4-a716-446655440007"
                :bucket "my-bucket"
                :region "us-east-1"
-               :store-id "my-app"
                :opts {:sync? true}})
-
-  ;; Check if store exists
-  (k/store-exists? config) ;; => false
 
   ;; Create new store
   (def s3-store (k/create-store config))
@@ -585,37 +335,50 @@ Usage pattern:
   (k/delete-store config)
 #+END_SRC
 
-Each backend also exposes its own direct API for backwards compatibility.
-See individual backend documentation for configuration details and advanced features.
+*** Available External Backends
 
-**** Tiered Store
-:PROPERTIES:
-:CUSTOM_ID: h:b8f1c3d2-4e5a-4b7c-9123-6d4e8f7a9b2c
-:END:
+- =:s3= - AWS S3 ([[https://github.com/replikativ/konserve-s3][konserve-s3]])
+- =:dynamodb= - AWS DynamoDB ([[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]])
+- =:redis= - Redis ([[https://github.com/replikativ/konserve-redis][konserve-redis]])
+- =:lmdb= - LMDB ([[https://github.com/replikativ/konserve-lmdb][konserve-lmdb]])
+- =:rocksdb= - RocksDB ([[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]])
+- =:jdbc= - JDBC databases ([[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]])
+
+*** Unofficial Backends
+
+- [[https://github.com/The-Literal-Company/konserve-gcs][konserve-gcs]] - Google Cloud Storage
+
+*** Outdated Backends
+
+The following projects are incompatible with the latest konserve release, but
+describe the usage of the underlying store API:
+- LevelDB: [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]]
+- CouchDB: [[https://github.com/replikativ/konserve-clutch][konserve-clutch]]
+- Riak: [[https://github.com/replikativ/konserve-welle][konserve-welle]]
+
+** Advanced Features
+
+*** Tiered Storage
 
 Konserve supports tiered storage with a frontend cache layer and backend persistence layer.
-The tiered store combines a fast frontend store (e.g., in-memory) with a durable backend
-store (e.g., filesystem) to optimize for both performance and persistence.
-
-Usage (recommended - unified interface):
+Combines a fast frontend store (e.g., in-memory) with a durable backend store (e.g., filesystem).
 
 #+BEGIN_SRC clojure
-  (ns test-db
-    (:require [konserve.core :as k]))
+  (require '[konserve.core :as k])
 
-  ;; Synchronous tiered store
   (def config {:backend :tiered
-               :frontend {:backend :memory}
-               :backend {:backend :file :path "/tmp/store"}
+               :id #uuid "550e8400-e29b-41d4-a716-446655440008"
+               :frontend {:backend :memory
+                         :id #uuid "550e8400-e29b-41d4-a716-446655440009"}
+               :backend {:backend :file
+                        :id #uuid "550e8400-e29b-41d4-a716-44665544000a"
+                        :path "/tmp/store"}
                :write-policy :write-through
                :read-policy :frontend-first
                :opts {:sync? true}})
 
   ;; Create tiered store (creates both frontend and backend)
   (def tiered-store (k/create-store config))
-
-  ;; Or connect to existing tiered setup
-  ;; (def tiered-store (k/connect-store config))
 
   ;; Use the store
   (k/assoc-in tiered-store [:data] {:value 42} {:sync? true})
@@ -624,136 +387,169 @@ Usage (recommended - unified interface):
   (k/delete-store config)
 #+END_SRC
 
-Legacy direct API (still supported):
-
-#+BEGIN_SRC clojure
-  (require '[konserve.tiered :refer [connect-tiered-store]]
-           '[konserve.memory :refer [new-mem-store]]
-           '[konserve.filestore :refer [connect-fs-store]]
-           '[clojure.core.async :refer [go <!]])
-
-  (go
-    (def frontend-store (<! (new-mem-store)))
-    (def backend-store (<! (connect-fs-store "/tmp/store")))
-    (def tiered-store (<! (connect-tiered-store frontend-store backend-store
-                                                :write-policy :write-through
-                                                :read-policy :frontend-first))))
-#+END_SRC
-
-Write policies:
+*Write policies:*
 - =:write-through= - Write to backend, then frontend synchronously
 - =:write-around= - Write only to backend, invalidate frontend
 
-Read policies:
+*Read policies:*
 - =:frontend-first= - Check frontend first, fallback to backend (populates frontend)
 - =:frontend-only= - Only read from frontend
 
-The tiered store also supports synchronization between layers and multi-key operations
-(=multi-get=, =multi-assoc=, =multi-dissoc=) when both stores support them. During
-initialization, =multi-get= combined with =multi-assoc= enables efficient bulk sync
-from backend to frontend.
+The tiered store supports multi-key operations (=multi-get=, =multi-assoc=, =multi-dissoc=)
+when both stores support them. During initialization, =multi-get= combined with =multi-assoc=
+enables efficient bulk sync from backend to frontend.
 
-**** Supported backends
-:PROPERTIES:
-:CUSTOM_ID: h:0100b431-cbaa-4aec-8750-9c02bc0965ba
-:END:
+*** Multi-Key Operations
 
-- [[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]]
-- [[https://github.com/replikativ/konserve-s3][konserve-s3]]
-- [[https://github.com/replikativ/konserve-lmdb][konserve-lmdb]]
-- [[https://github.com/replikativ/konserve-redis][konserve-redis]]
-- [[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]]
-- [[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]]
+Multi-key operations provide atomic bulk operations for supported backends:
 
-Please let us know if you are interested in other backends or if you need help
-with implementing one.
+#+BEGIN_SRC clojure
+  (require '[konserve.core :as k])
 
-**** Unofficial backends
-:PROPERTIES:
-:CUSTOM_ID: h:333570e0-e842-4eca-aef3-9a61fdb67499
-:END:
+  ;; Check if backend supports multi-key operations
+  (k/multi-key-capable? store)  ;; => true/false
 
-- [[https://github.com/The-Literal-Company/konserve-gcs][konserve-gcs]]
+  ;; Atomic bulk write
+  (k/multi-assoc store {:user1 {:name "Alice"}
+                       :user2 {:name "Bob"}
+                       :user3 {:name "Carol"}}
+                {:sync? true})
 
-**** Outdated backends
-:PROPERTIES:
-:CUSTOM_ID: h:2ff08b83-d842-4cdc-a5e4-1d3144e7993a
-:END:
+  ;; Efficient bulk read - returns sparse map (only found keys)
+  (k/multi-get store [:user1 :user2 :nonexistent] {:sync? true})
+  ;; => {:user1 {:name "Alice"} :user2 {:name "Bob"}}
 
-The following projects are incompatible with the latest konserve release, but
-describe the usage of the underlying store API and could still be helpful to
-implement new backends for the underlying store:
-- LevelDB:
-  [[https://github.com/replikativ/konserve-leveldb][konserve-leveldb]].
-- CouchDB:
-  [[https://github.com/replikativ/konserve-clutch][konserve-clutch]].
-- Riak:
-  [[https://github.com/replikativ/konserve-welle][konserve-welle]].
-- System component for internal backends:
-  [[https://github.com/danielsz/system/blob/master/src/system/components/konserve.clj][system component]]
+  ;; Atomic bulk delete
+  (k/multi-dissoc store [:user1 :user2] {:sync? true})
+#+END_SRC
 
+*Backends with multi-key support:*
+- Memory store
+- IndexedDB
+- Tiered store (when both layers support it)
 
-** Serialization formats
-   :PROPERTIES:
-   :CUSTOM_ID: h:a4cf3b14-1275-42d4-88f2-89fefb5c6085
-   :END:
+*** Write Hooks
+
+Write hooks are invoked after every successful write operation, enabling reactive patterns
+like store synchronization, change logging, or triggering side effects.
+
+#+BEGIN_SRC clojure
+  (require '[konserve.core :as k])
+
+  (def config {:backend :memory
+               :id #uuid "550e8400-e29b-41d4-a716-44665544000b"
+               :opts {:sync? true}})
+
+  (def store (k/create-store config))
+
+  ;; Register a hook to log all writes
+  (k/add-write-hook! store ::my-logger
+    (fn [{:keys [api-op key value]}]
+      (println "Write:" api-op key "->" value)))
+
+  ;; Writes now trigger the hook
+  (k/assoc-in store [:user] {:name "Alice"} {:sync? true})
+  ;; Prints: Write: :assoc-in :user -> {:name "Alice"}
+
+  ;; Remove hook when done
+  (k/remove-write-hook! store ::my-logger)
+#+END_SRC
+
+*Hook function receives:*
+- =:api-op= - The operation (=:assoc-in=, =:update-in=, =:dissoc=, =:bassoc=, =:multi-assoc=, =:multi-dissoc=)
+- =:key= - The top-level key being written
+- =:key-vec= - Full key path (for =assoc-in= / =update-in=)
+- =:value= - The value written
+- =:old-value= - Previous value (for update operations)
+- =:kvs= - Map of key->value (for =multi-assoc=)
+- =:keys= - Collection of keys (for =multi-dissoc=)
+
+Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
+across all store backends. Stores must implement the =PWriteHookStore= protocol.
+
+*** Garbage Collection
+
+Konserve has a garbage collector that can be called manually when the store gets
+too crowded.
+
+#+BEGIN_SRC clojure
+  (require '[konserve.gc :as gc])
+
+  ;; Evict keys older than cutoff date, keep whitelisted keys
+  (gc/sweep! store cutoff-date whitelist {:sync? true})
+#+END_SRC
+
+The function =konserve.gc/sweep!= allows you to provide a cut-off date to evict old keys
+and a whitelist for keys that should be kept.
+
+*** Compression and Encryption
+
+Compression and encryption are supported by the default store implementation
+used by all current backends.
+
+#+BEGIN_SRC clojure
+  ;; Store configuration with compression and encryption
+  (def config {:backend :file
+               :id #uuid "550e8400-e29b-41d4-a716-44665544000c"
+               :path "/tmp/secure-store"
+               :config {:encryptor {:type :aes
+                                   :key "s3cr3t"}
+                       :compressor {:type :lz4}}
+               :opts {:sync? true}})
+
+  (def store (k/create-store config))
+#+END_SRC
+
+*Compression:*
+- LZ4 compression (JVM only)
+
+*Encryption:*
+- AES/CBC/PKCS{5/7}Padding with 256 bit
+- Different salt for each written value
+- Same cold storage format for JVM and JS (cross-runtime compatible)
+
+*** Serialization Formats
 
 Different formats for =edn= serialization like [[https://github.com/clojure/data.fressian][fressian]], [[http://blog.cognitect.com/blog/2014/7/22/transit][transit]] or a simple
 =pr-str= version are supported and can be combined with different stores. Stores
-have a reasonable default setting. You can also extend the serialization
-protocol to other formats if you need it. You can provide [[https://github.com/replikativ/incognito][incognito]] support for
-records, if you need them.
+have a reasonable default setting. You can extend the serialization
+protocol to other formats if needed. [[https://github.com/replikativ/incognito][Incognito]] support is available for
+custom records.
 
-*** Tagged Literals
-    :PROPERTIES:
-    :CUSTOM_ID: h:1beb2a17-ca92-42b1-b909-1d043e3d81f6
-    :END:
+**** Tagged Literals
 
-You can read and write custom records according to
-[[https://github.com/replikativ/incognito][incognito]].
+You can read and write custom records according to [[https://github.com/replikativ/incognito][incognito]].
 
-** Compression and encryption
-:PROPERTIES:
-:CUSTOM_ID: h:98bf90fd-4778-49da-80d7-58f89f00aec5
-:END:
+*** Error Handling
 
-Compression and encryption are supported by the default store implementation
-that is used by all current backends. They can be activated in the store
-configuration as follows:
+For synchronous execution, normal exceptions are thrown. For asynchronous
+error handling, we follow the semantics of =go-try= and =<?= introduced [[https://swannodette.github.io/2013/08/31/asynchronous-error-handling][here]].
 
-#+BEGIN_SRC clojure
-{:encryptor {:type :aes
-             :key "s3cr3t"}
- :compressor {:type :lz4}}
-#+END_SRC
+The [[https://github.com/replikativ/superv.async/][superv.async]] library provides error handling for core.async. You just need two
+macros: =<?= checks for an exception and rethrows, =go-try= catches and passes it
+along as a return value so errors don't get lost.
 
-LZ4 compression is currently only supported on the JVM. AES encryption is
-supported on both JVM and JS targets with the same cold storage format, i.e. the
-same store can be read and written from Clojure and ClojureScript runtimes. We
-use AES/CBC/PKCS{5/7}Padding with 256 bit and a different salt for each written
-value.
-
-** Backend implementation guide
+** Backend Implementation Guide
    :PROPERTIES:
    :CUSTOM_ID: h:7582b1c9-e305-4d51-a808-c10eb447f3de
    :END:
 
-   We provide a [[file:doc/backend.org][backend implementation guide]].
+We provide a [[file:doc/backend.org][backend implementation guide]].
 
-   *New in 2025:* External backends can register with the unified store dispatch
-   system by defining multimethod implementations for:
-   - =konserve.store/create-store= - Create new store, error if exists
-   - =konserve.store/connect-store= - Connect to existing store, error if doesn't exist
-   - =konserve.store/store-exists?= - Check if store exists
-   - =konserve.store/delete-store= - Delete underlying storage
-   - =konserve.store/release-store= - Release resources
+*New in 2025:* External backends can register with the unified store dispatch
+system by defining multimethod implementations for:
+- =konserve.store/create-store= - Create new store, error if exists
+- =konserve.store/connect-store= - Connect to existing store, error if doesn't exist
+- =konserve.store/store-exists?= - Check if store exists
+- =konserve.store/delete-store= - Delete underlying storage
+- =konserve.store/release-store= - Release resources
 
-   All backends must implement strict semantics where =create-store= errors if the store
-   already exists and =connect-store= errors if the store doesn't exist. See existing
-   external backends (konserve-s3, konserve-lmdb, konserve-rocksdb, konserve-redis,
-   konserve-dynamodb) for reference implementations.
+All backends must implement strict semantics where =create-store= errors if the store
+already exists and =connect-store= errors if the store doesn't exist. See existing
+external backends (konserve-s3, konserve-lmdb, konserve-rocksdb, konserve-redis,
+konserve-dynamodb) for reference implementations.
 
-** Projects building on konserve
+** Projects Building on Konserve
    :PROPERTIES:
    :CUSTOM_ID: h:79876ac1-414b-4180-8d65-63737cb3bc53
    :END:
@@ -763,16 +559,15 @@ value.
 - [[https://github.com/danielsz/kampbell][kampbell]] maps collections of
   entities to konserve and enforces specs.
 
-** Combined usage with other writers
+** Combined Usage with Other Writers
    :PROPERTIES:
    :CUSTOM_ID: h:8a1b4a06-4b9f-496b-9eb2-52ac953a8e35
    :END:
 
-konserve assumes currently that it accesses its keyspace in the store
-exclusively. It uses [[https://github.com/replikativ/hasch][hasch]] to
-support arbitrary edn keys and hence does not normally clash with
+Konserve assumes it accesses its keyspace in the store exclusively. It uses
+[[https://github.com/replikativ/hasch][hasch]] to support arbitrary edn keys and hence does not normally clash with
 outside usage even when the same keys are used. To support multiple
-konserve clients in the store the backend has to support locking and
+konserve clients in the store, the backend must support locking and
 proper transactions on keys internally, which is the case for backends
 like CouchDB, Redis and Riak.
 
