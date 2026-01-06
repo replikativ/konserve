@@ -10,6 +10,8 @@
 
 [[https://whilo.github.io/old/articles/16/unified-storage-io][Simple durability, made flexible.]]
 
+*Heads-up: Breaking change konserve 0.9.* now requires a UUID under :id in the configuration in general. See below.*
+
 ** What is konserve?
 
 A simple document store protocol defined with synchronous and [[https://github.com/clojure/core.async][core.async]]
