@@ -525,8 +525,11 @@
   "Connect to a konserve store based on :backend key in config.
 
    Dispatches to the appropriate backend implementation based on the :backend key.
-   All backends support :opts {:sync? true/false} for synchronous or asynchronous
-   execution.
+   The second argument (opts) controls synchronous or asynchronous execution.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
 
    Built-in backends:
    - :memory - In-memory store (all platforms)
@@ -542,9 +545,9 @@
    - :rocksdb - RocksDB (konserve-rocksdb)
 
    Example:
-     (connect-store {:backend :memory :opts {:sync? true}})
-     (connect-store {:backend :file :path \"/tmp/store\" :opts {:sync? true}})
-     (connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})
+     (connect-store {:backend :memory} {:sync? true})
+     (connect-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+     (connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} {:sync? false})
 
    See konserve.store namespace for multimethod definitions and backend registration."
   store/connect-store)
@@ -556,7 +559,15 @@
    Use this when you explicitly want to create a new store. Will error if store
    already exists.
 
-   See connect-store for usage and available backends."
+   Args:
+     config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Example:
+     (create-store {:backend :memory} {:sync? true})
+     (create-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+
+   See connect-store for available backends."
   store/create-store)
 
 (def store-exists?
@@ -564,13 +575,14 @@
 
    Args:
      config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
 
    Returns:
      true if store exists, false otherwise (or channel in async mode)
 
    Example:
-     (store-exists? {:backend :memory :id \"my-store\" :opts {:sync? true}})
-     (store-exists? {:backend :file :path \"/tmp/store\" :opts {:sync? true}})
+     (store-exists? {:backend :memory :id \"my-store\"} {:sync? true})
+     (store-exists? {:backend :file :path \"/tmp/store\"} {:sync? true})
 
    See connect-store for available backends."
   store/store-exists?)
@@ -578,10 +590,13 @@
 (def delete-store
   "Delete/clean up an existing store (removes underlying storage).
 
-   Takes the same config map used with connect-store.
+   Args:
+     config - The same config map used with connect-store
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
 
    Example:
-     (delete-store {:backend :file :path \"/tmp/store\"})
+     (delete-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+     (delete-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} {:sync? false})
 
    See connect-store for available backends."
   store/delete-store)
@@ -592,9 +607,11 @@
    Args:
      config - The config map used to create the store
      store - The store instance to release
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
 
    Example:
-     (release-store {:backend :file :path \"/tmp/store\"} store)
+     (release-store {:backend :file :path \"/tmp/store\"} store {:sync? true})
+     (release-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} store)
 
    See connect-store for available backends."
   store/release-store)
