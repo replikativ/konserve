@@ -293,23 +293,30 @@
             (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
-            (let [blob        (<?- (-create-blob backing store-key env))
-                  env         (update-in env [:msg :keys] (fn [_] store-key))
-                  env    (assoc env :store-key store-key)
-                  lock   (when (and (:in-place? config) (:lock-blob? config))
-                           (trace "Acquiring blob lock for: " store-key (str blob))
-                           (<?- (-get-lock blob env)))
-                  keys-new (try (conj keys (<?- (read-blob blob read-handlers serializers env)))
-                                    ;; it can be that the blob has been deleted, ignore reading errors
-                                (catch #?(:clj Exception :cljs js/Error) _
-                                  keys)
-                                (finally
-                                  (<?- (-release lock env))
-                                  (<?- (-close blob env))))]
+            (let [keys-new (try
+                             (let [blob        (<?- (-create-blob backing store-key env))
+                                   env         (update-in env [:msg :keys] (fn [_] store-key))
+                                   env    (assoc env :store-key store-key)
+                                   lock   (when (and (:in-place? config) (:lock-blob? config))
+                                            (trace "Acquiring blob lock for: " store-key (str blob))
+                                            (<?- (-get-lock blob env)))
+                                   keys-new (try (conj keys (<?- (read-blob blob read-handlers serializers env)))
+                                                     ;; it can be that the blob has been deleted, ignore reading errors
+                                                 (catch #?(:clj Exception :cljs js/Error) _
+                                                   keys)
+                                                 (finally
+                                                   (<?- (-release lock env))
+                                                   (<?- (-close blob env))))]
+                               keys-new)
+                             (catch #?(:clj Exception :cljs js/Error) e
+                               ;; If anything fails during key enumeration (blob creation, read, or cleanup),
+                               ;; skip this key and continue. This handles concurrent deletes/modifications.
+                               (trace "Skipping key during enumeration due to:" store-key (ex-message e))
+                               keys))]
               (recur keys-new store-keys))
 
             :else ;; needs migration
-            (let [additional-keys (<! (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
+            (let [additional-keys (<?- (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
               (recur (into keys additional-keys) store-keys)))
           keys))))))
 

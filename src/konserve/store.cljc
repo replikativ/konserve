@@ -33,8 +33,8 @@
   (:require [konserve.memory]
             [konserve.tiered :as tiered]
             #?(:clj [konserve.filestore])
-            #?(:clj  [clojure.core.async :refer [go <!]]
-               :cljs [cljs.core.async :refer [go <!]])))
+            [clojure.core.async :refer [go <!] :include-macros true]
+            [superv.async :refer [go-try- <?-] :include-macros true]))
 
 ;; =============================================================================
 ;; Validation
@@ -214,9 +214,9 @@
         (or store
             (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
                             {:id id :config config})))
-        (go (or (<! store)
-                (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
-                                {:id id :config config}))))))
+        (go-try- (or (<?- store)
+                     (throw (ex-info (str "Memory store with ID '" id "' does not exist. Use create-store first.")
+                                     {:id id :config config}))))))
     ;; No :id - ephemeral mode (backwards compatible)
     (konserve.memory/new-mem-store (atom {}) opts)))
 
@@ -338,10 +338,10 @@
                                    :read-policy (or read-policy :frontend-first)
                                    :opts opts))
     ;; Asynchronous mode
-    (go
-      (let [frontend-store (<! (create-store frontend opts))
-            backend-store (<! (create-store backend opts))]
-        (<! (tiered/connect-tiered-store frontend-store backend-store
+    (go-try-
+     (let [frontend-store (<?- (create-store frontend opts))
+           backend-store (<?- (create-store backend opts))]
+       (<?- (tiered/connect-tiered-store frontend-store backend-store
                                          :write-policy (or write-policy :write-through)
                                          :read-policy (or read-policy :frontend-first)
                                          :opts opts))))))
@@ -357,10 +357,10 @@
                                    :read-policy (or read-policy :frontend-first)
                                    :opts opts))
     ;; Asynchronous mode
-    (go
-      (let [frontend-store (<! (connect-store frontend opts))
-            backend-store (<! (connect-store backend opts))]
-        (<! (tiered/connect-tiered-store frontend-store backend-store
+    (go-try-
+     (let [frontend-store (<?- (connect-store frontend opts))
+           backend-store (<?- (connect-store backend opts))]
+       (<?- (tiered/connect-tiered-store frontend-store backend-store
                                          :write-policy (or write-policy :write-through)
                                          :read-policy (or read-policy :frontend-first)
                                          :opts opts))))))
