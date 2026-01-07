@@ -1,5 +1,6 @@
 (ns konserve.indexeddb
   (:require [clojure.core.async :refer [go take! put! close!] :include-macros true]
+            [superv.async :refer [go-try- <?-] :include-macros true]
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
@@ -502,23 +503,23 @@
   [{:keys [name] :as config} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store connections must be async (set :sync? to false)")
-  (go
-    (let [exists (<! (db-exists? name))]
+  (go-try-
+    (let [exists (<?- (db-exists? name))]
       (when-not exists
         (throw (ex-info (str "IndexedDB store does not exist: " name)
                         {:name name :config config})))
-      (<! (connect-to-idb name)))))
+      (<?- (connect-to-idb name)))))
 
 (defmethod store/-create-store :indexeddb
   [{:keys [name] :as config} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store creation must be async (set :sync? to false)")
-  (go
-    (let [exists (<! (db-exists? name))]
+  (go-try-
+    (let [exists (<?- (db-exists? name))]
       (when exists
         (throw (ex-info (str "IndexedDB store already exists: " name)
                         {:name name :config config})))
-      (<! (connect-to-idb name)))))
+      (<?- (connect-to-idb name)))))
 
 (defmethod store/-store-exists? :indexeddb
   [{:keys [name]} opts]

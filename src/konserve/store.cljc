@@ -33,7 +33,7 @@
   (:require [konserve.memory]
             [konserve.tiered :as tiered]
             #?(:clj [konserve.filestore])
-            [clojure.core.async :refer [go <!] :include-macros true]
+            [clojure.core.async :refer [go] :include-macros true]
             [superv.async :refer [go-try- <?-] :include-macros true]))
 
 ;; =============================================================================
@@ -233,9 +233,9 @@
   (if id
     ;; Check registry if :id provided
     (let [exists (contains? @konserve.memory/memory-store-registry id)]
-      (if (:sync? opts) exists (go exists)))
+      (if (:sync? opts) exists (go-try- exists)))
     ;; No :id - ephemeral stores don't "exist" in persistent sense
-    (if (:sync? opts) false (go false))))
+    (if (:sync? opts) false (go-try- false))))
 
 (defmethod -delete-store :memory
   [{:keys [id] :as config} _opts]
@@ -281,7 +281,7 @@
      (let [exists (konserve.filestore/store-exists? filesystem path)]
        (if (:sync? opts)
          exists
-         (go exists)))))
+         (go-try- exists)))))
 
 #?(:clj
    (defmethod -delete-store :file
