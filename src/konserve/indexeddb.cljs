@@ -504,22 +504,22 @@
   (assert (false? (:sync? opts))
           "IndexedDB store connections must be async (set :sync? to false)")
   (go-try-
-    (let [exists (<?- (db-exists? name))]
-      (when-not exists
-        (throw (ex-info (str "IndexedDB store does not exist: " name)
-                        {:name name :config config})))
-      (<?- (connect-to-idb name)))))
+   (let [exists (<?- (db-exists? name))]
+     (when-not exists
+       (throw (ex-info (str "IndexedDB store does not exist: " name)
+                       {:name name :config config})))
+     (<?- (connect-to-idb name)))))
 
 (defmethod store/-create-store :indexeddb
   [{:keys [name] :as config} opts]
   (assert (false? (:sync? opts))
           "IndexedDB store creation must be async (set :sync? to false)")
   (go-try-
-    (let [exists (<?- (db-exists? name))]
-      (when exists
-        (throw (ex-info (str "IndexedDB store already exists: " name)
-                        {:name name :config config})))
-      (<?- (connect-to-idb name)))))
+   (let [exists (<?- (db-exists? name))]
+     (when exists
+       (throw (ex-info (str "IndexedDB store already exists: " name)
+                       {:name name :config config})))
+     (<?- (connect-to-idb name)))))
 
 (defmethod store/-store-exists? :indexeddb
   [{:keys [name]} opts]
