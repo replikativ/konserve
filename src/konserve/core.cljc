@@ -10,6 +10,7 @@
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.impl.defaults :as defaults]
+            [konserve.store :as store]
             [superv.async :refer [go-try- <?-]]
             [taoensso.timbre :refer [trace #?(:cljs debug)]])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked maybe-go-locked maybe-locked]])))
@@ -515,3 +516,102 @@
   "Assoc the given serializers onto the store, taking effect immediately."
   [store serializers]
   (-assoc-serializers store serializers))
+
+;; =============================================================================
+;; Unified Store Interface (re-exported from konserve.store)
+;; =============================================================================
+
+(def connect-store
+  "Connect to a konserve store based on :backend key in config.
+
+   Dispatches to the appropriate backend implementation based on the :backend key.
+   The second argument (opts) controls synchronous or asynchronous execution.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Built-in backends:
+   - :memory - In-memory store (all platforms)
+   - :file - File-based store (JVM only)
+
+   External backends (require the module first):
+   - :file - File-based store for Node.js (konserve.node-filestore)
+   - :indexeddb - Browser IndexedDB (konserve.indexeddb - browser only)
+   - :s3 - AWS S3 (konserve-s3)
+   - :dynamodb - AWS DynamoDB (konserve-dynamodb)
+   - :redis - Redis (konserve-redis)
+   - :lmdb - LMDB (konserve-lmdb)
+   - :rocksdb - RocksDB (konserve-rocksdb)
+
+   Example:
+     (connect-store {:backend :memory} {:sync? true})
+     (connect-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+     (connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} {:sync? false})
+
+   See konserve.store namespace for multimethod definitions and backend registration."
+  store/connect-store)
+
+(def create-store
+  "Create a new store.
+
+   Note: Most backends auto-create on connect-store, so this is often equivalent.
+   Use this when you explicitly want to create a new store. Will error if store
+   already exists.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Example:
+     (create-store {:backend :memory} {:sync? true})
+     (create-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+
+   See connect-store for available backends."
+  store/create-store)
+
+(def store-exists?
+  "Check if a store exists at the given configuration.
+
+   Args:
+     config - A map with :backend key and backend-specific configuration
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Returns:
+     true if store exists, false otherwise (or channel in async mode)
+
+   Example:
+     (store-exists? {:backend :memory :id \"my-store\"} {:sync? true})
+     (store-exists? {:backend :file :path \"/tmp/store\"} {:sync? true})
+
+   See connect-store for available backends."
+  store/store-exists?)
+
+(def delete-store
+  "Delete/clean up an existing store (removes underlying storage).
+
+   Args:
+     config - The same config map used with connect-store
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Example:
+     (delete-store {:backend :file :path \"/tmp/store\"} {:sync? true})
+     (delete-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} {:sync? false})
+
+   See connect-store for available backends."
+  store/delete-store)
+
+(def release-store
+  "Release connections and resources held by a store.
+
+   Args:
+     config - The config map used to create the store
+     store - The store instance to release
+     opts - Optional map with :sync? true/false (defaults to async {:sync? false})
+
+   Example:
+     (release-store {:backend :file :path \"/tmp/store\"} store {:sync? true})
+     (release-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"} store)
+
+   See connect-store for available backends."
+  store/release-store)

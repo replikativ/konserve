@@ -1,11 +1,13 @@
 (ns konserve.indexeddb
-  (:require [clojure.core.async :refer [go take! put! close!]]
+  (:require [clojure.core.async :refer [go take! put! close!] :include-macros true]
+            [superv.async :refer [go-try- <?-] :include-macros true]
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore PMultiReadBackingStore]]
             [konserve.serializers]
             [konserve.protocols :as protocols]
+            [konserve.store :as store]
             [konserve.utils :refer-macros [with-promise]]))
 
 (defn connect-to-idb [db-name]
@@ -492,3 +494,43 @@
                             (dissoc params :config))
         backing            (IndexedDBackingStore. db-name nil)]
     (defaults/connect-default-store backing store-config)))
+
+;; =============================================================================
+;; Multimethod Registration for konserve.store dispatch
+;; =============================================================================
+
+(defmethod store/-connect-store :indexeddb
+  [{:keys [name] :as config} opts]
+  (assert (false? (:sync? opts))
+          "IndexedDB store connections must be async (set :sync? to false)")
+  (go-try-
+   (let [exists (<?- (db-exists? name))]
+     (when-not exists
+       (throw (ex-info (str "IndexedDB store does not exist: " name)
+                       {:name name :config config})))
+     (<?- (connect-to-idb name)))))
+
+(defmethod store/-create-store :indexeddb
+  [{:keys [name] :as config} opts]
+  (assert (false? (:sync? opts))
+          "IndexedDB store creation must be async (set :sync? to false)")
+  (go-try-
+   (let [exists (<?- (db-exists? name))]
+     (when exists
+       (throw (ex-info (str "IndexedDB store already exists: " name)
+                       {:name name :config config})))
+     (<?- (connect-to-idb name)))))
+
+(defmethod store/-store-exists? :indexeddb
+  [{:keys [name]} opts]
+  (assert (false? (:sync? opts))
+          "IndexedDB store existence checks must be async (set :sync? to false)")
+  (db-exists? name))
+
+(defmethod store/-delete-store :indexeddb
+  [{:keys [name]} opts]
+  (delete-idb name))
+
+(defmethod store/-release-store :indexeddb
+  [_config _store opts]
+  nil)

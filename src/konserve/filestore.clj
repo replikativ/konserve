@@ -64,7 +64,7 @@
      (let [f         (io/file base)
            test-file (io/file (str base "/" (UUID/randomUUID)))]
        (when-not (.exists f)
-         (.mkdir f))
+         (.mkdirs f))
        (when-not (.createNewFile test-file)
          (throw (ex-info "Cannot write to base." {:type   :not-writable
                                                   :base base})))
@@ -128,9 +128,9 @@
                    (Files/exists (get-path filesystem base) (into-array LinkOption []))
                    (.exists (io/file base)))]
      (if exists?
-       (do (info "Store directory at " (str base) " exists with " (count-konserve-keys filesystem base) " konserve keys.")
+       (do (trace "Store directory at " (str base) " exists with " (count-konserve-keys filesystem base) " konserve keys.")
            true)
-       (do (info "Store directory at " (str base) " does not exist.")
+       (do (trace "Store directory at " (str base) " does not exist.")
            false)))))
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
@@ -297,8 +297,11 @@
           buffer (ByteBuffer/allocate header-size)]
       (.read this buffer 0 header-size
              (proxy [CompletionHandler] []
-               (completed [a b]
-                 (put! ch (.array buffer)))
+               (completed [bytes-read _att]
+                 (if (or (= 20 bytes-read) (= 8 bytes-read))
+                   (put! ch (.array buffer))
+                   (put! ch (ex-info "Header size mismatch"
+                                     (assoc msg :expected [20 8] :actual bytes-read)))))
                (failed [t _att]
                  (put! ch (ex-info "Could not read key."
                                    (assoc msg :exception t))))))
@@ -393,7 +396,12 @@
   (-read-header [this _env]
     (let [buffer (ByteBuffer/allocate header-size)
           len (.read this buffer 0)]
-      (assert (or (= 20 len) (= 8 len)) (str "Header size does not match. Length: " len))
+      (when (= len -1)
+        (throw (ex-info "File is empty or deleted during read"
+                        {:length len :expected [20 8]})))
+      (when-not (or (= 20 len) (= 8 len))
+        (throw (ex-info "Header size mismatch"
+                        {:expected [20 8] :actual len})))
       (.array buffer)))
   (-read-meta [this meta-size env]
     (let [{:keys [header-size]} env

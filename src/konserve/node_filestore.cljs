@@ -10,6 +10,7 @@
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.serializers]
+            [konserve.store :as store]
             [konserve.utils :refer-macros [with-promise]]
             [taoensso.timbre :refer [info]]))
 
@@ -567,3 +568,44 @@
                                (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
         backing            (NodejsBackingFilestore. path detect-old-blob ephemeral?)]
     (defaults/connect-default-store backing store-config)))
+
+;; =============================================================================
+;; Multimethod Registration for konserve.store dispatch
+;; =============================================================================
+
+(defmethod store/-connect-store :file
+  [{:keys [path config] :as all-config} opts]
+  (let [opts (or opts {:sync? false})
+        exists (store-exists? path)]
+    (when-not exists
+      (throw (ex-info (str "File store does not exist at path: " path)
+                      {:path path :config all-config})))
+    (connect-fs-store path
+                      :config config
+                      :opts opts)))
+
+(defmethod store/-create-store :file
+  [{:keys [path config] :as all-config} opts]
+  (let [opts (or opts {:sync? false})
+        exists (store-exists? path)]
+    (when exists
+      (throw (ex-info (str "File store already exists at path: " path)
+                      {:path path :config all-config})))
+    (connect-fs-store path
+                      :config config
+                      :opts opts)))
+
+(defmethod store/-store-exists? :file
+  [{:keys [path]} opts]
+  (let [exists (store-exists? path)]
+    (if (:sync? opts)
+      exists
+      (go exists))))
+
+(defmethod store/-delete-store :file
+  [{:keys [path]} opts]
+  (delete-store path))
+
+(defmethod store/-release-store :file
+  [_config _store opts]
+  nil)
