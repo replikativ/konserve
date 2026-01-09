@@ -253,26 +253,42 @@
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           store-key-exists? (<?- (-blob-exists? backing store-key env))
-          migration-key (<?- (-migratable backing key store-key env))]
+          migration-key (<?- (-migratable backing key store-key env))
+          max-retries (get-in config [:optimistic-locking-retries] 0)]
       (if (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
         (if (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
-          (let [blob (<?- (-create-blob backing store-key env))
-                lock   (when (:lock-blob? config)
-                         (trace "Acquiring blob lock for: " key (str blob))
-                         (<?- (get-lock blob (first key-vec) env)))]
-            (try
-              (let [old (if (and store-key-exists? (not overwrite?))
-                          (<?- (read-blob blob read-handlers serializers env))
-                          [nil nil])]
-                (if (or (= :write-edn operation) (= :write-binary operation))
-                  (<?- (update-blob backing store-key serializer write-handlers env old))
-                  old))
-              (finally
-                (when (:lock-blob? config)
-                  (trace "Releasing lock for " (first key-vec) (str blob))
-                  (<?- (-release lock env)))
-                (<?- (-close blob env)))))
+          ;; Retry loop for optimistic locking conflicts
+          (loop [attempt 0]
+            (let [result
+                  (try
+                    (let [blob (<?- (-create-blob backing store-key env))
+                          lock   (when (:lock-blob? config)
+                                   (trace "Acquiring blob lock for: " key (str blob))
+                                   (<?- (get-lock blob (first key-vec) env)))]
+                      (try
+                        (let [old (if (and (or store-key-exists? (pos? attempt)) (not overwrite?))
+                                    (<?- (read-blob blob read-handlers serializers env))
+                                    [nil nil])]
+                          (if (or (= :write-edn operation) (= :write-binary operation))
+                            (<?- (update-blob backing store-key serializer write-handlers env old))
+                            old))
+                        (finally
+                          (when (:lock-blob? config)
+                            (trace "Releasing lock for " (first key-vec) (str blob))
+                            (<?- (-release lock env)))
+                          (<?- (-close blob env)))))
+                    (catch #?(:clj Exception :cljs js/Error) e
+                      (if (and (pos? max-retries)
+                               (= :optimistic-lock-conflict (:type (ex-data e)))
+                               (< attempt max-retries))
+                        ::retry
+                        (throw e))))]
+              (if (= result ::retry)
+                (do
+                  (trace "Optimistic lock conflict on " key ", retrying attempt " (inc attempt) " of " max-retries)
+                  (recur (inc attempt)))
+                result)))
           nil))))))
 
 (defn list-keys
