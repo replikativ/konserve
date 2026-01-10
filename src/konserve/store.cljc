@@ -328,7 +328,18 @@
 ;; Tiered store combines a fast frontend cache with a durable backend
 
 (defmethod -create-store :tiered
-  [{:keys [frontend backend write-policy read-policy] :as config} opts]
+  [{:keys [frontend backend write-policy read-policy id] :as config} opts]
+  ;; Validate that frontend and backend IDs match tiered config ID
+  (when-not (= id (:id frontend))
+    (throw (ex-info "Tiered store frontend :id must match tiered config :id"
+                    {:tiered-id id
+                     :frontend-id (:id frontend)
+                     :config config})))
+  (when-not (= id (:id backend))
+    (throw (ex-info "Tiered store backend :id must match tiered config :id"
+                    {:tiered-id id
+                     :backend-id (:id backend)
+                     :config config})))
   (if (:sync? opts)
     ;; Synchronous mode
     (let [frontend-store (create-store frontend opts)
@@ -347,7 +358,18 @@
                                          :opts opts))))))
 
 (defmethod -connect-store :tiered
-  [{:keys [frontend backend write-policy read-policy] :as config} opts]
+  [{:keys [frontend backend write-policy read-policy id] :as config} opts]
+  ;; Validate that frontend and backend IDs match tiered config ID
+  (when-not (= id (:id frontend))
+    (throw (ex-info "Tiered store frontend :id must match tiered config :id"
+                    {:tiered-id id
+                     :frontend-id (:id frontend)
+                     :config config})))
+  (when-not (= id (:id backend))
+    (throw (ex-info "Tiered store backend :id must match tiered config :id"
+                    {:tiered-id id
+                     :backend-id (:id backend)
+                     :config config})))
   (if (:sync? opts)
     ;; Synchronous mode
     (let [frontend-store (connect-store frontend opts)
