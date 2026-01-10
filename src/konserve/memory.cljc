@@ -184,8 +184,9 @@
                             :locks (atom {})
                             :write-hooks (atom {})})
          result (if (:sync? opts) store (go store))]
-     ;; Register the store if ID is provided
-     (swap! memory-store-registry assoc id result)
+     ;; Register the actual store (not the wrapped channel) if ID is provided
+     (when id
+       (swap! memory-store-registry assoc id store))
      result)))
 
 (defn connect-mem-store
