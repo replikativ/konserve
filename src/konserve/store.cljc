@@ -330,87 +330,89 @@
 ;; Tiered store combines a fast frontend cache with a durable backend
 
 (defmethod -create-store :tiered
-  [{:keys [frontend backend write-policy read-policy id] :as config} opts]
+  [{:keys [frontend-config backend-config write-policy read-policy id] :as config} opts]
   ;; Validate that frontend and backend IDs match tiered config ID
-  (when-not (= id (:id frontend))
+  ;; Note: Uses :frontend-config/:backend-config to avoid collision with :backend :tiered
+  (when-not (= id (:id frontend-config))
     (throw (ex-info "Tiered store frontend :id must match tiered config :id"
                     {:tiered-id id
-                     :frontend-id (:id frontend)
+                     :frontend-id (:id frontend-config)
                      :config config})))
-  (when-not (= id (:id backend))
+  (when-not (= id (:id backend-config))
     (throw (ex-info "Tiered store backend :id must match tiered config :id"
                     {:tiered-id id
-                     :backend-id (:id backend)
+                     :backend-id (:id backend-config)
                      :config config})))
   (if (:sync? opts)
     ;; Synchronous mode
-    (let [frontend-store (create-store frontend opts)
-          backend-store (create-store backend opts)]
+    (let [frontend-store (create-store frontend-config opts)
+          backend-store (create-store backend-config opts)]
       (tiered/connect-tiered-store frontend-store backend-store
                                    :write-policy (or write-policy :write-through)
                                    :read-policy (or read-policy :frontend-first)
                                    :opts opts))
     ;; Asynchronous mode
     (go-try-
-     (let [frontend-store (<?- (create-store frontend opts))
-           backend-store (<?- (create-store backend opts))]
+     (let [frontend-store (<?- (create-store frontend-config opts))
+           backend-store (<?- (create-store backend-config opts))]
        (<?- (tiered/connect-tiered-store frontend-store backend-store
                                          :write-policy (or write-policy :write-through)
                                          :read-policy (or read-policy :frontend-first)
                                          :opts opts))))))
 
 (defmethod -connect-store :tiered
-  [{:keys [frontend backend write-policy read-policy id] :as config} opts]
+  [{:keys [frontend-config backend-config write-policy read-policy id] :as config} opts]
   ;; Validate that frontend and backend IDs match tiered config ID
-  (when-not (= id (:id frontend))
+  ;; Note: Uses :frontend-config/:backend-config to avoid collision with :backend :tiered
+  (when-not (= id (:id frontend-config))
     (throw (ex-info "Tiered store frontend :id must match tiered config :id"
                     {:tiered-id id
-                     :frontend-id (:id frontend)
+                     :frontend-id (:id frontend-config)
                      :config config})))
-  (when-not (= id (:id backend))
+  (when-not (= id (:id backend-config))
     (throw (ex-info "Tiered store backend :id must match tiered config :id"
                     {:tiered-id id
-                     :backend-id (:id backend)
+                     :backend-id (:id backend-config)
                      :config config})))
   (if (:sync? opts)
     ;; Synchronous mode
-    (let [frontend-store (connect-store frontend opts)
-          backend-store (connect-store backend opts)]
+    (let [frontend-store (connect-store frontend-config opts)
+          backend-store (connect-store backend-config opts)]
       (tiered/connect-tiered-store frontend-store backend-store
                                    :write-policy (or write-policy :write-through)
                                    :read-policy (or read-policy :frontend-first)
                                    :opts opts))
     ;; Asynchronous mode
     (go-try-
-     (let [frontend-store (<?- (connect-store frontend opts))
-           backend-store (<?- (connect-store backend opts))]
+     (let [frontend-store (<?- (connect-store frontend-config opts))
+           backend-store (<?- (connect-store backend-config opts))]
        (<?- (tiered/connect-tiered-store frontend-store backend-store
                                          :write-policy (or write-policy :write-through)
                                          :read-policy (or read-policy :frontend-first)
                                          :opts opts))))))
 
 (defmethod -store-exists? :tiered
-  [{:keys [backend] :as config} opts]
+  [{:keys [backend-config] :as config} opts]
   ;; Tiered store exists if backend exists (frontend is just a cache)
-  (store-exists? backend opts))
+  (store-exists? backend-config opts))
 
 (defmethod -delete-store :tiered
-  [{:keys [backend frontend] :as config} _opts]
+  [{:keys [backend-config frontend-config] :as config} _opts]
   ;; Delete backend (authoritative source)
   ;; Optionally delete frontend if it's persistent
-  (delete-store backend)
+  (delete-store backend-config)
   ;; Only delete frontend if it has persistence (e.g., file-based)
-  (when (and frontend (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend)))
-    (delete-store frontend))
+  (when (and frontend-config (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend-config)))
+    (delete-store frontend-config))
   nil)
 
 (defmethod -release-store :tiered
-  [{:keys [frontend backend]} store _opts]
+  [{:keys [frontend-config backend-config]} store _opts]
   ;; Release both stores
-  (when frontend
-    (release-store frontend (:frontend-store store)))
-  (when backend
-    (release-store backend (:backend-store store)))
+  (when frontend-config
+    (release-store frontend-config (:frontend-store store)))
+  (when backend-config
+    (release-store backend-config (:backend-store store)))
   nil)
 
 ;; ===== Default handlers for unsupported backends =====
