@@ -533,4 +533,4 @@
 
 (defmethod store/-release-store :indexeddb
   [_config _store opts]
-  nil)
+  (if (:sync? opts) nil (go-try- nil)))
