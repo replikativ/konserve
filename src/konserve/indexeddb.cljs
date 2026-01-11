@@ -508,7 +508,8 @@
      (when-not exists
        (throw (ex-info (str "IndexedDB store does not exist: " name)
                        {:name name :config config})))
-     (<?- (connect-to-idb name)))))
+     ;; Use connect-idb-store to get a proper DefaultStore, not raw IDBDatabase
+     (<?- (connect-idb-store name config)))))
 
 (defmethod store/-create-store :indexeddb
   [{:keys [name] :as config} opts]
@@ -519,7 +520,8 @@
      (when exists
        (throw (ex-info (str "IndexedDB store already exists: " name)
                        {:name name :config config})))
-     (<?- (connect-to-idb name)))))
+     ;; Use connect-idb-store to get a proper DefaultStore, not raw IDBDatabase
+     (<?- (connect-idb-store name config)))))
 
 (defmethod store/-store-exists? :indexeddb
   [{:keys [name]} opts]

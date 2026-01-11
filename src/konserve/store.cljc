@@ -246,7 +246,8 @@
 
 (defmethod -release-store :memory
   [_config _store opts]
-  ;; Memory stores don't need cleanup, but return proper async type
+  ;; Memory stores don't need cleanup - they're ephemeral
+  ;; Don't remove from registry here; let create-store/delete-store handle it
   (if (:sync? opts) nil (go-try- nil)))
 
 ;; ===== :file Backend (JVM only) =====
@@ -374,9 +375,15 @@
                     {:tiered-id id
                      :backend-id (:id backend-config)
                      :config config})))
+  ;; Frontend may be ephemeral (memory) - create if not exists, connect if exists
+  ;; Backend must exist (it's the persistent/authoritative source)
+  ;; After connect, caller should use ready-store/sync-on-connect to populate frontend
   (if (:sync? opts)
     ;; Synchronous mode
-    (let [frontend-store (connect-store frontend-config opts)
+    (let [frontend-exists? (store-exists? frontend-config opts)
+          frontend-store (if frontend-exists?
+                           (connect-store frontend-config opts)
+                           (create-store frontend-config opts))
           backend-store (connect-store backend-config opts)]
       (tiered/connect-tiered-store frontend-store backend-store
                                    :write-policy (or write-policy :write-through)
@@ -384,7 +391,10 @@
                                    :opts opts))
     ;; Asynchronous mode
     (go-try-
-     (let [frontend-store (<?- (connect-store frontend-config opts))
+     (let [frontend-exists? (<?- (store-exists? frontend-config opts))
+           frontend-store (if frontend-exists?
+                            (<?- (connect-store frontend-config opts))
+                            (<?- (create-store frontend-config opts)))
            backend-store (<?- (connect-store backend-config opts))]
        (<?- (tiered/connect-tiered-store frontend-store backend-store
                                          :write-policy (or write-policy :write-through)
