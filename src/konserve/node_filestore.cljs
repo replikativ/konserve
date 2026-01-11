@@ -608,4 +608,4 @@
 
 (defmethod store/-release-store :file
   [_config _store opts]
-  (if (:sync? opts) nil (go-try- nil)))
+  (if (:sync? opts) nil (go nil)))
