@@ -245,8 +245,9 @@
   nil)
 
 (defmethod -release-store :memory
-  [_config _store _opts]
-  nil)
+  [_config _store opts]
+  ;; Memory stores don't need cleanup, but return proper async type
+  (if (:sync? opts) nil (go-try- nil)))
 
 ;; ===== :file Backend (JVM only) =====
 ;; ClojureScript/Node.js :file backend is external - require konserve.node-filestore
@@ -290,8 +291,9 @@
 
 #?(:clj
    (defmethod -release-store :file
-     [_config _store _opts]
-     nil))
+     [_config _store opts]
+     ;; File stores don't need cleanup, but return proper async type
+     (if (:sync? opts) nil (go-try- nil))))
 
 ;; =============================================================================
 ;; Default Error Handling
@@ -423,5 +425,6 @@
           {:backend backend :config config})))
 
 (defmethod -release-store :default
-  [_config _store _opts]
-  nil)
+  [_config _store opts]
+  ;; Default: no cleanup needed, return proper async type
+  (if (:sync? opts) nil (go-try- nil)))

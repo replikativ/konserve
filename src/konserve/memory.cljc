@@ -200,7 +200,7 @@
     Store instance if found, nil otherwise (or channel in async mode)"
   [id opts]
   (if-let [store (get @memory-store-registry id)]
-    store
+    (if (:sync? opts) store (go store))
     (if (:sync? opts) nil (go nil))))
 
 (defn delete-mem-store
