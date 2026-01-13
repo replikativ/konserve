@@ -355,11 +355,11 @@ Combines a fast frontend store (e.g., in-memory) with a durable backend store (e
 
   (def config {:backend :tiered
                :id #uuid "550e8400-e29b-41d4-a716-446655440008"
-               :frontend {:backend :memory
-                         :id #uuid "550e8400-e29b-41d4-a716-446655440009"}
-               :backend {:backend :file
-                        :id #uuid "550e8400-e29b-41d4-a716-44665544000a"
-                        :path "/tmp/store"}
+               :frontend-config {:backend :memory
+                                :id #uuid "550e8400-e29b-41d4-a716-446655440009"}
+               :backend-config {:backend :file
+                               :id #uuid "550e8400-e29b-41d4-a716-44665544000a"
+                               :path "/tmp/store"}
                :write-policy :write-through
                :read-policy :frontend-first})
 
