@@ -4,7 +4,7 @@
   :END:
 
 [[https://clojurians.slack.com/archives/CB7GJAN0L][https://img.shields.io/badge/slack-join_chat-brightgreen.svg]]
-[[https://clojars.org/io.replikativ/konserve][https://img.shields.io/clojars/v/io.replikativ/konserve.svg]]
+[[https://clojars.org/org.replikativ/konserve][https://img.shields.io/clojars/v/org.replikativ/konserve.svg]]
 [[https://circleci.com/gh/replikativ/konserve][https://circleci.com/gh/replikativ/konserve.svg?style=shield]]
 [[https://github.com/replikativ/konserve/tree/development][https://img.shields.io/github/last-commit/replikativ/konserve/main.svg]]
 
@@ -35,7 +35,7 @@ consistent (in fact ACID), but further consistency across keys is, depending on 
 
 ** Quick Start
 
-Add to your dependencies: [[https://clojars.org/io.replikativ/konserve][https://img.shields.io/clojars/v/io.replikativ/konserve.svg]]
+Add to your dependencies: [[https://clojars.org/org.replikativ/konserve][https://img.shields.io/clojars/v/org.replikativ/konserve.svg]]
 
 #+BEGIN_SRC clojure
   (require '[konserve.core :as k])
@@ -106,13 +106,13 @@ machines, and synchronization contexts.
 Add to your =deps.edn=:
 
 #+BEGIN_SRC clojure
-{:deps {io.replikativ/konserve {:mvn/version "LATEST"}}}
+{:deps {org.replikativ/konserve {:mvn/version "LATEST"}}}
 #+END_SRC
 
 Or to your =project.clj=:
 
 #+BEGIN_SRC clojure
-[io.replikativ/konserve "LATEST"]
+[org.replikativ/konserve "LATEST"]
 #+END_SRC
 
 ** Core Concepts
