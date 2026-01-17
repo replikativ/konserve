@@ -190,6 +190,31 @@
              (<! (idb/delete-idb db-name))
              (done)))))
 
+;; Test using k/create-store multimethod dispatch path (issue #134)
+(deftest ^:browser multi-key-via-create-store-test
+  (async done
+         (go
+           (let [db-name "multi-key-create-store-test"
+                 _ (<! (idb/delete-idb db-name))
+                 opts {:sync? false}
+                 config {:backend :indexeddb
+                         :id #uuid "550e8400-e29b-41d4-a716-446655440134"
+                         :name db-name}
+                 ;; Use k/create-store which goes through multimethod dispatch
+                 store (<! (k/create-store config opts))]
+
+             ;; This was failing in issue #134 - multi-key-capable? returned false
+             (is (true? (multi-key-capable? store)))
+
+             ;; Test multi-assoc works via multimethod-created store
+             (let [result (<! (k/multi-assoc store {:key1 "value1" :key2 "value2"} opts))]
+               (is (= {:key1 true :key2 true} result)))
+
+             ;; Clean up
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb db-name))
+             (done)))))
+
 (deftest ^:browser append-store-async-test
   (async done
          (go
