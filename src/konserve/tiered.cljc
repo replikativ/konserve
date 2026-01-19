@@ -19,7 +19,7 @@
 ;; TODO match metadata timestamps between frontend and backend
 
 ;; Write policies
-(def write-policies #{:write-through :write-around})
+(def write-policies #{:write-through :write-behind :write-around})
 
 ;; Read policies
 (def read-policies #{:frontend-first :frontend-only})
@@ -217,14 +217,13 @@
                      backend-result)
 
                    :write-behind
-                   ;; Write to backend first, then frontend asynchronously
-                   (let [backend-result (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))]
-                     (when-not (:skip-frontend-update? opts)
-                       (go (try
-                             (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))
-                             (catch #?(:clj Exception :cljs js/Error) e
-                               (warn "Async frontend update failed" {:key key-vec :error e})))))
-                     backend-result)
+                   ;; Write to frontend first, then backend asynchronously (standard write-behind)
+                   (let [frontend-result (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))]
+                     (go (try
+                           (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))
+                           (catch #?(:clj Exception :cljs js/Error) e
+                             (warn "Async backend update failed in write-behind" {:key key-vec :error e}))))
+                     frontend-result)
 
                    :write-around
                    ;; Write only to backend, invalidate frontend
@@ -250,13 +249,13 @@
                      backend-result)
 
                    :write-behind
-                   (let [backend-result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
-                     (when-not (:skip-frontend-update? opts)
-                       (go (try
-                             (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))
-                             (catch #?(:clj Exception :cljs js/Error) e
-                               (warn "Async frontend assoc failed" {:key key-vec :error e})))))
-                     backend-result)
+                   ;; Write to frontend first, then backend asynchronously (standard write-behind)
+                   (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))]
+                     (go (try
+                           (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
+                           (catch #?(:clj Exception :cljs js/Error) e
+                             (warn "Async backend assoc failed in write-behind" {:key key-vec :error e}))))
+                     frontend-result)
 
                    :write-around
                    (let [result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
@@ -307,13 +306,13 @@
                      backend-result)
 
                    :write-behind
-                   (let [backend-result (<?- (-bassoc backend-store key meta-up-fn val opts))]
-                     (when-not (:skip-frontend-update? opts)
-                       (go (try
-                             (<?- (-bassoc frontend-store key meta-up-fn val opts))
-                             (catch #?(:clj Exception :cljs js/Error) e
-                               (warn "Async frontend bassoc failed" {:key key :error e})))))
-                     backend-result)
+                   ;; Write to frontend first, then backend asynchronously (standard write-behind)
+                   (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val opts))]
+                     (go (try
+                           (<?- (-bassoc backend-store key meta-up-fn val opts))
+                           (catch #?(:clj Exception :cljs js/Error) e
+                             (warn "Async backend bassoc failed in write-behind" {:key key :error e}))))
+                     frontend-result)
 
                    :write-around
                    (let [result (<?- (-bassoc backend-store key meta-up-fn val opts))]
@@ -363,6 +362,15 @@
                        (catch #?(:clj Exception :cljs js/Error) e
                          (warn "Frontend multi-assoc failed in write-through" {:kvs-keys (clojure.core/keys kvs) :error e})))
                      backend-result)
+
+                   :write-behind
+                   ;; Write to frontend first, then backend asynchronously (standard write-behind)
+                   (let [frontend-result (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))]
+                     (go (try
+                           (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
+                           (catch #?(:clj Exception :cljs js/Error) e
+                             (warn "Async backend multi-assoc failed in write-behind" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                     frontend-result)
 
                    :write-around
                    (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))]
@@ -433,13 +441,14 @@
    The frontend store acts as a performance cache layer.
 
    Options:
-   - :write-policy      #{:write-through :write-around} (default :write-through)
+   - :write-policy      #{:write-through :write-behind :write-around} (default :write-through)
    - :read-policy       #{:frontend-first :frontend-only} (default :frontend-first)
    - :sync?             Boolean for synchronous/asynchronous operation (default false)
 
    Write policies:
-   - :write-through  Write to backend, then frontend synchronously
-   - :write-around   Write only to backend, invalidate frontend
+   - :write-through  Write to backend, then frontend synchronously (strong consistency)
+   - :write-behind   Write to frontend first, backend asynchronously (low latency, eventual durability)
+   - :write-around   Write only to backend, invalidate frontend (bypass cache)
 
    Read policies:
    - :frontend-first Check frontend first, fallback to backend (populates frontend)
