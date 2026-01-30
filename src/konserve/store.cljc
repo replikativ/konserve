@@ -32,6 +32,8 @@
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
             [konserve.tiered :as tiered]
+            [konserve.utils :refer [#?(:clj async+sync) *default-sync-translation*]
+             #?@(:cljs [:refer-macros [async+sync]])]
             #?(:clj [konserve.filestore])
             [clojure.core.async :refer [go] :include-macros true]
             [superv.async :refer [go-try- <?-] :include-macros true]))
@@ -417,13 +419,17 @@
   nil)
 
 (defmethod -release-store :tiered
-  [{:keys [frontend-config backend-config]} store _opts]
-  ;; Release both stores
-  (when frontend-config
-    (release-store frontend-config (:frontend-store store)))
-  (when backend-config
-    (release-store backend-config (:backend-store store)))
-  nil)
+  [{:keys [frontend-config backend-config]} store opts]
+  ;; Release both stores, respecting async/sync mode
+  (async+sync
+   (:sync? opts)
+   *default-sync-translation*
+   (go-try-
+    (when frontend-config
+      (<?- (release-store frontend-config (:frontend-store store) opts)))
+    (when backend-config
+      (<?- (release-store backend-config (:backend-store store) opts)))
+    nil)))
 
 ;; ===== Default handlers for unsupported backends =====
 
