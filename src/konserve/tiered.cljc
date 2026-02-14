@@ -186,14 +186,11 @@
                        (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
                          (when (not= backend-result ::missing)
                            ;; Populate frontend asynchronously (fire-and-forget)
-                           (go (try
-                                 (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result opts))
-                                 (invoke-write-hooks! frontend-store {:api-op :assoc-in
-                                                                      :key (first key-vec)
-                                                                      :key-vec key-vec
-                                                                      :value backend-result})
-                                 (catch #?(:clj Exception :cljs js/Error) e
-                                   (debug "Async frontend population failed" {:key key-vec :error e})))))
+                           (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result (clojure.core/assoc opts :sync? false))
+                           (invoke-write-hooks! frontend-store {:api-op :assoc-in
+                                                                :key (first key-vec)
+                                                                :key-vec key-vec
+                                                                :value backend-result}))
                          (if (not= backend-result ::missing)
                            backend-result
                            not-found))))
@@ -219,19 +216,13 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))]
-                     (go (try
-                           (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend update failed in write-behind" {:key key-vec :error e}))))
+                     (-update-in backend-store key-vec meta-up-fn up-fn (clojure.core/assoc opts :sync? false))
                      frontend-result)
 
                    :write-around
                    ;; Write only to backend, invalidate frontend
                    (let [result (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))]
-                     (go (try
-                           (<?- (-dissoc frontend-store (first key-vec) opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                     (-dissoc frontend-store (first key-vec) (clojure.core/assoc opts :sync? false))
                      result)))))
 
   (-assoc-in [_this key-vec meta-up-fn val opts]
@@ -251,18 +242,12 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend assoc failed in write-behind" {:key key-vec :error e}))))
+                     (-assoc-in backend-store key-vec meta-up-fn val (clojure.core/assoc opts :sync? false))
                      frontend-result)
 
                    :write-around
                    (let [result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-dissoc frontend-store (first key-vec) opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                     (-dissoc frontend-store (first key-vec) (clojure.core/assoc opts :sync? false))
                      result)))))
 
   (-dissoc [_this key opts]
@@ -308,18 +293,12 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-bassoc backend-store key meta-up-fn val opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend bassoc failed in write-behind" {:key key :error e}))))
+                     (-bassoc backend-store key meta-up-fn val (clojure.core/assoc opts :sync? false))
                      frontend-result)
 
                    :write-around
                    (let [result (<?- (-bassoc backend-store key meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-dissoc frontend-store key opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key key :error e}))))
+                     (-dissoc frontend-store key (clojure.core/assoc opts :sync? false))
                      result)))))
 
   PAssocSerializers
@@ -366,20 +345,15 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))]
-                     (go (try
-                           (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend multi-assoc failed in write-behind" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                     (-multi-assoc backend-store kvs meta-up-fn (clojure.core/assoc opts :sync? false))
                      frontend-result)
 
                    :write-around
-                   (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))]
+                   (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
+                         async-opts (clojure.core/assoc opts :sync? false)]
                      ;; Invalidate all affected keys from frontend
-                     (go (try
-                           (doseq [k (clojure.core/keys kvs)]
-                             (<?- (-dissoc frontend-store k opts)))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                     (doseq [k (clojure.core/keys kvs)]
+                       (-dissoc frontend-store k async-opts))
                      result)))))
 
   (-multi-dissoc [_this keys-to-remove opts]
@@ -419,12 +393,9 @@
                        (let [backend-result (<?- (-multi-get backend-store missing-keys opts))]
                          ;; Populate frontend asynchronously with found backend values (fire-and-forget)
                          (when (seq backend-result)
-                           (go (try
-                                 (<?- (-multi-assoc frontend-store backend-result meta-update opts))
-                                 (invoke-write-hooks! frontend-store {:api-op :multi-assoc
-                                                                      :kvs backend-result})
-                                 (catch #?(:clj Exception :cljs js/Error) e
-                                   (debug "Async frontend population failed" {:keys (clojure.core/keys backend-result) :error e})))))
+                           (-multi-assoc frontend-store backend-result meta-update (clojure.core/assoc opts :sync? false))
+                           (invoke-write-hooks! frontend-store {:api-op :multi-assoc
+                                                                :kvs backend-result}))
                          ;; Merge frontend and backend results
                          (merge frontend-result backend-result))
                        ;; All keys found in frontend
