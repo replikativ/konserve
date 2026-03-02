@@ -9,7 +9,7 @@
             #?(:clj [clojure.core.cache :as cache]
                :cljs [cljs.cache :as cache])
             [konserve.core #?@(:clj (:refer [go-locked locked])) :as core]
-            [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
+            [konserve.utils :refer [meta-update invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [replikativ.logging :as log]
             [superv.async :refer [go-try- <?-]]
@@ -100,6 +100,11 @@
                   (swap! cache cache/evict key)
                   (when had-key?
                     (swap! cache cache/miss key new-val))
+                  (invoke-write-hooks! store {:api-op :update-in
+                                              :key key
+                                              :key-vec key-vec
+                                              :old-value old-val
+                                              :value new-val})
                   [old-val new-val])))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
@@ -130,6 +135,10 @@
                   (swap! cache cache/evict (first key-vec))
                   (when had-key?
                     (swap! cache cache/miss (first key-vec) new-val))
+                  (invoke-write-hooks! store {:api-op :assoc-in
+                                              :key (first key-vec)
+                                              :key-vec key-vec
+                                              :value val})
                   [old-val new-val])))))
 
 (defn assoc
@@ -151,9 +160,12 @@
                *default-sync-translation*
                (go-locked
                 store key
-                (let [cache (:cache store)]
+                (let [cache (:cache store)
+                      result (<?- (-dissoc store key opts))]
                   (swap! cache cache/evict key)
-                  (<?- (-dissoc store key opts)))))))
+                  (invoke-write-hooks! store {:api-op :dissoc
+                                              :key key})
+                  result)))))
 
 ;; alias core functions without caching for convenience
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
