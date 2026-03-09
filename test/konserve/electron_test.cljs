@@ -9,11 +9,11 @@
             [konserve.node-filestore :as fs]
             [konserve.tests.tiered :as tiered-tests]
             [konserve.compliance-test :refer [async-compliance-test]]
-            [taoensso.timbre :as timbre]))
+            [replikativ.logging :as log]))
 
 (assert (and (= "nodejs" *target*) (some? (.-indexedDB js/window))))
 
-(timbre/set-min-level! :debug)
+(log/set-level! :debug)
 
 (deftest tiered-mem-idb-fs-integration-test
   (let [hook-promise (promise-chan)

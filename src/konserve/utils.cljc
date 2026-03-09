@@ -1,7 +1,7 @@
 (ns konserve.utils
   (:require [clojure.walk]
             [konserve.protocols :as protocols]
-            #?(:clj [taoensso.timbre :as timbre])))
+            #?(:clj [replikativ.logging :as log])))
 
 (defn invert-map [m]
   (->> (map (fn [[k v]] [v k]) m)
@@ -52,9 +52,10 @@
             (hook-fn hook-event)
             (catch #?(:clj Exception :cljs js/Error) e
               ;; Log hook errors for debugging but don't break writes
-              #?(:clj (timbre/warn e "Write hook error" {:hook-id hook-id
-                                                         :api-op (:api-op hook-event)
-                                                         :key (:key hook-event)})
+              #?(:clj (log/warn :konserve/write-hook-error "Write hook error" {:hook-id hook-id
+                                                                                                :api-op (:api-op hook-event)
+                                                                                                :key (:key hook-event)
+                                                                                                :error e})
                  :cljs (js/console.warn "Write hook error:" hook-id (pr-str e))))))))))
 
 (defmacro async+sync

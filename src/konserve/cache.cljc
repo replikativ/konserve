@@ -11,7 +11,7 @@
             [konserve.core #?@(:clj (:refer [go-locked locked])) :as core]
             [konserve.utils :refer [meta-update #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
-            [taoensso.timbre :refer [trace]]
+            [replikativ.logging :as log]
             [superv.async :refer [go-try- <?-]]
             [clojure.core.async])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked]])))
@@ -43,7 +43,7 @@
   ([store key]
    (exists? store key {:sync? false}))
   ([store key opts]
-   (trace "exists? on key " key opts)
+   (log/trace :konserve/cache-exists? {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -59,7 +59,7 @@
   ([store key-vec not-found]
    (get-in store key-vec not-found {:sync? false}))
   ([store key-vec not-found opts]
-   (trace "get-in on key " key opts)
+   (log/trace :konserve/cache-get-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -78,7 +78,7 @@
   ([store key not-found]
    (get store key not-found {:sync? false}))
   ([store key not-found opts]
-   (trace "get on key " key opts)
+   (log/trace :konserve/cache-get {:key key})
    (get-in store [key] not-found opts)))
 
 (defn update-in
@@ -88,7 +88,7 @@
   ([store key-vec up-fn]
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
-   (trace "update-in on key " key opts)
+   (log/trace :konserve/cache-update-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -110,7 +110,7 @@
   ([store key fn]
    (update store key fn {:sync? false}))
   ([store key fn opts]
-   (trace "update on key " key opts)
+   (log/trace :konserve/cache-update {:key key})
    (update-in store [key] fn opts)))
 
 (defn assoc-in
@@ -119,7 +119,7 @@
   ([store key-vec val]
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
-   (trace "assoc-in on key " key opts)
+   (log/trace :konserve/cache-assoc-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -138,7 +138,7 @@
   ([store key val]
    (assoc store key val {:sync? false}))
   ([store key val opts]
-   (trace "assoc on key " key opts)
+   (log/trace :konserve/cache-assoc {:key key})
    (assoc-in store [key] val opts)))
 
 (defn dissoc
@@ -146,7 +146,7 @@
   ([store key]
    (dissoc store key {:sync? false}))
   ([store key opts]
-   (trace "dissoc on key " key)
+   (log/trace :konserve/cache-dissoc {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
