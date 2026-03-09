@@ -75,8 +75,8 @@
                      keys-to-sync (sync-strategy frontend-key-set backend-key-set)]
 
                  (log/debug :konserve/tiered-sync {:frontend-keys (count frontend-key-set)
-                                                    :backend-keys (count backend-key-set)
-                                                    :keys-to-sync (count keys-to-sync)})
+                                                   :backend-keys (count backend-key-set)
+                                                   :keys-to-sync (count keys-to-sync)})
 
                  (when (seq keys-to-sync)
                    (<?- (sync-keys-to-frontend frontend-store backend-store keys-to-sync opts)))
