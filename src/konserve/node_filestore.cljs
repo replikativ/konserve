@@ -12,7 +12,7 @@
             [konserve.serializers]
             [konserve.store :as store]
             [konserve.utils :refer-macros [with-promise]]
-            [taoensso.timbre :refer [info]]))
+            [replikativ.logging :as log]))
 
 (def stream (node/require "stream"))
 (def path (node/require "path"))
@@ -352,9 +352,9 @@
   [^string base]
   (let [f ^fs.File (io/file base)]
     (if (.exists f)
-      (do (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
+      (do (log/info :konserve/store-exists {:base (str base) :key-count (count-konserve-keys base)})
           true)
-      (do (info "Store directory at " (str base) " does not exist.")
+      (do (log/info :konserve/store-not-found {:base (str base)})
           false))))
 
 (defn- sync-base
@@ -438,8 +438,8 @@
     (take! (iofs/aexists? base)
            (fn [yes?]
              (if yes?
-               (info "Store directory at " (str base) " exists with " (count-konserve-keys base) " konserve keys.")
-               (info "Store directory at " (str base) " does not exist."))
+               (log/info :konserve/store-exists {:base (str base) :key-count (count-konserve-keys base)})
+               (log/info :konserve/store-not-found {:base (str base)}))
              (put! out yes?)))))
 
 (defn delete-store-async
@@ -565,7 +565,7 @@
                           (atom (detect-old-file-schema path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-blob)
-                               (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
+                               (log/info :konserve/old-schema-detected {:count (count @detect-old-blob) :msg "Files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false."})))
         backing            (NodejsBackingFilestore. path detect-old-blob ephemeral?)]
     (defaults/connect-default-store backing store-config)))
 

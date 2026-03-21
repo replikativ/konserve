@@ -13,7 +13,7 @@
             [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [superv.async :refer [go-try- <?-]]
-            [taoensso.timbre :refer [trace warn debug]]))
+            [replikativ.logging :as log]))
 
 ;; TODO add supervision or other mechanism to deal with stale exxceptions
 ;; TODO match metadata timestamps between frontend and backend
@@ -74,9 +74,9 @@
                      ;; Determine which keys to sync
                      keys-to-sync (sync-strategy frontend-key-set backend-key-set)]
 
-                 (debug "Sync operation" {:frontend-keys (count frontend-key-set)
-                                          :backend-keys (count backend-key-set)
-                                          :keys-to-sync (count keys-to-sync)})
+                 (log/debug :konserve/tiered-sync {:frontend-keys (count frontend-key-set)
+                                                   :backend-keys (count backend-key-set)
+                                                   :keys-to-sync (count keys-to-sync)})
 
                  (when (seq keys-to-sync)
                    (<?- (sync-keys-to-frontend frontend-store backend-store keys-to-sync opts)))
@@ -144,7 +144,7 @@
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
   PEDNKeyValueStore
   (-exists? [_this key opts]
-    (trace "tiered exists? on key" key)
+    (log/trace :konserve/tiered-exists? {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -159,7 +159,7 @@
                    (<?- (-exists? frontend-store key opts))))))
 
   (-get-meta [_this key opts]
-    (trace "tiered get-meta on key" key)
+    (log/trace :konserve/tiered-get-meta {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -174,7 +174,7 @@
                    (<?- (-get-meta frontend-store key opts))))))
 
   (-get-in [_this key-vec not-found opts]
-    (trace "tiered get-in on key" key-vec)
+    (log/trace :konserve/tiered-get-in {:key-vec key-vec})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -193,7 +193,7 @@
                                                                       :key-vec key-vec
                                                                       :value backend-result})
                                  (catch #?(:clj Exception :cljs js/Error) e
-                                   (debug "Async frontend population failed" {:key key-vec :error e})))))
+                                   (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
                          (if (not= backend-result ::missing)
                            backend-result
                            not-found))))
@@ -202,7 +202,7 @@
                    (<?- (-get-in frontend-store key-vec not-found opts))))))
 
   (-update-in [_this key-vec meta-up-fn up-fn opts]
-    (trace "tiered update-in on key" key-vec)
+    (log/trace :konserve/tiered-update-in {:key-vec key-vec})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -213,7 +213,7 @@
                      (try
                        (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))
                        (catch #?(:clj Exception :cljs js/Error) e
-                         (warn "Frontend update failed in write-through" {:key key-vec :error e})))
+                         (log/warn :konserve/tiered-frontend-update-failed {:key key-vec :error e})))
                      backend-result)
 
                    :write-behind
@@ -222,7 +222,7 @@
                      (go (try
                            (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend update failed in write-behind" {:key key-vec :error e}))))
+                             (log/warn :konserve/tiered-backend-update-failed {:key key-vec :error e}))))
                      frontend-result)
 
                    :write-around
@@ -231,11 +231,11 @@
                      (go (try
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                             (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
                      result)))))
 
   (-assoc-in [_this key-vec meta-up-fn val opts]
-    (trace "tiered assoc-in on key" key-vec)
+    (log/trace :konserve/tiered-assoc-in {:key-vec key-vec})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -245,7 +245,7 @@
                      (try
                        (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))
                        (catch #?(:clj Exception :cljs js/Error) e
-                         (warn "Frontend assoc failed in write-through" {:key key-vec :error e})))
+                         (log/warn :konserve/tiered-frontend-assoc-failed {:key key-vec :error e})))
                      backend-result)
 
                    :write-behind
@@ -254,7 +254,7 @@
                      (go (try
                            (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend assoc failed in write-behind" {:key key-vec :error e}))))
+                             (log/warn :konserve/tiered-backend-assoc-failed {:key key-vec :error e}))))
                      frontend-result)
 
                    :write-around
@@ -262,11 +262,11 @@
                      (go (try
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key (first key-vec) :error e}))))
+                             (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
                      result)))))
 
   (-dissoc [_this key opts]
-    (trace "tiered dissoc on key" key)
+    (log/trace :konserve/tiered-dissoc {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -278,7 +278,7 @@
 
   PBinaryKeyValueStore
   (-bget [_this key locked-cb opts]
-    (trace "tiered bget on key" key)
+    (log/trace :konserve/tiered-bget {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -292,7 +292,7 @@
                    (<?- (-bget frontend-store key locked-cb opts))))))
 
   (-bassoc [_this key meta-up-fn val opts]
-    (trace "tiered bassoc on key" key)
+    (log/trace :konserve/tiered-bassoc {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -302,7 +302,7 @@
                      (try
                        (<?- (-bassoc frontend-store key meta-up-fn val opts))
                        (catch #?(:clj Exception :cljs js/Error) e
-                         (warn "Frontend bassoc failed in write-through" {:key key :error e})))
+                         (log/warn :konserve/tiered-frontend-bassoc-failed {:key key :error e})))
                      backend-result)
 
                    :write-behind
@@ -311,7 +311,7 @@
                      (go (try
                            (<?- (-bassoc backend-store key meta-up-fn val opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend bassoc failed in write-behind" {:key key :error e}))))
+                             (log/warn :konserve/tiered-backend-bassoc-failed {:key key :error e}))))
                      frontend-result)
 
                    :write-around
@@ -319,7 +319,7 @@
                      (go (try
                            (<?- (-dissoc frontend-store key opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:key key :error e}))))
+                             (log/warn :konserve/tiered-frontend-invalidation-failed {:key key :error e}))))
                      result)))))
 
   PAssocSerializers
@@ -330,7 +330,7 @@
 
   PKeyIterable
   (-keys [_this opts]
-    (trace "tiered keys, read-policy:" read-policy)
+    (log/trace :konserve/tiered-keys {:read-policy read-policy})
     ;; Respect read-policy: frontend-only returns frontend keys only
     ;; This is critical for performance when frontend has subset of backend keys
     (case read-policy
@@ -345,7 +345,7 @@
 
   PMultiKeyEDNValueStore
   (-multi-assoc [_this kvs meta-up-fn opts]
-    (trace "tiered multi-assoc operation with" (count kvs) "keys")
+    (log/trace :konserve/tiered-multi-assoc {:key-count (count kvs)})
     (when-not (and (multi-key-capable? frontend-store)
                    (multi-key-capable? backend-store))
       (throw (ex-info "Both stores must support multi-key operations for tiered multi-assoc"
@@ -360,7 +360,7 @@
                      (try
                        (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))
                        (catch #?(:clj Exception :cljs js/Error) e
-                         (warn "Frontend multi-assoc failed in write-through" {:kvs-keys (clojure.core/keys kvs) :error e})))
+                         (log/warn :konserve/tiered-frontend-multi-assoc-failed {:kvs-keys (clojure.core/keys kvs) :error e})))
                      backend-result)
 
                    :write-behind
@@ -369,7 +369,7 @@
                      (go (try
                            (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Async backend multi-assoc failed in write-behind" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                             (log/warn :konserve/tiered-backend-multi-assoc-failed {:kvs-keys (clojure.core/keys kvs) :error e}))))
                      frontend-result)
 
                    :write-around
@@ -379,11 +379,11 @@
                            (doseq [k (clojure.core/keys kvs)]
                              (<?- (-dissoc frontend-store k opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (warn "Frontend invalidation failed" {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                             (log/warn :konserve/tiered-frontend-invalidation-failed {:kvs-keys (clojure.core/keys kvs) :error e}))))
                      result)))))
 
   (-multi-dissoc [_this keys-to-remove opts]
-    (trace "tiered multi-dissoc operation with" (count keys-to-remove) "keys")
+    (log/trace :konserve/tiered-multi-dissoc {:key-count (count keys-to-remove)})
     (when-not (and (multi-key-capable? frontend-store)
                    (multi-key-capable? backend-store))
       (throw (ex-info "Both stores must support multi-key operations for tiered multi-dissoc"
@@ -396,11 +396,11 @@
                    (try
                      (<?- (-multi-dissoc frontend-store keys-to-remove opts))
                      (catch #?(:clj Exception :cljs js/Error) e
-                       (warn "Frontend multi-dissoc failed" {:keys keys-to-remove :error e})))
+                       (log/warn :konserve/tiered-frontend-multi-dissoc-failed {:keys keys-to-remove :error e})))
                    backend-result))))
 
   (-multi-get [_this keys opts]
-    (trace "tiered multi-get operation with" (count keys) "keys")
+    (log/trace :konserve/tiered-multi-get {:key-count (count keys)})
     (when-not (and (multi-key-capable? frontend-store)
                    (multi-key-capable? backend-store))
       (throw (ex-info "Both stores must support multi-key operations for tiered multi-get"
@@ -424,7 +424,7 @@
                                  (invoke-write-hooks! frontend-store {:api-op :multi-assoc
                                                                       :kvs backend-result})
                                  (catch #?(:clj Exception :cljs js/Error) e
-                                   (debug "Async frontend population failed" {:keys (clojure.core/keys backend-result) :error e})))))
+                                   (log/debug :konserve/tiered-frontend-populate-failed {:keys (clojure.core/keys backend-result) :error e})))))
                          ;; Merge frontend and backend results
                          (merge frontend-result backend-result))
                        ;; All keys found in frontend

@@ -13,7 +13,7 @@
    [konserve.protocols :as kp]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
    [superv.async :refer [go-try- <?-]]
-   [taoensso.timbre :refer [info trace]])
+   [replikativ.logging :as log])
   (:import
    [java.io ByteArrayInputStream FileInputStream Closeable]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
@@ -128,9 +128,9 @@
                    (Files/exists (get-path filesystem base) (into-array LinkOption []))
                    (.exists (io/file base)))]
      (if exists?
-       (do (trace "Store directory at " (str base) " exists with " (count-konserve-keys filesystem base) " konserve keys.")
+       (do (log/trace :konserve/store-exists {:base (str base) :key-count (count-konserve-keys filesystem base)})
            true)
-       (do (trace "Store directory at " (str base) " does not exist.")
+       (do (log/trace :konserve/store-not-found {:base (str base)})
            false)))))
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
@@ -170,7 +170,7 @@
                              (<?- (migrate-file-v2 this old-path serializer read-handlers write-handlers env))
                              (if (or key-vec (includes? old-path "B_"))
                                (<?- (migrate-file-v1 this old-path key-vec serializer read-handlers write-handlers env))
-                               (do (info "Migration of" old-path "not possible without knowing original key.")
+                               (do (log/info :konserve/migration-not-possible {:old-path old-path :msg "Migration not possible without knowing original key."})
                                    false)))
                            false))))
 
@@ -287,7 +287,7 @@
              (<?- ch)
              (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
        (catch Exception e
-         (trace "write-binary error: " e)
+         (log/trace :konserve/write-binary-error {:error e})
          e)
        (finally
          (.close ^Closeable bis)))))
@@ -359,7 +359,7 @@
                                       ch)))
                     :size         total-size}))
        (catch Exception e
-         (trace "read-binary error: " e)
+         (log/trace :konserve/read-binary-error {:error e})
          e)))))
 
 (extend-type FileChannel
@@ -698,7 +698,7 @@
                           (atom (detect-old-file-schema filesystem path)))
         _                  (when detect-old-file-schema?
                              (when-not (empty? @detect-old-blob)
-                               (info (count @detect-old-blob) "files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false.")))
+                               (log/info :konserve/old-schema-detected {:count (count @detect-old-blob) :msg "Files in old storage schema detected. Migration for each key will happen transparently the first time a key is accessed. Invoke konserve.core/keys to do so at once. Once all keys are migrated you can deactivate this initial check by setting detect-old-file-schema to false."})))
         backing            (BackingFilestore. path detect-old-blob ephemeral? filesystem)]
     (connect-default-store backing store-config)))
 

@@ -12,7 +12,7 @@
             [konserve.impl.defaults :as defaults]
             [konserve.store :as store]
             [superv.async :refer [go-try- <?-]]
-            [taoensso.timbre :refer [trace #?(:cljs debug)]])
+            [replikativ.logging :as log])
   #?(:cljs (:require-macros [konserve.core :refer [go-locked locked maybe-go-locked maybe-locked]])))
 
 ;; ACID
@@ -85,7 +85,7 @@
         (let [c (chan)]
           (put! c :unlocked)
           (clojure.core/get (swap! locks (fn [old]
-                                           (trace "creating lock for: " key)
+                                           (log/trace :konserve/creating-lock {:key key})
                                            (if (old key) old
                                                (clojure.core/assoc old key c))))
                             key)))))
@@ -94,17 +94,17 @@
   #?(:clj (while (not (poll! lock))
             (Thread/sleep (long (rand-int 20))))
      :cljs (when-not (some-> lock poll!)
-             (debug "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
+             (log/debug :konserve/lock-not-active "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
   `(let [l# (get-lock ~store ~key)]
      (try
        (wait l#)
-       (trace "acquired spin lock for " ~key)
+       (log/trace :konserve/acquired-spin-lock {:key ~key})
        ~@code
        (finally
-         (trace "releasing spin lock for " ~key)
+         (log/trace :konserve/releasing-spin-lock {:key ~key})
          (put! l# :unlocked)))))
 
 (defmacro go-locked [store key & code]
@@ -112,10 +112,10 @@
     (let [l# (get-lock ~store ~key)]
       (try
         (<?- l#)
-        (trace "acquired go-lock for: " ~key)
+        (log/trace :konserve/acquired-go-lock {:key ~key})
         ~@code
         (finally
-          (trace "releasing go-lock for: " ~key)
+          (log/trace :konserve/releasing-go-lock {:key ~key})
           (put! l# :unlocked))))))
 
 ;; Optional locking macros - skip locking for lock-free stores (MVCC backends)
@@ -139,7 +139,7 @@
   ([store key]
    (exists? store key {:sync? false}))
   ([store key opts]
-   (trace "exists? on key " key)
+   (log/trace :konserve/exists? {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -154,7 +154,7 @@
   ([store key-vec not-found]
    (get-in store key-vec not-found {:sync? false}))
   ([store key-vec not-found opts]
-   (trace "get-in on key " key-vec)
+   (log/trace :konserve/get-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -179,7 +179,7 @@
   ([store key not-found]
    (get-meta store key not-found {:sync? false}))
   ([store key not-found opts]
-   (trace "get-meta on key " key)
+   (log/trace :konserve/get-meta {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -196,7 +196,7 @@
   ([store key-vec up-fn]
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
-   (trace "update-in on key " key-vec)
+   (log/trace :konserve/update-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -217,7 +217,7 @@
   ([store key fn]
    (update store key fn {:sync? false}))
   ([store key fn opts]
-   (trace "update on key " key)
+   (log/trace :konserve/update {:key key})
    (update-in store [key] fn opts)))
 
 (defn assoc-in
@@ -226,7 +226,7 @@
   ([store key-vec val]
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
-   (trace "assoc-in on key " key)
+   (log/trace :konserve/assoc-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -244,7 +244,7 @@
   ([store key val]
    (assoc store key val {:sync? false}))
   ([store key val opts]
-   (trace "assoc on key " key)
+   (log/trace :konserve/assoc {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -275,7 +275,7 @@
   ([store keys]
    (multi-get store keys {:sync? false}))
   ([store keys opts]
-   (trace "multi-get operation with " (count keys) " keys")
+   (log/trace :konserve/multi-get {:key-count (count keys)})
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
@@ -315,7 +315,7 @@
   ([store kvs]
    (multi-assoc store kvs {:sync? false}))
   ([store kvs opts]
-   (trace "multi-assoc operation with " (count kvs) " keys")
+   (log/trace :konserve/multi-assoc {:key-count (count kvs)})
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
@@ -346,7 +346,7 @@
   ([store key]
    (dissoc store key {:sync? false}))
   ([store key opts]
-   (trace "dissoc on key " key)
+   (log/trace :konserve/dissoc {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -373,7 +373,7 @@
   ([store keys]
    (multi-dissoc store keys {:sync? false}))
   ([store keys opts]
-   (trace "multi-dissoc operation with " (count keys) " keys")
+   (log/trace :konserve/multi-dissoc {:key-count (count keys)})
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
@@ -402,7 +402,7 @@
   ([store key elem]
    (append store key elem {:sync? false}))
   ([store key elem opts]
-   (trace "append on key " key)
+   (log/trace :konserve/append {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -425,7 +425,7 @@
   ([store key]
    (log store key {:sync? false}))
   ([store key opts]
-   (trace "log on key " key)
+   (log/trace :konserve/log {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
@@ -446,7 +446,7 @@
   ([store key reduce-fn acc]
    (reduce-log store key reduce-fn acc {:sync? false}))
   ([store key reduce-fn acc opts]
-   (trace "reduce-log on key " key)
+   (log/trace :konserve/reduce-log {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
@@ -480,7 +480,7 @@
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]
-   (trace "bget on key " key)
+   (log/trace :konserve/bget {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -493,7 +493,7 @@
   ([store key val]
    (bassoc store key val {:sync? false}))
   ([store key val opts]
-   (trace "bassoc on key " key)
+   (log/trace :konserve/bassoc {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -509,7 +509,7 @@
   ([store]
    (keys store {:sync? false}))
   ([store opts]
-   (trace "fetching keys")
+   (log/trace :konserve/keys "fetching keys")
    (-keys store opts)))
 
 (defn assoc-serializers

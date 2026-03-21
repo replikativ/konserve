@@ -30,7 +30,7 @@
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
                         :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
    [superv.async :refer [go-try- <?-]]
-   [taoensso.timbre :refer [trace]])
+   [replikativ.logging :as log])
   #?(:clj
      (:import
       [java.io ByteArrayOutputStream ByteArrayInputStream])))
@@ -86,7 +86,7 @@
                           (str store-key ".new"))
           backup-store-key (str store-key ".backup")
           _ (when (and (:in-place? config) (not (:no-backup? config))) ;; let's back things up before writing then
-              (trace "backing up to blob: " backup-store-key " for key " key)
+              (log/trace :konserve/backup-blob {:backup-store-key backup-store-key :key key})
               (<?- (-copy backing store-key backup-store-key env)))
           meta-arr             (to-array meta)
           meta-size            (count meta-arr)
@@ -102,21 +102,21 @@
             (<?- (-write-value new-blob value-arr meta-size env))))
 
         (when (:sync-blob? config)
-          (trace "syncing for " key)
+          (log/trace :konserve/syncing-blob {:key key})
           (<?- (-sync new-blob env)))
         (<?- (-close new-blob env))
 
         (when-not (:in-place? config)
-          (trace "moving blob: " key)
+          (log/trace :konserve/moving-blob {:key key})
           (<?- (-atomic-move backing new-store-key store-key env)))
 
         (when (:sync-blob? config)
-          (trace "syncing store for " key)
+          (log/trace :konserve/syncing-store {:key key})
           (<?- (-sync-store backing env)))
 
         ;; Clean up backup after successful write
         (when (and (:in-place? config) (not (:no-backup? config)))
-          (trace "deleting backup blob: " backup-store-key " for key " key)
+          (log/trace :konserve/deleting-backup-blob {:backup-store-key backup-store-key :key key})
           (<?- (-delete-blob backing backup-store-key env)))
 
         (if (= operation :write-edn) [old-value value] true)
@@ -220,7 +220,7 @@
       (let [[l e] (try
                     [(<?- (-get-lock this env)) nil]
                     (catch #?(:clj Exception :cljs js/Error) e
-                      (trace "Failed to acquire lock: " e)
+                      (log/trace :konserve/lock-acquire-failed {:error e})
                       [nil e]))]
 
         (if-not (nil? l)
@@ -264,7 +264,7 @@
                   (try
                     (let [blob (<?- (-create-blob backing store-key env))
                           lock   (when (:lock-blob? config)
-                                   (trace "Acquiring blob lock for: " key (str blob))
+                                   (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
                                    (<?- (get-lock blob (first key-vec) env)))]
                       (try
                         (let [old (if (and (or store-key-exists? (pos? attempt)) (not overwrite?))
@@ -275,7 +275,7 @@
                             old))
                         (finally
                           (when (:lock-blob? config)
-                            (trace "Releasing lock for " (first key-vec) (str blob))
+                            (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
                             (<?- (-release lock env)))
                           (<?- (-close blob env)))))
                     (catch #?(:clj Exception :cljs js/Error) e
@@ -286,7 +286,7 @@
                         (throw e))))]
               (if (= result ::retry)
                 (do
-                  (trace "Optimistic lock conflict on " key ", retrying attempt " (inc attempt) " of " max-retries)
+                  (log/trace :konserve/optimistic-lock-retry {:key key :attempt (inc attempt) :max-retries max-retries})
                   (recur (inc attempt)))
                 result)))
           nil))))))
@@ -314,7 +314,7 @@
                                    env         (update-in env [:msg :keys] (fn [_] store-key))
                                    env    (assoc env :store-key store-key)
                                    lock   (when (and (:in-place? config) (:lock-blob? config))
-                                            (trace "Acquiring blob lock for: " store-key (str blob))
+                                            (log/trace :konserve/acquiring-blob-lock {:store-key store-key :blob (str blob)})
                                             (<?- (-get-lock blob env)))
                                    keys-new (try (conj keys (<?- (read-blob blob read-handlers serializers env)))
                                                      ;; it can be that the blob has been deleted, ignore reading errors
@@ -327,7 +327,7 @@
                              (catch #?(:clj Exception :cljs js/Error) e
                                ;; If anything fails during key enumeration (blob creation, read, or cleanup),
                                ;; skip this key and continue. This handles concurrent deletes/modifications.
-                               (trace "Skipping key during enumeration due to:" store-key (ex-message e))
+                               (log/trace :konserve/skipping-key-enumeration {:store-key store-key :error (ex-message e)})
                                keys))]
               (recur keys-new store-keys))
 

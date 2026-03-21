@@ -6,7 +6,7 @@
             [hasch.core :refer [uuid]]
             [konserve.protocols :refer [-serialize -deserialize]]
             [clojure.core.async :as async :refer [<! >! chan go close! put!]]
-            [taoensso.timbre :refer [debug]])
+            [replikativ.logging :as log])
   (:import [java.io
             DataInputStream DataOutputStream
             FileInputStream FileOutputStream
@@ -342,7 +342,7 @@
                                                 :exception e}))
                                     (finally
                                       (.close fis))))))
-                             (debug "Stale key file detected: " fn))))))
+                             (log/debug :konserve/stale-key-file {:key fn}))))))
                  async/merge
                  (async/into #{}))]
     fns))
