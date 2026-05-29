@@ -163,8 +163,14 @@
                 (let [cache (:cache store)
                       result (<?- (-dissoc store key opts))]
                   (swap! cache cache/evict key)
-                  (invoke-write-hooks! store {:api-op :dissoc
-                                              :key key})
+                  ;; Match konserve.core/dissoc: only fire the hook when a
+                  ;; value was actually removed (-dissoc returns false for an
+                  ;; absent key). Otherwise a no-op delete would emit a
+                  ;; spurious hook and konserve-sync would replicate a phantom
+                  ;; deletion.
+                  (when result
+                    (invoke-write-hooks! store {:api-op :dissoc
+                                                :key key}))
                   result)))))
 
 ;; alias core functions without caching for convenience
