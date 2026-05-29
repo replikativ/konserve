@@ -252,8 +252,19 @@
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
-          store-key-exists? (<?- (-blob-exists? backing store-key env))
           migration-key (<?- (-migratable backing key store-key env))
+          ;; A full-overwrite write doesn't need to know whether the blob
+          ;; already exists: it writes regardless, never reads the old value
+          ;; (the old-read below is gated on `(not overwrite?)`), and the
+          ;; migrate branch needs a non-nil migration-key. So when there is no
+          ;; migration to perform we can skip the existence probe entirely —
+          ;; on remote backends that probe is a full round-trip (e.g. an S3
+          ;; HEAD) paid per write for an answer that is then ignored.
+          skip-exists?  (and overwrite?
+                             (or (= :write-edn operation) (= :write-binary operation))
+                             (nil? migration-key))
+          store-key-exists? (when-not skip-exists?
+                              (<?- (-blob-exists? backing store-key env)))
           max-retries (get-in config [:optimistic-locking-retries] 0)]
       (if (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
