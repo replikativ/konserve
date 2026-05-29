@@ -130,25 +130,41 @@
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
-                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))
+                      key (first key-vec)
+                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
                       had-key? (cache/has? @cache key)]
-                  (swap! cache cache/evict (first key-vec))
+                  (swap! cache cache/evict key)
                   (when had-key?
-                    (swap! cache cache/miss (first key-vec) new-val))
+                    (swap! cache cache/miss key new-val))
                   (invoke-write-hooks! store {:api-op :assoc-in
-                                              :key (first key-vec)
+                                              :key key
                                               :key-vec key-vec
                                               :value val})
                   [old-val new-val])))))
 
 (defn assoc
-  "Associates the key-vec to the value, any missing collections for
- the key-vec (nested maps and vectors) are newly created."
+  "Associates the key to the value. This is a simple top-level overwrite."
   ([store key val]
    (assoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/cache-assoc {:key key})
-   (assoc-in store [key] val opts)))
+   (async+sync (:sync? opts)
+               *default-sync-translation*
+               (go-locked
+                store key
+                ;; Mirror konserve.core/assoc — fire :api-op :assoc, not the
+                ;; :assoc-in we'd inherit by delegating to assoc-in — so hook
+                ;; consumers see the same op label as the non-cache API.
+                (let [cache (:cache store)
+                      [old-val new-val] (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                      had-key? (cache/has? @cache key)]
+                  (swap! cache cache/evict key)
+                  (when had-key?
+                    (swap! cache cache/miss key new-val))
+                  (invoke-write-hooks! store {:api-op :assoc
+                                              :key key
+                                              :value val})
+                  [old-val new-val])))))
 
 (defn dissoc
   "Removes an entry from the store. "
