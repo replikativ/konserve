@@ -40,5 +40,20 @@
 
 (deftest header-meta-size-roundtrip
   (testing "create-header -> parse-header round-trips meta-size, including > 255"
-    (doseq [ms [0 1 44 200 255 256 300 1000 70000 1000000 16777216 16777217]]
+    ;; Note: cljs reserves the pattern [b4≠0, b5=b6=b7=0] (exact multiples of 16MB) for
+    ;; legacy single-byte detection, so those sizes don't round-trip — but a metadata blob
+    ;; is never 16MB, so this only excludes unrealistic sizes.
+    (doseq [ms [0 1 44 200 255 256 300 1000 70000 1000000 16777215 16777217 16777300]]
       (is (= ms (roundtrip-meta-size ms)) (str "meta-size " ms)))))
+
+#?(:cljs
+   (deftest header-legacy-cljs-single-byte-read
+     (testing "parse-header still reads a LEGACY cljs single-byte meta-size (byte 4, bytes 5-7 = 0)"
+       ;; Simulate a header written by the old cljs writer: canonical bytes 0-3, then the
+       ;; meta-size as a single byte at offset 4, bytes 5-19 left zero (Uint8Array zero-init).
+       (doseq [ms [1 44 200 255]]
+         (let [legacy (js/Uint8Array. (sl/create-header sl/default-version (ser/fressian-serializer)
+                                                        null-compressor null-encryptor 0))]
+           (aset legacy 4 ms) (aset legacy 5 0) (aset legacy 6 0) (aset legacy 7 0)
+           (let [[_ _ _ _ parsed _] (sl/parse-header legacy ser/key->serializer)]
+             (is (= ms parsed) (str "legacy single-byte meta-size " ms))))))))

@@ -121,12 +121,17 @@
            serializer-id (aget header-bytes 1)
            compressor-id (aget header-bytes 2)
            encryptor-id (aget header-bytes 3)
-           ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.getInt`).
-           ;; `*`/`+` instead of bit-ops to avoid JS 32-bit-signed overflow for large sizes.
-           meta-size (+ (* (aget header-bytes 4) 16777216)
-                        (* (aget header-bytes 5) 65536)
-                        (* (aget header-bytes 6) 256)
-                        (aget header-bytes 7))
+           ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.getInt`;
+           ;; `*`/`+` instead of bit-ops to avoid JS 32-bit-signed overflow for large sizes).
+           ;; Back-compat: a legacy cljs writer stored meta-size as a SINGLE byte at offset 4
+           ;; (bytes 5-7 = 0), capped at 255. Read those transparently so existing cljs stores
+           ;; still load: a nonzero byte 4 with all lower bytes zero can only be the legacy
+           ;; single-byte size (a real 4-byte meta-size >= 16 MB is never a metadata blob).
+           b4 (aget header-bytes 4) b5 (aget header-bytes 5)
+           b6 (aget header-bytes 6) b7 (aget header-bytes 7)
+           meta-size (if (and (not= b4 0) (== b5 0) (== b6 0) (== b7 0))
+                       b4
+                       (+ (* b4 16777216) (* b5 65536) (* b6 256) b7))
            serializer (serializers (byte->key serializer-id))
            compressor (byte->compressor compressor-id)
            encryptor (byte->encryptor encryptor-id)]
