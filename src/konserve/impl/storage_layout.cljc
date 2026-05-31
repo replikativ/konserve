@@ -37,7 +37,13 @@
            return-buffer    (js/Uint8Array. header-size)] ;;possibly sparse?
        (dotimes [i (alength env-array)]
          (aset return-buffer i (aget env-array i)))
-       (aset return-buffer 4 meta)
+       ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.putInt`
+       ;; and the header doc "5-8th Byte = Meta-Size"). Writing it as a single byte (the
+       ;; previous cljs code) capped meta at 255 and broke JVM<->cljs cross-host reads.
+       (aset return-buffer 4 (bit-and (unsigned-bit-shift-right meta 24) 0xff))
+       (aset return-buffer 5 (bit-and (unsigned-bit-shift-right meta 16) 0xff))
+       (aset return-buffer 6 (bit-and (unsigned-bit-shift-right meta 8) 0xff))
+       (aset return-buffer 7 (bit-and meta 0xff))
        return-buffer)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
@@ -115,7 +121,12 @@
            serializer-id (aget header-bytes 1)
            compressor-id (aget header-bytes 2)
            encryptor-id (aget header-bytes 3)
-           meta-size (aget header-bytes 4)
+           ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.getInt`).
+           ;; `*`/`+` instead of bit-ops to avoid JS 32-bit-signed overflow for large sizes.
+           meta-size (+ (* (aget header-bytes 4) 16777216)
+                        (* (aget header-bytes 5) 65536)
+                        (* (aget header-bytes 6) 256)
+                        (aget header-bytes 7))
            serializer (serializers (byte->key serializer-id))
            compressor (byte->compressor compressor-id)
            encryptor (byte->encryptor encryptor-id)]
