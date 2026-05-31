@@ -37,7 +37,13 @@
            return-buffer    (js/Uint8Array. header-size)] ;;possibly sparse?
        (dotimes [i (alength env-array)]
          (aset return-buffer i (aget env-array i)))
-       (aset return-buffer 4 meta)
+       ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.putInt`
+       ;; and the header doc "5-8th Byte = Meta-Size"). Writing it as a single byte (the
+       ;; previous cljs code) capped meta at 255 and broke JVM<->cljs cross-host reads.
+       (aset return-buffer 4 (bit-and (unsigned-bit-shift-right meta 24) 0xff))
+       (aset return-buffer 5 (bit-and (unsigned-bit-shift-right meta 16) 0xff))
+       (aset return-buffer 6 (bit-and (unsigned-bit-shift-right meta 8) 0xff))
+       (aset return-buffer 7 (bit-and meta 0xff))
        return-buffer)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
@@ -115,7 +121,17 @@
            serializer-id (aget header-bytes 1)
            compressor-id (aget header-bytes 2)
            encryptor-id (aget header-bytes 3)
-           meta-size (aget header-bytes 4)
+           ;; Meta-size is a 4-byte big-endian int at bytes 4-7 (matches the JVM `.getInt`;
+           ;; `*`/`+` instead of bit-ops to avoid JS 32-bit-signed overflow for large sizes).
+           ;; Back-compat: a legacy cljs writer stored meta-size as a SINGLE byte at offset 4
+           ;; (bytes 5-7 = 0), capped at 255. Read those transparently so existing cljs stores
+           ;; still load: a nonzero byte 4 with all lower bytes zero can only be the legacy
+           ;; single-byte size (a real 4-byte meta-size >= 16 MB is never a metadata blob).
+           b4 (aget header-bytes 4) b5 (aget header-bytes 5)
+           b6 (aget header-bytes 6) b7 (aget header-bytes 7)
+           meta-size (if (and (not= b4 0) (== b5 0) (== b6 0) (== b7 0))
+                       b4
+                       (+ (* b4 16777216) (* b5 65536) (* b6 256) b7))
            serializer (serializers (byte->key serializer-id))
            compressor (byte->compressor compressor-id)
            encryptor (byte->encryptor encryptor-id)]
