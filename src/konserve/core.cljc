@@ -192,16 +192,24 @@
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
-  value and the result of applying up-fn (the newly stored value)."
+  value and the result of applying up-fn (the newly stored value).
+
+  The optional `meta-up-fn` (5-arity, before the trailing `opts`) is
+  `(fn [built-meta] -> meta)`, transforming the value's default metadata — the general
+  metadata form (cf. `assoc`'s `meta` map). `opts` stays last."
   ([store key-vec up-fn]
-   (update-in store key-vec up-fn {:sync? false}))
+   (update-in store key-vec up-fn nil {:sync? false}))
   ([store key-vec up-fn opts]
+   (update-in store key-vec up-fn nil opts))
+  ([store key-vec up-fn meta-up-fn opts]
    (log/trace :konserve/update-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (let [[old-val new-val :as result] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))]
+                (let [base (partial meta-update (first key-vec) :edn)
+                      mfn  (if meta-up-fn (fn [old] (meta-up-fn (base old))) base)
+                      [old-val new-val :as result] (<?- (-update-in store key-vec mfn up-fn opts))]
                   (invoke-write-hooks! store {:api-op :update-in
                                               :key (first key-vec)
                                               :key-vec key-vec
@@ -215,23 +223,35 @@
   the result atomically. Returns a vector [old new] of the previous
   value and the result of applying up-fn (the newly stored value)."
   ([store key fn]
-   (update store key fn {:sync? false}))
+   (update store key fn nil {:sync? false}))
   ([store key fn opts]
+   (update store key fn nil opts))
+  ([store key fn meta-up-fn opts]
    (log/trace :konserve/update {:key key})
-   (update-in store [key] fn opts)))
+   (update-in store [key] fn meta-up-fn opts)))
 
 (defn assoc-in
   "Associates the key-vec to the value, any missing collections for
-  the key-vec (nested maps and vectors) are newly created."
+  the key-vec (nested maps and vectors) are newly created.
+
+  The optional `meta-up-fn` (5-arity, before the trailing `opts`) is
+  `(fn [built-meta] -> meta)` — it TRANSFORMS the value's default metadata (the built
+  `{:key :type :last-write}`). This is the general form of `assoc`'s `meta` map (a map
+  is just the merge-transform), exposed here because nested writes may derive metadata
+  from the built fields. `opts` stays last and purely runtime."
   ([store key-vec val]
-   (assoc-in store key-vec val {:sync? false}))
+   (assoc-in store key-vec val nil {:sync? false}))
   ([store key-vec val opts]
+   (assoc-in store key-vec val nil opts))
+  ([store key-vec val meta-up-fn opts]
    (log/trace :konserve/assoc-in {:key-vec key-vec})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
-                (let [result (<?- (-assoc-in store key-vec (partial meta-update (first key-vec) :edn) val opts))]
+                (let [base   (partial meta-update (first key-vec) :edn)
+                      mfn    (if meta-up-fn (fn [old] (meta-up-fn (base old))) base)
+                      result (<?- (-assoc-in store key-vec mfn val opts))]
                   (invoke-write-hooks! store {:api-op :assoc-in
                                               :key (first key-vec)
                                               :key-vec key-vec
@@ -240,19 +260,30 @@
 
 (defn assoc
   "Associates the key to the value. This is a simple top-level overwrite
-   and does not require locking for MVCC stores. For nested paths, use assoc-in."
+   and does not require locking for MVCC stores. For nested paths, use assoc-in.
+
+   The optional `meta` MAP (5-arity, before the trailing `opts`) is merged into the
+   value's stored metadata — the built `{:key :type :last-write}` fields win on
+   conflict, so `meta` is additive. Use `{:immutable? true}` to mark a content-
+   addressed (write-once) value: it is recorded durably AND forwarded on the write-
+   hook event, so a consumer (konserve-sync) can skip re-storing a value it already
+   has. `opts` stays last and purely runtime."
   ([store key val]
-   (assoc store key val {:sync? false}))
+   (assoc store key val nil {:sync? false}))
   ([store key val opts]
+   (assoc store key val nil opts))
+  ([store key val meta opts]
    (log/trace :konserve/assoc {:key key})
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
                 store key
-                (let [result (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))]
-                  (invoke-write-hooks! store {:api-op :assoc
-                                              :key key
-                                              :value val})
+                (let [mfn    (if meta
+                               (fn [old] (clojure.core/merge meta (meta-update key :edn old)))
+                               (partial meta-update key :edn))
+                      result (<?- (-assoc-in store [key] mfn val opts))]
+                  (invoke-write-hooks! store (cond-> {:api-op :assoc :key key :value val}
+                                               meta (clojure.core/assoc :meta meta)))
                   result)))))
 
 (defn multi-get
@@ -298,6 +329,15 @@
                          (throw e))
                        :cljs (throw e))))))))
 
+(defn uniform-meta
+  "Build a per-key meta map applying the same `meta` to every key — a convenience
+   for `multi-assoc`'s per-key `meta` when a whole batch shares one annotation:
+   `(multi-assoc store nodes (uniform-meta nodes {:immutable? true}) opts)`.
+   `kvs` may be the kv-map itself or a seq of keys."
+  [kvs meta]
+  (let [ks (if (map? kvs) (clojure.core/keys kvs) kvs)]
+    (zipmap ks (clojure.core/repeat meta))))
+
 (defn multi-assoc
   "Atomically associates multiple key-value pairs with flat keys.
   Takes a map of keys to values and stores them in a single atomic transaction.
@@ -311,10 +351,20 @@
 
   Returns a map of keys to results (typically true for each key).
 
+  The optional `meta` (4-arity, before the trailing `opts`) is a PER-KEY map
+  `{key -> meta-map}`, pure data so the whole map is forwarded verbatim on the write-hook
+  (a consumer like konserve-sync can relay/serialize it). Each written value's metadata is
+  merged with `(get meta key)` (built `{:key :type :last-write}` fields win). Keys absent
+  from `meta` get no extra metadata, so one atomic batch can mark some keys immutable
+  (content-addressed nodes) and leave others (a mutable branch-head pointer) unmarked. Use
+  `uniform-meta` for the all-keys-same case.
+
   Throws an exception if the store doesn't support multi-key operations."
   ([store kvs]
-   (multi-assoc store kvs {:sync? false}))
+   (multi-assoc store kvs nil {:sync? false}))
   ([store kvs opts]
+   (multi-assoc store kvs nil opts))
+  ([store kvs meta opts]
    (log/trace :konserve/multi-assoc {:key-count (count kvs)})
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
@@ -323,8 +373,12 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
-                (let [result (try
-                               (<?- (-multi-assoc store kvs meta-update opts))
+                (let [mfn    (if meta
+                               ;; per-key meta map: `(get meta key)` (nil ⇒ just the built meta)
+                               (fn [key type old] (clojure.core/merge (clojure.core/get meta key) (meta-update key type old)))
+                               meta-update)
+                      result (try
+                               (<?- (-multi-assoc store kvs mfn opts))
                                (catch #?(:clj Exception :cljs js/Error) e
                                  ;; Backend might throw an exception indicating it doesn't support multi-key operations
                                  ;; even though the store implements the protocol
@@ -337,8 +391,9 @@
                                                        :reason (:reason (ex-data e))}))
                                       (throw e))
                                     :cljs (throw e))))]
-                  (invoke-write-hooks! store {:api-op :multi-assoc
-                                              :kvs kvs})
+                  (invoke-write-hooks! store (cond-> {:api-op :multi-assoc :kvs kvs}
+                                               ;; per-key meta map forwarded verbatim (pure data)
+                                               meta (clojure.core/assoc :meta meta)))
                   result)))))
 
 (defn dissoc

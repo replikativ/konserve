@@ -22,3 +22,6 @@ public
 
 .idea
 *.iml
+
+# internal design scratch (not part of the published library)
+.internal/
