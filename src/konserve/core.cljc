@@ -342,9 +342,13 @@
 
   Returns a map of keys to results (typically true for each key).
 
-  The optional `meta` MAP (4-arity, before the trailing `opts`) is merged into EACH
-  written value's metadata (built fields win), e.g. `{:immutable? true}` to mark the
-  whole batch (the index-node flush) as content-addressed; forwarded on the write-hook.
+  The optional `meta` (4-arity, before the trailing `opts`) is merged into each written
+  value's metadata (built fields win) and forwarded on the write-hook. It is either:
+    - a MAP — applied to EVERY key in the batch (e.g. `{:immutable? true}` to mark a
+      uniformly content-addressed node flush); or
+    - a FN `(fn [key] -> meta-map|nil)` — resolved PER KEY, so one atomic batch can mark
+      some keys immutable and leave others (e.g. a mutable branch-head pointer written in
+      the same `multi-assoc`) unmarked.
 
   Throws an exception if the store doesn't support multi-key operations."
   ([store kvs]
@@ -360,9 +364,12 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
-                (let [mfn    (if meta
-                               (fn [key type old] (clojure.core/merge meta (meta-update key type old)))
-                               meta-update)
+                (let [mfn    (cond
+                               ;; per-key meta: `(meta key)` (nil ⇒ just the built meta)
+                               (fn? meta) (fn [key type old] (clojure.core/merge (meta key) (meta-update key type old)))
+                               ;; static meta: applied to every key
+                               meta       (fn [key type old] (clojure.core/merge meta (meta-update key type old)))
+                               :else      meta-update)
                       result (try
                                (<?- (-multi-assoc store kvs mfn opts))
                                (catch #?(:clj Exception :cljs js/Error) e
@@ -378,7 +385,9 @@
                                       (throw e))
                                     :cljs (throw e))))]
                   (invoke-write-hooks! store (cond-> {:api-op :multi-assoc :kvs kvs}
-                                               meta (clojure.core/assoc :meta meta)))
+                                               ;; per-key fn forwarded as :meta-fn, static map as :meta
+                                               (fn? meta)                  (clojure.core/assoc :meta-fn meta)
+                                               (and meta (not (fn? meta))) (clojure.core/assoc :meta meta)))
                   result)))))
 
 (defn dissoc
