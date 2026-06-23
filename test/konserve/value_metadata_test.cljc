@@ -29,32 +29,34 @@
       (is (= {:immutable? true} (:meta (last @events))) "hook forwards :meta")
       (is (= 2 (k/get store :k2 nil {:sync? true})) "value stored correctly"))))
 
-(deftest multi-assoc-meta-map
-  (testing "multi-assoc 4-arity applies meta to EVERY value in the batch"
+(deftest multi-assoc-uniform-meta
+  (testing "multi-assoc 4-arity with a per-key map covering every key (via uniform-meta)"
     (let [store  (mem)
-          events (atom [])]
+          events (atom [])
+          kvs    {:a 1 :b 2}]
       (k/add-write-hook! store :t (fn [e] (swap! events conj e)))
-      (k/multi-assoc store {:a 1 :b 2} {:immutable? true} {:sync? true})
+      (k/multi-assoc store kvs (k/uniform-meta kvs {:immutable? true}) {:sync? true})
       (is (true? (:immutable? (k/get-meta store :a nil {:sync? true}))))
       (is (true? (:immutable? (k/get-meta store :b nil {:sync? true}))))
-      (is (= {:immutable? true} (:meta (last @events))) "batch hook forwards :meta"))))
+      (is (= {:a {:immutable? true} :b {:immutable? true}} (:meta (last @events)))
+          "batch hook forwards the per-key :meta map as pure data"))))
 
-(deftest multi-assoc-meta-per-key-fn
-  (testing "multi-assoc 4-arity accepts a per-key meta FN — mark some keys, not others
+(deftest multi-assoc-meta-per-key
+  (testing "multi-assoc 4-arity takes a per-key meta MAP — mark some keys, not others
             (one atomic batch with immutable nodes + a mutable pointer)"
     (let [store  (mem)
           events (atom [])]
       (k/add-write-hook! store :t (fn [e] (swap! events conj e)))
       (k/multi-assoc store {:node1 1 :node2 2 :branch 3}
-                     (fn [k] (when (not= k :branch) {:immutable? true}))   ; per-key
+                     {:node1 {:immutable? true} :node2 {:immutable? true}}  ; :branch absent
                      {:sync? true})
       (is (true? (:immutable? (k/get-meta store :node1 nil {:sync? true}))) ":node1 immutable")
       (is (true? (:immutable? (k/get-meta store :node2 nil {:sync? true}))) ":node2 immutable")
       (is (nil?  (:immutable? (k/get-meta store :branch nil {:sync? true}))) ":branch left mutable")
-      (let [mf (:meta-fn (last @events))]
-        (is (fn? mf) "hook event carries a per-key :meta-fn (not :meta)")
-        (is (= {:immutable? true} (mf :node1)))
-        (is (nil? (mf :branch)))))))
+      (let [m (:meta (last @events))]
+        (is (map? m) "hook event carries a pure-data per-key :meta map (no closures)")
+        (is (= {:immutable? true} (get m :node1)))
+        (is (nil? (get m :branch)))))))
 
 (deftest assoc-in-meta-up-fn
   (testing "assoc-in 5-arity: meta-up-fn TRANSFORMS the built metadata (the general form)"

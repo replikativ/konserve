@@ -329,6 +329,15 @@
                          (throw e))
                        :cljs (throw e))))))))
 
+(defn uniform-meta
+  "Build a per-key meta map applying the same `meta` to every key — a convenience
+   for `multi-assoc`'s per-key `meta` when a whole batch shares one annotation:
+   `(multi-assoc store nodes (uniform-meta nodes {:immutable? true}) opts)`.
+   `kvs` may be the kv-map itself or a seq of keys."
+  [kvs meta]
+  (let [ks (if (map? kvs) (clojure.core/keys kvs) kvs)]
+    (zipmap ks (clojure.core/repeat meta))))
+
 (defn multi-assoc
   "Atomically associates multiple key-value pairs with flat keys.
   Takes a map of keys to values and stores them in a single atomic transaction.
@@ -342,13 +351,13 @@
 
   Returns a map of keys to results (typically true for each key).
 
-  The optional `meta` (4-arity, before the trailing `opts`) is merged into each written
-  value's metadata (built fields win) and forwarded on the write-hook. It is either:
-    - a MAP — applied to EVERY key in the batch (e.g. `{:immutable? true}` to mark a
-      uniformly content-addressed node flush); or
-    - a FN `(fn [key] -> meta-map|nil)` — resolved PER KEY, so one atomic batch can mark
-      some keys immutable and leave others (e.g. a mutable branch-head pointer written in
-      the same `multi-assoc`) unmarked.
+  The optional `meta` (4-arity, before the trailing `opts`) is a PER-KEY map
+  `{key -> meta-map}`, pure data so the whole map is forwarded verbatim on the write-hook
+  (a consumer like konserve-sync can relay/serialize it). Each written value's metadata is
+  merged with `(get meta key)` (built `{:key :type :last-write}` fields win). Keys absent
+  from `meta` get no extra metadata, so one atomic batch can mark some keys immutable
+  (content-addressed nodes) and leave others (a mutable branch-head pointer) unmarked. Use
+  `uniform-meta` for the all-keys-same case.
 
   Throws an exception if the store doesn't support multi-key operations."
   ([store kvs]
@@ -364,12 +373,10 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
-                (let [mfn    (cond
-                               ;; per-key meta: `(meta key)` (nil ⇒ just the built meta)
-                               (fn? meta) (fn [key type old] (clojure.core/merge (meta key) (meta-update key type old)))
-                               ;; static meta: applied to every key
-                               meta       (fn [key type old] (clojure.core/merge meta (meta-update key type old)))
-                               :else      meta-update)
+                (let [mfn    (if meta
+                               ;; per-key meta map: `(get meta key)` (nil ⇒ just the built meta)
+                               (fn [key type old] (clojure.core/merge (clojure.core/get meta key) (meta-update key type old)))
+                               meta-update)
                       result (try
                                (<?- (-multi-assoc store kvs mfn opts))
                                (catch #?(:clj Exception :cljs js/Error) e
@@ -385,9 +392,8 @@
                                       (throw e))
                                     :cljs (throw e))))]
                   (invoke-write-hooks! store (cond-> {:api-op :multi-assoc :kvs kvs}
-                                               ;; per-key fn forwarded as :meta-fn, static map as :meta
-                                               (fn? meta)                  (clojure.core/assoc :meta-fn meta)
-                                               (and meta (not (fn? meta))) (clojure.core/assoc :meta meta)))
+                                               ;; per-key meta map forwarded verbatim (pure data)
+                                               meta (clojure.core/assoc :meta meta)))
                   result)))))
 
 (defn dissoc
