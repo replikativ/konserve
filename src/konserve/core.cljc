@@ -73,22 +73,101 @@
   [store]
   (-lock-free? store))
 
-(defn get-lock [{:keys [locks] :as store} key]
+;; --- In-process per-key lock registry ----------------------------------------
+;; SOLID via Clojure protocols + records: callers (get-lock / release-lock and the
+;; locked / go-locked macros) depend on the PLockRegistry abstraction (DIP), not on
+;; the concrete map; the locking strategy is a substitutable record (LSP) and new
+;; strategies are added without touching callers (OCP).
+
+(defprotocol PLockRegistry
+  "Per-key in-process lock lifecycle. A lock is a core.async channel used as a
+   binary semaphore (holds one :unlocked token while free)."
+  (-acquire-lock [this key]
+    "Register intent on `key` and return its unlocked semaphore channel.")
+  (-release-lock [this key]
+    "Release `key`; reclaim the registry entry once no holder remains. Returns nil."))
+
+;; Pure registry calculations — no I/O, trivially unit-testable ----------------
+
+(defn- unlocked-chan
+  "A fresh channel preloaded with one :unlocked semaphore token."
+  []
+  (let [c (chan)]
+    (put! c :unlocked)
+    c))
+
+(defn- fresh-lock
+  "A new refcounted registry entry: an unlocked lock held by one acquirer."
+  []
+  {:ch (unlocked-chan) :n 1})
+
+(defn- acquire-entry
+  "Bump the refcount of `key`'s lock in registry map `m`, inserting `entry` when
+   absent. Pure."
+  [m key entry]
+  (if-let [e (clojure.core/get m key)]
+    (clojure.core/assoc m key (clojure.core/update e :n inc))
+    (clojure.core/assoc m key entry)))
+
+(defn- release-entry
+  "Drop one refcount for `key` in registry map `m`, removing the entry when the
+   last holder releases. Pure."
+  [m key]
+  (if-let [e (clojure.core/get m key)]
+    (if (<= (:n e) 1)
+      (clojure.core/dissoc m key)
+      (clojure.core/assoc m key (clojure.core/update e :n dec)))
+    m))
+
+;; Locking strategies — substitutable PLockRegistry records --------------------
+
+(defrecord RefcountedLockRegistry [locks]
+  ;; `locks`: atom of {key -> {:ch chan :n refcount}}. The refcount is bumped on
+  ;; acquire (before the caller parks) and dropped on release, so the entry
+  ;; survives every concurrent waiter and is reclaimed only at zero — bounding the
+  ;; registry instead of leaking one channel per distinct key for the store's life.
+  PLockRegistry
+  (-acquire-lock [_ key]
+    (:ch (clojure.core/get (swap! locks acquire-entry key (fresh-lock)) key)))
+  (-release-lock [_ key]
+    (swap! locks release-entry key)
+    nil))
+
+(defrecord LockFreeRegistry []
+  ;; MVCC backends (LMDB, …) serialize internally, so locks need not be tracked:
+  ;; hand out a throwaway unlocked channel and register nothing.
+  PLockRegistry
+  (-acquire-lock [_ _key] (unlocked-chan))
+  (-release-lock [_ _key] nil))
+
+(def ^:private lock-free-registry
+  "Stateless singleton shared by every lock-free store."
+  (->LockFreeRegistry))
+
+(defn- store-lock-registry
+  "Select `store`'s lock strategy (DIP: returns a PLockRegistry)."
+  [store]
   (if (lock-free? store)
-    ;; For lock-free stores, create a fresh unlocked channel
-    ;; This is used by operations that still need locking (assoc-in, update-in)
-    (let [c (chan)]
-      (put! c :unlocked)
-      c)
-    ;; Normal case: get or create persistent lock
-    (or (clojure.core/get @locks key)
-        (let [c (chan)]
-          (put! c :unlocked)
-          (clojure.core/get (swap! locks (fn [old]
-                                           (log/trace :konserve/creating-lock {:key key})
-                                           (if (old key) old
-                                               (clojure.core/assoc old key c))))
-                            key)))))
+    lock-free-registry
+    (->RefcountedLockRegistry (:locks store))))
+
+;; Public API — single level of abstraction, delegate to the strategy ----------
+
+(defn get-lock
+  "Acquire `store`/`key`'s in-process lock channel, registering intent. MUST be
+   paired with `release-lock` so the entry is reclaimed when the last holder
+   releases — otherwise the registry grows one channel per distinct key for the
+   store's lifetime (unbounded heap retention). Lock-free stores get a throwaway
+   channel."
+  [store key]
+  (-acquire-lock (store-lock-registry store) key))
+
+(defn release-lock
+  "Release `store`/`key`'s in-process lock; reclaim the registry entry when no
+   holder remains. No-op for lock-free stores / unregistered keys. Paired with
+   `get-lock`."
+  [store key]
+  (-release-lock (store-lock-registry store) key))
 
 (defn wait [lock]
   #?(:clj (while (not (poll! lock))
@@ -98,25 +177,31 @@
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
-  `(let [l# (get-lock ~store ~key)]
+  `(let [s# ~store
+         k# ~key
+         l# (get-lock s# k#)]
      (try
        (wait l#)
-       (log/trace :konserve/acquired-spin-lock {:key ~key})
+       (log/trace :konserve/acquired-spin-lock {:key k#})
        ~@code
        (finally
-         (log/trace :konserve/releasing-spin-lock {:key ~key})
-         (put! l# :unlocked)))))
+         (log/trace :konserve/releasing-spin-lock {:key k#})
+         (put! l# :unlocked)
+         (release-lock s# k#)))))
 
 (defmacro go-locked [store key & code]
   `(go-try-
-    (let [l# (get-lock ~store ~key)]
+    (let [s# ~store
+          k# ~key
+          l# (get-lock s# k#)]
       (try
         (<?- l#)
-        (log/trace :konserve/acquired-go-lock {:key ~key})
+        (log/trace :konserve/acquired-go-lock {:key k#})
         ~@code
         (finally
-          (log/trace :konserve/releasing-go-lock {:key ~key})
-          (put! l# :unlocked))))))
+          (log/trace :konserve/releasing-go-lock {:key k#})
+          (put! l# :unlocked)
+          (release-lock s# k#))))))
 
 ;; Optional locking macros - skip locking for lock-free stores (MVCC backends)
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
