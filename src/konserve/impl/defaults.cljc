@@ -7,7 +7,7 @@
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor]]
    [konserve.encryptor :refer [get-encryptor]]
-   [konserve.protocols :refer [PEDNKeyValueStore -exists?
+   [konserve.protocols :refer [PEDNKeyValueStore
                                PBinaryKeyValueStore
                                -serialize -deserialize
                                PAssocSerializers
@@ -211,6 +211,13 @@
 
 (def ^:const max-lock-attempts 100)
 
+(def ^:private not-found-sentinel
+  "Internal marker distinguishing a missing key from a stored nil value on the
+  read path. Threaded through `io-operation` as `:not-found` so `-get-in` can
+  avoid a separate existence probe (an extra HEAD round-trip per read on
+  remote backends such as S3)."
+  #?(:clj (Object.) :cljs (js-obj)))
+
 (defn get-lock [this store-key env]
   (async+sync
    (:sync? env)
@@ -300,7 +307,10 @@
                   (log/trace :konserve/optimistic-lock-retry {:key key :attempt (inc attempt) :max-retries max-retries})
                   (recur (inc attempt)))
                 result)))
-          nil))))))
+          ;; Key is missing (and not migratable). Read callers that need to
+          ;; distinguish a missing key from a stored nil pass a `:not-found`
+          ;; sentinel; everyone else keeps getting nil as before.
+          (:not-found env)))))))
 
 (defn list-keys
   "Return all keys in the store."
@@ -424,23 +434,28 @@
        sync?
        *default-sync-translation*
        (go-try-
-        (if (<?- (-exists? this (first key-vec) opts))
-          (let [a (<?-
-                   (io-operation this serializers read-handlers write-handlers
-                                 {:key-vec key-vec
-                                  :operation :read-edn
-                                  :compressor compressor
-                                  :encryptor encryptor
-                                  :format    :data
-                                  :version version
-                                  :sync? sync?
-                                  :buffer-size buffer-size
-                                  :config config
-                                  :default-serializer default-serializer
-                                  :msg       {:type :read-edn-error
-                                              :key  key}}))]
-            (clojure.core/get-in a (rest key-vec)))
-          not-found)))))
+        ;; No upfront -exists? probe: io-operation already checks blob
+        ;; existence (and migratability) exactly once and returns the
+        ;; :not-found sentinel for missing keys. The previous double probe
+        ;; cost an extra HEAD request per read on remote backends.
+        (let [a (<?-
+                 (io-operation this serializers read-handlers write-handlers
+                               {:key-vec key-vec
+                                :operation :read-edn
+                                :compressor compressor
+                                :encryptor encryptor
+                                :format    :data
+                                :version version
+                                :sync? sync?
+                                :buffer-size buffer-size
+                                :config config
+                                :default-serializer default-serializer
+                                :not-found not-found-sentinel
+                                :msg       {:type :read-edn-error
+                                            :key  key}}))]
+          (if (identical? a not-found-sentinel)
+            not-found
+            (clojure.core/get-in a (rest key-vec))))))))
   (-get-meta [this key opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
