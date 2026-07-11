@@ -4,7 +4,9 @@
             [konserve.compressor]
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
-            [konserve.impl.storage-layout :as storage-layout :refer [PMultiWriteBackingStore PMultiReadBackingStore]]
+            [konserve.impl.storage-layout :as storage-layout
+             :refer [PMultiWriteBackingStore PMultiReadBackingStore PReadMissSafe
+                     store-key-not-found-ex store-key-not-found?]]
             [konserve.serializers]
             [konserve.protocols :as protocols]
             [konserve.store :as store]
@@ -66,7 +68,10 @@
             (fn [ev]
               (if-some [v (-> ev .-target .-result)]
                 (put! out v)
-                (close! out))))
+                ;; Absent key: signal not-found so io-operation's read-first path
+                ;; (PReadMissSafe) converts it to the caller's :not-found without a
+                ;; separate -blob-exists? probe. (`.get` returns undefined on a miss.)
+                (put! out (store-key-not-found-ex key)))))
       (set! (.-onerror req)
             #(put! out (ex-info (str "error reading blob at key '" key "'")
                                 {:cause %
@@ -120,10 +125,14 @@
   (with-promise out
     (take! (get-buf this)
            (fn [res]
-             (if (instance? js/Error res)
+             (cond
+               ;; propagate not-found un-wrapped so io-operation recognises it
+               (store-key-not-found? res) (put! out res)
+               (instance? js/Error res)
                (put! out (ex-info "error reading blob from objectStore"
                                   {:cause res
                                    :caller 'konserve.indexeddb/read-header}))
+               :else
                (let [view (js/Uint8Array. res)
                      header (.slice view 0 storage-layout/header-size)]
                  (put! out header)))))))
@@ -133,10 +142,13 @@
   (with-promise out
     (take! (read-blob db key)
            (fn [res]
-             (if (instance? js/Error res)
+             (cond
+               (store-key-not-found? res) (put! out res)
+               (instance? js/Error res)
                (put! out (ex-info "error reading blob from objectStore"
                                   {:cause res
                                    :caller 'konserve.indexeddb/read-binary}))
+               :else
                (take!
                 (locked-cb {:input-stream (.stream res)
                             :size (.-size res)
@@ -333,7 +345,7 @@
               #(put! out (ex-info (str "error deleting blob at key '" key "'")
                                   {:cause %
                                    :caller 'konserve.indexeddb/-delete-blob}))))))
-  (-migratable [_this _key _store-key _env] (go false))
+  (-migratable [_this _key _store-key _env] (go nil)) ;; no migration key (contract: key or nil)
   (-blob-exists? [_this key env]
     (assert (not (:sync? env)) (str "-blob-exists? requires async, got env: " (pr-str env)))
     (let [req (.getKey (.objectStore (.transaction db #js[""]) "") key)]
@@ -417,6 +429,14 @@
   (-multi-read-blobs [_this store-keys env]
     (assert (not (:sync? env)))
     (multi-read-blobs db store-keys)))
+
+;; IndexedDB reads are read-miss-safe: -create-blob has no side effect (it only
+;; constructs a BackingBlob; unlike the filestore it never materialises the key),
+;; and read-blob signals store-key-not-found-ex on an absent key. So io-operation
+;; skips the -blob-exists? probe — a read is one `.get` transaction instead of
+;; `.getKey` (probe) + `.get`, and update-in/assoc-in/bassoc drop their probe too.
+(extend-type IndexedDBackingStore
+  PReadMissSafe)
 
 (defn read-web-stream
   "Accepts the bget locked callback arg and returns a promise-chan containing
