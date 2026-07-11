@@ -198,6 +198,20 @@
      Missing keys are excluded from the result map.
      Backends must implement this to support multi-key read operations."))
 
+(defprotocol PReadMissSafe
+  "Marker for backing stores whose READ of an absent store-key is
+   side-effect-free and reports the miss cleanly. When a backing implements
+   this, `io-operation`'s read path skips the separate `-blob-exists?` probe and
+   learns existence from the read itself — saving a round trip on remote stores
+   (an S3 HEAD before every GET). Such a backing's `-read-header` must throw
+   `(store-key-not-found-ex store-key)` when the key is absent, WITHOUT any side
+   effect (i.e. it must not create/materialize the blob).
+
+   Do NOT implement this on stores where opening/reading a missing key has a
+   side effect — e.g. the default filestore, whose `-create-blob` opens with
+   `CREATE` and would materialize an empty blob. Those keep the probe-first
+   path.")
+
 (defprotocol PBackingBlob
   "Blob object that is backing a stored value and its metadata."
   (-sync [this env] "Synchronize this object and ensure it is stored. This is not necessary in many stores.")
@@ -216,3 +230,21 @@
 
 (defprotocol PBackingLock
   (-release [this env] "Release this lock."))
+
+;; -----------------------------------------------------------------------------
+;; Not-found signalling for PReadMissSafe backends. A miss-safe backend's read
+;; throws this when the store-key is absent; the read path recognises it and
+;; returns the caller's not-found value instead of propagating.
+
+(def ^:const store-key-not-found ::store-key-not-found)
+
+(defn store-key-not-found-ex
+  "Exception a `PReadMissSafe` backend throws from `-read-header` when
+   `store-key` is absent (no side effect)."
+  [store-key]
+  (ex-info "Store key not found." {:type store-key-not-found :store-key store-key}))
+
+(defn store-key-not-found?
+  "True if `e` is (or wraps) a `store-key-not-found-ex`."
+  [e]
+  (= store-key-not-found (:type (ex-data e))))

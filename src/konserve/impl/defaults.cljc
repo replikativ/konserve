@@ -25,6 +25,7 @@
                                          PBackingLock -release
                                          PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
                                          PMultiReadBackingStore -multi-read-blobs
+                                         PReadMissSafe store-key-not-found?
                                          default-version
                                          parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
@@ -260,57 +261,86 @@
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           migration-key (<?- (-migratable backing key store-key env))
-          ;; A full-overwrite write doesn't need to know whether the blob
-          ;; already exists: it writes regardless, never reads the old value
-          ;; (the old-read below is gated on `(not overwrite?)`), and the
-          ;; migrate branch needs a non-nil migration-key. So when there is no
-          ;; migration to perform we can skip the existence probe entirely —
-          ;; on remote backends that probe is a full round-trip (e.g. an S3
-          ;; HEAD) paid per write for an answer that is then ignored.
-          skip-exists?  (and overwrite?
-                             (or (= :write-edn operation) (= :write-binary operation))
-                             (nil? migration-key))
+          read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation))
+          ;; Skip the -blob-exists? probe when its answer is not needed:
+          ;; - a full-overwrite WRITE writes regardless and never reads the old
+          ;;   value (the old-read below is gated on `(not overwrite?)`);
+          ;; - a READ on a PReadMissSafe backing learns existence from the read
+          ;;   itself (an absent key throws store-key-not-found-ex), so a
+          ;;   separate probe is a wasted round-trip — an S3 HEAD before the GET.
+          ;; Both require no pending migration (that branch needs the answer).
+          skip-read-probe? (and read-op?
+                                (satisfies? PReadMissSafe backing)
+                                (nil? migration-key))
+          skip-exists?  (or (and overwrite?
+                                 (or (= :write-edn operation) (= :write-binary operation))
+                                 (nil? migration-key))
+                            skip-read-probe?)
           store-key-exists? (when-not skip-exists?
                               (<?- (-blob-exists? backing store-key env)))
           max-retries (get-in config [:optimistic-locking-retries] 0)]
-      (if (and (not store-key-exists?) migration-key)
+      (cond
+        ;; Read-first (PReadMissSafe): no existence probe — read the blob and
+        ;; treat an absent key (store-key-not-found-ex) as the caller's
+        ;; not-found. One round-trip on remote stores instead of HEAD + GET. A
+        ;; genuinely stored nil still comes back as nil (the read succeeds),
+        ;; distinct from the not-found sentinel.
+        skip-read-probe?
+        (let [blob (<?- (-create-blob backing store-key env))
+              lock (when (:lock-blob? config)
+                     (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                     (<?- (get-lock blob (first key-vec) env)))]
+          (try
+            (<?- (read-blob blob read-handlers serializers env))
+            (catch #?(:clj Exception :cljs js/Error) e
+              (if (store-key-not-found? e) (:not-found env) (throw e)))
+            (finally
+              (when (:lock-blob? config)
+                (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
+                (<?- (-release lock env)))
+              (<?- (-close blob env)))))
+
+        (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
-        (if (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
+
+        (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
           ;; Retry loop for optimistic locking conflicts
-          (loop [attempt 0]
-            (let [result
-                  (try
-                    (let [blob (<?- (-create-blob backing store-key env))
-                          lock   (when (:lock-blob? config)
-                                   (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                                   (<?- (get-lock blob (first key-vec) env)))]
-                      (try
-                        (let [old (if (and (or store-key-exists? (pos? attempt)) (not overwrite?))
-                                    (<?- (read-blob blob read-handlers serializers env))
-                                    [nil nil])]
-                          (if (or (= :write-edn operation) (= :write-binary operation))
-                            (<?- (update-blob backing store-key serializer write-handlers env old))
-                            old))
-                        (finally
-                          (when (:lock-blob? config)
-                            (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                            (<?- (-release lock env)))
-                          (<?- (-close blob env)))))
-                    (catch #?(:clj Exception :cljs js/Error) e
-                      (if (and (pos? max-retries)
-                               (= :optimistic-lock-conflict (:type (ex-data e)))
-                               (< attempt max-retries))
-                        ::retry
-                        (throw e))))]
-              (if (= result ::retry)
-                (do
-                  (log/trace :konserve/optimistic-lock-retry {:key key :attempt (inc attempt) :max-retries max-retries})
-                  (recur (inc attempt)))
-                result)))
-          ;; Key is missing (and not migratable). Read callers that need to
-          ;; distinguish a missing key from a stored nil pass a `:not-found`
-          ;; sentinel; everyone else keeps getting nil as before.
-          (:not-found env)))))))
+        (loop [attempt 0]
+          (let [result
+                (try
+                  (let [blob (<?- (-create-blob backing store-key env))
+                        lock   (when (:lock-blob? config)
+                                 (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                                 (<?- (get-lock blob (first key-vec) env)))]
+                    (try
+                      (let [old (if (and (or store-key-exists? (pos? attempt)) (not overwrite?))
+                                  (<?- (read-blob blob read-handlers serializers env))
+                                  [nil nil])]
+                        (if (or (= :write-edn operation) (= :write-binary operation))
+                          (<?- (update-blob backing store-key serializer write-handlers env old))
+                          old))
+                      (finally
+                        (when (:lock-blob? config)
+                          (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
+                          (<?- (-release lock env)))
+                        (<?- (-close blob env)))))
+                  (catch #?(:clj Exception :cljs js/Error) e
+                    (if (and (pos? max-retries)
+                             (= :optimistic-lock-conflict (:type (ex-data e)))
+                             (< attempt max-retries))
+                      ::retry
+                      (throw e))))]
+            (if (= result ::retry)
+              (do
+                (log/trace :konserve/optimistic-lock-retry {:key key :attempt (inc attempt) :max-retries max-retries})
+                (recur (inc attempt)))
+              result)))
+
+        :else
+        ;; Key is missing (and not migratable). Read callers that need to
+        ;; distinguish a missing key from a stored nil pass a `:not-found`
+        ;; sentinel; everyone else keeps getting nil as before.
+        (:not-found env))))))
 
 (defn list-keys
   "Return all keys in the store."
