@@ -5,6 +5,7 @@
             [konserve.core :as k]
             [konserve.utils :refer [multi-key-capable?]]
             [konserve.indexeddb :as idb]
+            [konserve.impl.storage-layout :refer [PReadMissSafe]]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
@@ -123,6 +124,48 @@
              (is (= [{::foo 100} {}] (<! (p/-update-in store [:bar] identity #(dissoc % ::foo) opts))))
              (is (true? (<! (p/-dissoc store :bar opts))))
              (is (false? (<! (p/-exists? store :bar opts))))
+             (<! (.close (:backing store)))
+             (<! (idb/delete-idb db-name))
+             (done)))))
+
+(deftest ^:browser read-miss-safe-test
+  ;; IndexedDB backing is PReadMissSafe: reads/RMW skip the -blob-exists? probe
+  ;; (a `.getKey` transaction). We spy on IDBObjectStore.prototype.getKey to count
+  ;; probes and assert reads/update-in/bassoc do zero, while dissoc still probes
+  ;; (existed? contract).
+  (async done
+         (go
+           (let [db-name "read-miss-safe-test"
+                 _ (<! (idb/delete-idb db-name))
+                 opts {:sync? false}
+                 store (<! (idb/connect-idb-store db-name :opts opts))
+                 proto (.-prototype js/IDBObjectStore)
+                 orig-get-key (.-getKey proto)
+                 probes (atom 0)]
+             (is (satisfies? PReadMissSafe (:backing store)) "IndexedDB backing is PReadMissSafe")
+             (set! (.-getKey proto)
+                   (fn [k] (this-as this (swap! probes inc) (.call orig-get-key this k))))
+             (<! (k/assoc store :a {:v 1} opts))          ;; overwrite -> no probe
+             (reset! probes 0)
+             ;; reads + read-modify-write: ZERO -blob-exists? probes
+             (is (= {:v 1} (<! (k/get store :a nil opts))) "get hit")
+             (is (nil? (<! (k/get store :missing nil opts))) "get miss -> nil (not-found handled)")
+             (is (= [{:v 1} {:v 2}] (<! (k/update-in store [:a :v] inc opts))) "update-in on existing")
+             (is (= [nil 1] (<! (k/update-in store [:fresh] (fnil inc 0) opts))) "update-in on absent -> fresh")
+             (is (= [nil {:n 9}] (<! (k/assoc-in store [:m] {:n 9} opts))) "assoc (full)")
+             (is (= [{:n 9} {:n 9 :k 2}] (<! (k/assoc-in store [:m :k] 2 opts))) "nested assoc-in")
+             (is (true? (<! (k/bassoc store :b #js[1 2 3] opts))) "bassoc")
+             (is (= 0 @probes) "no .getKey probe on read / update-in / assoc-in / bassoc")
+             ;; dissoc keeps its probe (existed?/false-for-missing contract)
+             (reset! probes 0)
+             (is (true?  (<! (k/dissoc store :a opts))) "dissoc present -> true")
+             (is (false? (<! (k/dissoc store :gone opts))) "dissoc absent -> false")
+             (is (pos? @probes) "dissoc probes for the existed? contract")
+             ;; :ignore-existence? opts out of the probe (idempotent delete)
+             (reset! probes 0)
+             (is (true? (<! (k/dissoc store :b {:sync? false :ignore-existence? true}))) "dissoc opt-in")
+             (is (= 0 @probes) "no probe with :ignore-existence?")
+             (set! (.-getKey proto) orig-get-key)
              (<! (.close (:backing store)))
              (<! (idb/delete-idb db-name))
              (done)))))

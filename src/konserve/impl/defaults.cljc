@@ -190,25 +190,33 @@
         :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (defn delete-blob
-  "Remove/Delete key-value pair of backing store by given key. If success it will return true."
+  "Remove/Delete key-value pair of backing store by given key. Returns true if the
+   key existed and was deleted, false if it was absent.
+
+   The -blob-exists? probe reports existed?/false-for-missing (konserve's contract,
+   enforced by the compliance suite). Callers that DON'T need that boolean — e.g.
+   datahike GC's bulk sweep — can pass `:ignore-existence? true` in opts: on a
+   PReadMissSafe backing (whose -delete-blob is idempotent) this skips the probe and
+   returns true, saving a round-trip (an S3 HEAD before the DELETE). On other
+   backings the hint is ignored and the probe stays (a local stat is cheap, and
+   -delete-blob there is not guaranteed idempotent)."
   [backing env]
   (async+sync
    (:sync? env) *default-sync-translation*
    (go-try-
-    (let [{:keys [key-vec base]} env
+    (let [{:keys [key-vec base ignore-existence?]} env
           key          (first key-vec)
           store-key    (key->store-key key)
-          blob-exists? (<?- (-blob-exists? backing store-key env))]
-      (if blob-exists?
-        (try
-          (<?- (-delete-blob backing store-key env))
-          true
-          (catch #?(:clj Exception :cljs js/Error) e
-            (throw (ex-info "Could not delete key."
-                            {:key key
-                             :base base
-                             :exception e}))))
-        false)))))
+          on-error     (fn [e] (ex-info "Could not delete key."
+                                        {:key key :base base :exception e}))]
+      (if (and ignore-existence? (satisfies? PReadMissSafe backing))
+        ;; opt-in fast path: no existed? boolean needed, idempotent delete.
+        (try (<?- (-delete-blob backing store-key env)) true
+             (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
+        (if (<?- (-blob-exists? backing store-key env))
+          (try (<?- (-delete-blob backing store-key env)) true
+               (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
+          false))))))
 
 (def ^:const max-lock-attempts 100)
 
@@ -262,20 +270,27 @@
           serializer    (get serializers default-serializer)
           migration-key (<?- (-migratable backing key store-key env))
           read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation))
-          ;; Skip the -blob-exists? probe when its answer is not needed:
-          ;; - a full-overwrite WRITE writes regardless and never reads the old
-          ;;   value (the old-read below is gated on `(not overwrite?)`);
-          ;; - a READ on a PReadMissSafe backing learns existence from the read
-          ;;   itself (an absent key throws store-key-not-found-ex), so a
-          ;;   separate probe is a wasted round-trip — an S3 HEAD before the GET.
-          ;; Both require no pending migration (that branch needs the answer).
-          skip-read-probe? (and read-op?
-                                (satisfies? PReadMissSafe backing)
-                                (nil? migration-key))
-          skip-exists?  (or (and overwrite?
-                                 (or (= :write-edn operation) (= :write-binary operation))
-                                 (nil? migration-key))
-                            skip-read-probe?)
+          write-op?     (or (= :write-edn operation) (= :write-binary operation))
+          ;; A PReadMissSafe backing reports an absent key cleanly from the read
+          ;; itself (an absent key throws store-key-not-found-ex), so the
+          ;; -blob-exists? probe is a wasted round-trip (an S3 HEAD) whenever we
+          ;; touch the blob anyway. Requires no pending migration (that branch
+          ;; needs the existence answer independently).
+          ;; `-migratable` returns a migration key (truthy) or a falsy no-migration
+          ;; marker — some backends use nil, some false — so test truthiness, not nil?.
+          miss-safe?    (and (satisfies? PReadMissSafe backing) (not migration-key))
+          ;; Skip the probe when its answer is not needed:
+          ;; - a full-overwrite WRITE writes regardless and never reads the old value;
+          ;; - a READ on a miss-safe backing learns existence from the read itself;
+          ;; - a NON-overwrite WRITE (update-in / update / nested assoc-in / bassoc)
+          ;;   reads the old value regardless, and on a miss-safe backing that read
+          ;;   establishes existence — so the probe is redundant there too (HEAD+GET+PUT
+          ;;   collapses to GET+PUT on a hit). The old-read below becomes read-first.
+          skip-read-probe?  (and read-op? miss-safe?)
+          skip-write-probe? (and write-op? (not overwrite?) miss-safe?)
+          skip-exists?  (or (and overwrite? write-op? (not migration-key))
+                            skip-read-probe?
+                            skip-write-probe?)
           store-key-exists? (when-not skip-exists?
                               (<?- (-blob-exists? backing store-key env)))
           max-retries (get-in config [:optimistic-locking-retries] 0)]
@@ -303,7 +318,7 @@
         (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
 
-        (or store-key-exists? (= :write-edn operation) (= :write-binary operation))
+        (or store-key-exists? write-op?)
           ;; Retry loop for optimistic locking conflicts
         (loop [attempt 0]
           (let [result
@@ -313,10 +328,20 @@
                                  (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
                                  (<?- (get-lock blob (first key-vec) env)))]
                     (try
-                      (let [old (if (and (or store-key-exists? (pos? attempt)) (not overwrite?))
+                      (let [old (cond
+                                  ;; full overwrite never needs the old value
+                                  overwrite? [nil nil]
+                                  ;; miss-safe non-overwrite write: no probe was done, so
+                                  ;; read-first and treat an absent key as a fresh write.
+                                  skip-write-probe?
+                                  (try (<?- (read-blob blob read-handlers serializers env))
+                                       (catch #?(:clj Exception :cljs js/Error) e
+                                         (if (store-key-not-found? e) [nil nil] (throw e))))
+                                  ;; probe said the key exists (or this is a retry): read old
+                                  (or store-key-exists? (pos? attempt))
                                   (<?- (read-blob blob read-handlers serializers env))
-                                  [nil nil])]
-                        (if (or (= :write-edn operation) (= :write-binary operation))
+                                  :else [nil nil])]
+                        (if write-op?
                           (<?- (update-blob backing store-key serializer write-handlers env old))
                           old))
                       (finally
@@ -547,6 +572,7 @@
                   :default-serializer default-serializer
                   :config     config
                   :sync?      (:sync? opts)
+                  :ignore-existence? (:ignore-existence? opts)
                   :buffer-size buffer-size
                   :msg        {:type :deletion-error
                                :key  key}}))

@@ -29,9 +29,11 @@
              (let [keys-to-delete (mapv :key batch)]
                (<?- (k/multi-dissoc store keys-to-delete))
                (into deleted-files keys-to-delete))
-             ;; Fallback to single operations for stores without multi-key support
+             ;; Fallback to single operations for stores without multi-key support.
+             ;; GC does not use dissoc's existed? return, so :ignore-existence? lets
+             ;; miss-safe backings skip the per-key HEAD probe (idempotent delete).
              (let [pending-deletes (mapv (fn [{:keys [key]}]
-                                           (k/dissoc store key))
+                                           (k/dissoc store key {:ignore-existence? true}))
                                          batch)]
                (<?- (async/into [] (async/merge pending-deletes)))
                (into deleted-files (map :key batch))))))
