@@ -62,10 +62,10 @@
                      (async env #(->MemBlob state counters sk (atom {}))))
    :-delete-blob   (fn [{:keys [state counters]} sk env]
                      (async env #(do (swap! counters update :delete inc)
-                                      (swap! state dissoc sk) true)))
+                                     (swap! state dissoc sk) true)))
    :-blob-exists?  (fn [{:keys [state counters]} sk env]
                      (async env #(do (swap! counters update :exists inc)
-                                      (contains? @state sk))))
+                                     (contains? @state sk))))
    :-migratable    (fn [_ _ _ env] (async env (constantly nil)))
    :-migrate       (fn [_ _ _ _ _ _ env] (async env (constantly nil)))
    :-copy          (fn [{:keys [state]} from to env]
