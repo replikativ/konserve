@@ -10,7 +10,7 @@
                                                       PEDNKeyValueStore PBinaryKeyValueStore
                                                       PKeyIterable PAssocSerializers PMultiKeySupport
                                                       PMultiKeyEDNValueStore]]
-            [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
+            [konserve.utils :refer [meta-update multi-key-capable? kv-keys invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [superv.async :refer [go-try- <?-]]
             [replikativ.logging :as log]))
@@ -380,7 +380,7 @@
                      (try
                        (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))
                        (catch #?(:clj Exception :cljs js/Error) e
-                         (log/warn :konserve/tiered-frontend-multi-assoc-failed {:kvs-keys (clojure.core/keys kvs) :error e})))
+                         (log/warn :konserve/tiered-frontend-multi-assoc-failed {:kvs-keys (kv-keys kvs) :error e})))
                      backend-result)
 
                    :write-behind
@@ -389,17 +389,17 @@
                      (go (try
                            (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-backend-multi-assoc-failed {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                             (log/warn :konserve/tiered-backend-multi-assoc-failed {:kvs-keys (kv-keys kvs) :error e}))))
                      frontend-result)
 
                    :write-around
                    (let [result (<?- (-multi-assoc backend-store kvs meta-up-fn opts))]
                      ;; Invalidate all affected keys from frontend
                      (go (try
-                           (doseq [k (clojure.core/keys kvs)]
+                           (doseq [k (kv-keys kvs)]
                              (<?- (-dissoc frontend-store k opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-frontend-invalidation-failed {:kvs-keys (clojure.core/keys kvs) :error e}))))
+                             (log/warn :konserve/tiered-frontend-invalidation-failed {:kvs-keys (kv-keys kvs) :error e}))))
                      result)
 
                    :frontend-only

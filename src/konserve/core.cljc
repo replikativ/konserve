@@ -36,7 +36,8 @@
     :key-vec <full key path> (for assoc-in/update-in)
     :value <written value>
     :old-value <previous value> (for update operations)
-    :kvs <map of key->value> (for multi-assoc)}
+    :kvs <the multi-assoc batch, forwarded VERBATIM — a map, or an ordered seq of
+          [k v] pairs whose order is the apply order (see multi-assoc)>}
 
    Parameters:
    - store: A store implementing PWriteHookStore
@@ -418,21 +419,47 @@
   "Build a per-key meta map applying the same `meta` to every key — a convenience
    for `multi-assoc`'s per-key `meta` when a whole batch shares one annotation:
    `(multi-assoc store nodes (uniform-meta nodes {:immutable? true}) opts)`.
-   `kvs` may be the kv-map itself or a seq of keys."
+   `kvs` may be a kv-map, an ordered seq of [k v] pairs, or a plain seq of keys.
+   Note the result is a plain lookup map — per-key meta is unordered by nature;
+   ordering lives in `kvs` (see `multi-assoc`)."
   [kvs meta]
-  (let [ks (if (map? kvs) (clojure.core/keys kvs) kvs)]
+  (let [ks (cond
+             (map? kvs)                      (clojure.core/keys kvs)
+             ;; seq of [k v] pairs (an ordered multi-assoc batch)
+             (and (sequential? (first kvs))
+                  (= 2 (count (first kvs))))  (clojure.core/map first kvs)
+             :else                            kvs)]
     (zipmap ks (clojure.core/repeat meta))))
 
 (defn multi-assoc
-  "Atomically associates multiple key-value pairs with flat keys.
-  Takes a map of keys to values and stores them in a single atomic transaction.
-  All operations must succeed or all must fail (all-or-nothing semantics).
+  "Associates multiple key-value pairs with flat keys, as one batch. Atomically where the
+  backend can (IndexedDB); ordered everywhere (see below), which is the weaker guarantee
+  that actually suffices.
 
-  Example:
+  `kvs` is either a map, or — preferred when the batch has internal dependencies — an
+  ORDERED sequence of `[k v]` pairs. **Sequence order is apply order**, and it is preserved
+  end-to-end: through the backing store's writes and verbatim onto the `:multi-assoc`
+  write-hook (so a sync layer can relay the batch in the same order). A map has no order,
+  so a map batch makes no ordering promise.
+
+  Why that matters: not every backend can write multiple keys atomically (S3, filesystems
+  cannot; IndexedDB can). For a batch that writes a set of immutable, content-addressed
+  values plus a MUTABLE pointer that makes them reachable, you do not need atomicity — you
+  need order. Put the pointer LAST:
+
   ```
-  (multi-assoc store {:user1 {:name \"Alice\"}
-                      :user2 {:name \"Bob\"}})
+  (multi-assoc store [[node-a v] [node-b v] [:root {:refs [node-a node-b]}]]
+               (uniform-meta [node-a node-b] {:immutable? true}))
   ```
+
+  Then any prefix of the batch leaves the store consistent: the values are written but
+  unreachable (harmless orphans, collectable), and the pointer flips only once everything it
+  references exists. A torn batch can never produce a dangling pointer. This is the
+  write-the-leaves-then-flip-the-root discipline, and it is what lets non-atomic backends be
+  crash-safe.
+
+  Atomic backends still apply the batch all-or-nothing, in which case the order is simply
+  redundant — passing an ordered seq is always safe.
 
   Returns a map of keys to results (typically true for each key).
 

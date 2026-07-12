@@ -109,6 +109,24 @@
              (is (= 42 (<!! (k/get store :multi1 nil opts))))
              (is (= "value" (<!! (k/get store :multi2 nil opts)))))
 
+             ;; multi-assoc also takes an ORDERED seq of [k v] pairs — the form used when a
+             ;; batch writes immutable values plus a mutable pointer that makes them
+             ;; reachable, with the pointer LAST (see konserve.core/multi-assoc).
+           (let [batch  [[:ord-a 1] [:ord-b 2] [:ord-root {:refs [:ord-a :ord-b]}]]
+                 result (<!! (k/multi-assoc store batch
+                                            (k/uniform-meta [[:ord-a 1] [:ord-b 2]]
+                                                            {:immutable? true})
+                                            opts))]
+             (is (= result {:ord-a true :ord-b true :ord-root true}))
+             (is (= 1 (<!! (k/get store :ord-a nil opts))))
+             (is (= 2 (<!! (k/get store :ord-b nil opts))))
+             (is (= {:refs [:ord-a :ord-b]} (<!! (k/get store :ord-root nil opts))))
+             ;; per-key meta applied only to the pair-seq keys we named
+             (is (true? (:immutable? (<!! (k/get-meta store :ord-a nil opts)))))
+             (is (nil? (:immutable? (<!! (k/get-meta store :ord-root nil opts))))
+                 "the mutable pointer is not marked immutable"))
+           (<!! (k/multi-dissoc store [:ord-a :ord-b :ord-root] opts))
+
              ;; Test multi-dissoc with existing keys
            (let [result (<!! (k/multi-dissoc store [:multi1 :multi2] opts))]
              (is (= result {:multi1 true :multi2 true}))
@@ -195,7 +213,19 @@
                (is (= {:hook-m1 1 :hook-m2 2} (:kvs (nth @hook-events 4))))
               ;; Clean up multi-assoc keys
                (<!! (k/dissoc store :hook-m1 opts))
-               (<!! (k/dissoc store :hook-m2 opts)))
+               (<!! (k/dissoc store :hook-m2 opts))
+
+              ;; An ORDERED batch must reach the hook VERBATIM, order intact — a sync layer
+              ;; relays it in this order so a subscriber applies the mutable pointer last.
+               (let [batch [[:hook-o1 1] [:hook-o2 2] [:hook-root 3]]
+                     before (count @hook-events)]
+                 (<!! (k/multi-assoc store batch opts))
+                 (let [ev (nth @hook-events before)]
+                   (is (= :multi-assoc (:api-op ev)))
+                   (is (= batch (:kvs ev)) "ordered kvs forwarded verbatim")
+                   (is (= [:hook-o1 :hook-o2 :hook-root] (mapv first (:kvs ev)))
+                       "batch order preserved onto the write hook")))
+               (<!! (k/multi-dissoc store [:hook-o1 :hook-o2 :hook-root] opts)))
 
             ;; Test removing hook - should stop receiving events
              (k/remove-write-hook! store ::test-hook)
