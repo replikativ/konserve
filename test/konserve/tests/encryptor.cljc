@@ -87,8 +87,9 @@
      (let [store (create-store store-name
                                :config {:encryptor {:type :aes-gcm :key gcm-key}}
                                :opts {:sync? true})]
-       ;; binary is refused on an encrypted store — it would bypass the cipher
-       (compliance-test store {:binary? false})
+       ;; binary is covered too: compliance-test passes {:raw? true} on an encrypted
+       ;; store, which is the only legal way to write binary there
+       (compliance-test store)
 
        (testing "binary values are refused rather than silently written in the clear"
          (is (thrown? clojure.lang.ExceptionInfo
@@ -157,7 +158,7 @@
                                 :config {:encryptor {:type :aes
                                                      :key "s3cr3t"}}
                                 :opts {:sync? true})]
-       (compliance-test store {:binary? false})
+       (compliance-test store)
        (delete-store store-name))))
 
 #?(:clj

@@ -609,19 +609,26 @@
 ;; Sealing raw bytes under the store's key
 ;; -----------------------------------------------------------------------------
 
+(defn encrypted?
+  "Does this store encrypt the values it writes? False for a store with no
+  encryptor configured (and for stores that have no encryptor at all, like the
+  in-memory one). Binary values are never encrypted regardless — see `bassoc`."
+  [store]
+  (let [{:keys [encryptor config]} store]
+    (boolean (when encryptor
+               (encryptor/encrypting? (encryptor (:encryptor config)))))))
+
 (defn- store-cipher
   "The store's configured encryptor, or an error if it has none. `seal`/`unseal`
   exist to encrypt bytes the store itself will not touch, so an unencrypted store
   quietly returning the plaintext would defeat the point."
   [store]
-  (let [{:keys [encryptor config]} store
-        enc (when encryptor (encryptor (:encryptor config)))]
-    (when-not (and enc (encryptor/encrypting? enc))
-      (throw (ex-info (str "This store has no encryptor configured, so there is no key "
-                           "to seal with. Configure one, e.g. "
-                           "{:encryptor {:type :aes-gcm :key ...}}.")
-                      {:type :konserve/no-encryptor})))
-    enc))
+  (when-not (encrypted? store)
+    (throw (ex-info (str "This store has no encryptor configured, so there is no key "
+                         "to seal with. Configure one, e.g. "
+                         "{:encryptor {:type :aes-gcm :key ...}}.")
+                    {:type :konserve/no-encryptor})))
+  ((:encryptor store) (:encryptor (:config store))))
 
 (defn seal
   "Encrypt `bytes` with this store's configured encryptor, bound to `key`.

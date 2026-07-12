@@ -52,9 +52,7 @@ All notable, user-visible changes to konserve are documented here.
   since binary bytes pass through unencrypted (below). It keeps its meaning if
   binary later becomes encrypted by default.
 
-- `konserve.compliance-test/compliance-test` takes an options map:
-  `(compliance-test store {:binary? false})` skips the binary (`bassoc`/`bget`)
-  section for stores that cannot hold binary values.
+- **`konserve.core/encrypted?`** — whether a store encrypts the values it writes.
 
 - **`PReadMissSafe` marker protocol** (`konserve.impl.storage-layout`). A backing
   store implements it to declare that a read of an absent key is side-effect-free
