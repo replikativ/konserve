@@ -23,6 +23,15 @@
     {:key key :type type :last-write (now)}
     (clojure.core/assoc old :last-write (now))))
 
+(defn kv-keys
+  "The keys of a `multi-assoc` kvs argument, which may be a map OR an ORDERED
+   sequence of [k v] pairs (see `konserve.core/multi-assoc`). For a pair-seq the
+   key order is preserved; for a map it is unspecified, as always."
+  [kvs]
+  (if (map? kvs)
+    (clojure.core/keys kvs)
+    (clojure.core/map first kvs)))
+
 (defn multi-key-capable?
   "Checks whether the store supports multi-key operations.
 
