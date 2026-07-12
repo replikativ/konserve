@@ -61,6 +61,17 @@
                 (<! (tiered-tests/test-write-policies-async frontend backend))
                 (done))))))
 
+(deftest tiered-store-memory-frontend-only-test
+  #?(:clj
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (<!! (tiered-tests/test-frontend-only-async frontend backend)))
+     :cljs
+     (async done
+            (go
+              (let [{:keys [frontend backend]} (<! (create-tiered-mem-stores))]
+                (<! (tiered-tests/test-frontend-only-async frontend backend))
+                (done))))))
+
 (deftest tiered-store-memory-read-policies-test
   #?(:clj
      (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
