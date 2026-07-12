@@ -103,6 +103,13 @@ All notable, user-visible changes to konserve are documented here.
   separate change; `:raw?` survives it unchanged.
 
 ### Fixed
+- **The IndexedDB store ignored `:config` entirely.** `connect-idb-store` dropped the
+  caller's `:config` (`(dissoc params :config)`) and always used its own hardcoded
+  map, so `{:encryptor {...}}` and `{:compressor {...}}` were silently discarded —
+  a browser store asked for encryption got none. It now merges the caller's config
+  over the defaults, as both filestores already did. This means the existing
+  IndexedDB `:aes` encryptor test had been passing vacuously against an unencrypted
+  store; it now exercises the cipher for real.
 - **`:lz4` combined with an encryptor was unreadable.** Writes nested the encryptor
   outside the compressor (compress, then encrypt) while reads nested them the other
   way round, so a read tried to LZ4-decompress the ciphertext. The `PEncryptor`

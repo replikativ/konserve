@@ -501,16 +501,19 @@
      - `konserve.indexeddb/read-web-stream` will accept the argument to the
        locked-cb and return a promise-chan receiving err|bytes at the cost of
        allocating a larger array for the chunks to be copied into"
-  [db-name & {:as params}]
+  [db-name & {:keys [config] :as params}]
   (let [store-config (merge {:default-serializer :FressianSerializer
                              :compressor         konserve.compressor/null-compressor
                              :encryptor          konserve.encryptor/null-encryptor
                              :read-handlers      (atom {})
                              :write-handlers     (atom {})
-                             :config             {:sync-blob? true
-                                                  :in-place? true
-                                                  :no-backup? true  ;; IndexedDB is transactional, no backup needed
-                                                  :lock-blob? true}}
+                             ;; the caller's :config is merged over the defaults, as in the
+                             ;; filestores — dropping it here silently ignored :encryptor
+                             :config             (merge {:sync-blob? true
+                                                         :in-place? true
+                                                         :no-backup? true  ;; IndexedDB is transactional, no backup needed
+                                                         :lock-blob? true}
+                                                        config)}
                             (dissoc params :config))
         backing            (IndexedDBackingStore. db-name nil)]
     (defaults/connect-default-store backing store-config)))
