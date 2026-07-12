@@ -85,7 +85,17 @@
           (is (not (contains? ks :only-backend)) "keys excludes the not-yet-cached backend key"))
         ;; reading it falls through (frontend-first) and warms the frontend cache
         (is (= {:v 2} (<?- (k/get-in store [:only-backend]))) "cold read falls through to backend")
-        (is (= {:v 2} (<?- (k/get-in frontend-store [:only-backend]))) "read-through warmed the frontend")
+        ;; The warm is deliberately FIRE-AND-FORGET — warming must not block the read — so
+        ;; poll for it instead of assuming it has already landed. Asserting immediately is a
+        ;; race: it wins on a fast machine and loses under CI load.
+        (let [warmed (loop [tries 0]
+                       (let [v (<?- (k/get-in frontend-store [:only-backend]))]
+                         (cond
+                           (some? v)   v
+                           (>= tries 100) nil
+                           :else (do (<! (timeout 20))
+                                     (recur (inc tries))))))]
+          (is (= {:v 2} warmed) "read-through warmed the frontend"))
         ;; dissoc removes from the frontend ONLY — a backend copy is untouched
         (<?- (k/assoc-in backend-store [:cached] {:v 99}))
         (<?- (k/dissoc store :cached))
