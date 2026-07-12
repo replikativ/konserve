@@ -19,7 +19,13 @@
 ;; TODO match metadata timestamps between frontend and backend
 
 ;; Write policies
-(def write-policies #{:write-through :write-behind :write-around})
+(def write-policies #{:write-through :write-behind :write-around :frontend-only})
+;; :frontend-only — a read-through CACHE over a read-only backend. Writes (and
+;; deletes) go to the FRONTEND only; the backend is never mutated by this peer.
+;; Combine with read-policy :frontend-first so reads still fall through to the
+;; backend on a miss. `-keys` reports the frontend, so this store enumerates and
+;; syncs as its local cache (e.g. a konserve-sync subscriber warming an LMDB
+;; frontend over a shared, writer-owned S3 backend it must not write to).
 
 ;; Read policies
 (def read-policies #{:frontend-first :frontend-only})
@@ -232,7 +238,11 @@
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
-                     result)))))
+                     result)
+
+                   :frontend-only
+                   ;; Cache mode: write to the frontend only; never touch the backend.
+                   (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))))))
 
   (-assoc-in [_this key-vec meta-up-fn val opts]
     (log/trace :konserve/tiered-assoc-in {:key-vec key-vec})
@@ -263,18 +273,24 @@
                            (<?- (-dissoc frontend-store (first key-vec) opts))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
-                     result)))))
+                     result)
+
+                   :frontend-only
+                   (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))))))
 
   (-dissoc [_this key opts]
     (log/trace :konserve/tiered-dissoc {:key key})
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
-                 ;; Always remove from both stores
-                 (let [backend-result (-dissoc backend-store key opts)
-                       frontend-result (-dissoc frontend-store key opts)]
-                   (<?- frontend-result)
-                   (<?- backend-result)))))
+                 (if (= write-policy :frontend-only)
+                   ;; Cache mode: delete from the frontend only; never touch the backend.
+                   (<?- (-dissoc frontend-store key opts))
+                   ;; Otherwise remove from both stores
+                   (let [backend-result (-dissoc backend-store key opts)
+                         frontend-result (-dissoc frontend-store key opts)]
+                     (<?- frontend-result)
+                     (<?- backend-result))))))
 
   PBinaryKeyValueStore
   (-bget [_this key locked-cb opts]
@@ -320,7 +336,10 @@
                            (<?- (-dissoc frontend-store key opts))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:key key :error e}))))
-                     result)))))
+                     result)
+
+                   :frontend-only
+                   (<?- (-bassoc frontend-store key meta-up-fn val opts))))))
 
   PAssocSerializers
   (-assoc-serializers [this serializers]
@@ -330,12 +349,13 @@
 
   PKeyIterable
   (-keys [_this opts]
-    (log/trace :konserve/tiered-keys {:read-policy read-policy})
-    ;; Respect read-policy: frontend-only returns frontend keys only
-    ;; This is critical for performance when frontend has subset of backend keys
-    (case read-policy
-      :frontend-only (-keys frontend-store opts)
-      :frontend-first (-keys backend-store opts)))
+    (log/trace :konserve/tiered-keys {:read-policy read-policy :write-policy write-policy})
+    ;; A :frontend-only WRITE store (cache mode) enumerates/syncs as its local cache,
+    ;; so `-keys` reports the frontend even though reads fall through to the backend.
+    ;; Otherwise respect read-policy (frontend-only reads => frontend keys).
+    (if (or (= write-policy :frontend-only) (= read-policy :frontend-only))
+      (-keys frontend-store opts)
+      (-keys backend-store opts)))
 
   PMultiKeySupport
   (-supports-multi-key? [_this]
@@ -380,7 +400,10 @@
                              (<?- (-dissoc frontend-store k opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:kvs-keys (clojure.core/keys kvs) :error e}))))
-                     result)))))
+                     result)
+
+                   :frontend-only
+                   (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))))))
 
   (-multi-dissoc [_this keys-to-remove opts]
     (log/trace :konserve/tiered-multi-dissoc {:key-count (count keys-to-remove)})
@@ -392,12 +415,15 @@
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
-                 (let [backend-result (<?- (-multi-dissoc backend-store keys-to-remove opts))]
-                   (try
-                     (<?- (-multi-dissoc frontend-store keys-to-remove opts))
-                     (catch #?(:clj Exception :cljs js/Error) e
-                       (log/warn :konserve/tiered-frontend-multi-dissoc-failed {:keys keys-to-remove :error e})))
-                   backend-result))))
+                 (if (= write-policy :frontend-only)
+                   ;; Cache mode: delete from the frontend only; never touch the backend.
+                   (<?- (-multi-dissoc frontend-store keys-to-remove opts))
+                   (let [backend-result (<?- (-multi-dissoc backend-store keys-to-remove opts))]
+                     (try
+                       (<?- (-multi-dissoc frontend-store keys-to-remove opts))
+                       (catch #?(:clj Exception :cljs js/Error) e
+                         (log/warn :konserve/tiered-frontend-multi-dissoc-failed {:keys keys-to-remove :error e})))
+                     backend-result)))))
 
   (-multi-get [_this keys opts]
     (log/trace :konserve/tiered-multi-get {:key-count (count keys)})
