@@ -2,8 +2,10 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
+            [konserve.encryptor :as encryptor]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
+                                                      -encrypt -decrypt
                                                       -keys -multi-get -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks -lock-free?]]
             [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
@@ -603,6 +605,69 @@
                           (reduce-fn acc elem))))
                     acc))))))
 
+;; -----------------------------------------------------------------------------
+;; Sealing raw bytes under the store's key
+;; -----------------------------------------------------------------------------
+
+(defn- store-cipher
+  "The store's configured encryptor, or an error if it has none. `seal`/`unseal`
+  exist to encrypt bytes the store itself will not touch, so an unencrypted store
+  quietly returning the plaintext would defeat the point."
+  [store]
+  (let [{:keys [encryptor config]} store
+        enc (when encryptor (encryptor (:encryptor config)))]
+    (when-not (and enc (encryptor/encrypting? enc))
+      (throw (ex-info (str "This store has no encryptor configured, so there is no key "
+                           "to seal with. Configure one, e.g. "
+                           "{:encryptor {:type :aes-gcm :key ...}}.")
+                      {:type :konserve/no-encryptor})))
+    enc))
+
+(defn seal
+  "Encrypt `bytes` with this store's configured encryptor, bound to `key`.
+
+  konserve does not encrypt binary values — `bassoc`/`bget` hand your bytes to
+  storage untouched, so the format is yours. `seal`/`unseal` let you encrypt them
+  under the store's own key without managing a second one, and bind the ciphertext
+  to `key` and to the store's layout version: bytes sealed under one key will not
+  unseal under another, and a tampered or truncated ciphertext is rejected rather
+  than returned as garbage (with an AEAD cipher like :aes-gcm).
+
+    (bassoc store :thumb (<? (seal store :thumb raw-bytes)) {:raw? true})
+    (bget store :thumb
+          (fn [{is :input-stream}]
+            (go (<? (unseal store :thumb (slurp-bytes is)))))
+          {:raw? true})
+
+  `bytes` is a byte[] on the JVM and a Uint8Array on JavaScript. Returns the
+  ciphertext, or a channel of it unless {:sync? true}."
+  ([store key bytes]
+   (seal store key bytes {:sync? false}))
+  ([store key bytes opts]
+   (async+sync (:sync? opts)
+               *default-sync-translation*
+               (go-try-
+                (let [enc (store-cipher store)
+                      aad (encryptor/associated-data (:version store)
+                                                     (defaults/key->store-key key)
+                                                     :binary)]
+                  (<?- (-encrypt enc bytes aad opts)))))))
+
+(defn unseal
+  "Decrypt bytes produced by `seal` under the same store and `key`. Raises if the
+  ciphertext does not authenticate — wrong key, wrong store key, or tampering."
+  ([store key bytes]
+   (unseal store key bytes {:sync? false}))
+  ([store key bytes opts]
+   (async+sync (:sync? opts)
+               *default-sync-translation*
+               (go-try-
+                (let [enc (store-cipher store)
+                      aad (encryptor/associated-data (:version store)
+                                                     (defaults/key->store-key key)
+                                                     :binary)]
+                  (<?- (-decrypt enc bytes aad opts)))))))
+
 (defn bget
   "Calls locked-cb with a platform specific binary representation inside
   the lock, e.g. wrapped InputStream on the JVM and Blob in
@@ -616,7 +681,12 @@
       (io/copy is tmp-file)))
 
   When called asynchronously (by default or w/ {:sync? false}), the locked-cb
-  must synchronously return a channel."
+  must synchronously return a channel.
+
+  Binary values are NOT encrypted: the bytes reach storage exactly as given. On a
+  store with an encryptor configured this therefore requires {:raw? true}, an
+  explicit statement that you own the format and its confidentiality. To encrypt
+  under the store's key instead, see `seal` / `unseal`."
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]
@@ -629,7 +699,12 @@
 
 (defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
-  JVM, Blob in JavaScript) under key in the store."
+  JVM, Blob in JavaScript) under key in the store.
+
+  The bytes are stored as given — konserve does not encrypt them. On a store with
+  an encryptor configured this therefore requires {:raw? true}, an explicit
+  statement that you own the format and its confidentiality. To encrypt under the
+  store's key instead, see `seal` / `unseal`."
   ([store key val]
    (bassoc store key val {:sync? false}))
   ([store key val opts]

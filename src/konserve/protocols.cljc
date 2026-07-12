@@ -54,6 +54,19 @@
     "For the JVM we use streams, while for JavaScript we return the value for now.")
   (-deserialize [this read-handlers input-stream]))
 
+(defprotocol PEncryptor
+  "Decouples encryption from serialization. Both ops take and return a whole byte
+   array (JVM byte[] / CLJS Uint8Array): an AEAD cipher must authenticate the full
+   ciphertext before it may release any plaintext, so streaming is not an option.
+
+   `aad` is authenticated-but-not-encrypted associated data that binds a ciphertext
+   to the slot it lives in; it must be identical on encrypt and decrypt.
+
+   Both ops return a channel, unless `(:sync? env)` is true, in which case they
+   return the byte array directly (and throw on failure)."
+  (-encrypt [this plaintext aad env])
+  (-decrypt [this ciphertext aad env]))
+
 (defprotocol PWriteHookStore
   "Protocol for stores that support write hooks.
    Write hooks are callbacks invoked after successful write operations.

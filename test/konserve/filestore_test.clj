@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!! go chan put! close! <!] :as async]
-            [konserve.core :refer [bassoc bget keys]]
+            [clojure.java.io :as io]
+            [konserve.core :as k :refer [bassoc bget keys]]
             [konserve.compliance-test :refer [compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.cache :as ct]
@@ -199,3 +200,44 @@
   (<!! (et/async-encryptor-test "/tmp/encryptor-test"
                                 connect-fs-store
                                 (fn [p] (go (delete-store p))))))
+
+(deftest aes-gcm-sync-test
+  (et/sync-aes-gcm-test "/tmp/aes-gcm-test"
+                        connect-fs-store
+                        delete-store))
+
+(deftest aes-gcm-async-test
+  (<!! (et/async-aes-gcm-test "/tmp/aes-gcm-test"
+                              connect-fs-store
+                              (fn [p] (go (delete-store p))))))
+
+(deftest aes-gcm-wrong-key-test
+  (<!! (et/async-aes-gcm-wrong-key-test "/tmp/aes-gcm-test"
+                                        connect-fs-store
+                                        (fn [p] (go (delete-store p))))))
+
+(deftest seal-unseal-test
+  (<!! (et/async-seal-unseal-test "/tmp/aes-gcm-test"
+                                  connect-fs-store
+                                  (fn [p] (go (delete-store p))))))
+
+(deftest aes-gcm-tamper-test
+  (testing "a flipped byte in a stored blob is rejected, not deserialized"
+    (delete-store "/tmp/aes-gcm-tamper")
+    (let [config {:encryptor {:type :aes-gcm :key et/gcm-key}}
+          store  (<!! (connect-fs-store "/tmp/aes-gcm-tamper" :config config))]
+      (<!! (k/assoc store :tampered {:balance 100}))
+      (is (= {:balance 100} (<!! (k/get store :tampered)))))
+    ;; flip the last byte of every blob: that lands in the GCM tag or the ciphertext
+    (doseq [f (->> (file-seq (io/file "/tmp/aes-gcm-tamper"))
+                   (filter #(.isFile ^java.io.File %)))]
+      (let [bs (java.nio.file.Files/readAllBytes (.toPath ^java.io.File f))
+            i  (dec (alength bs))]
+        (aset bs i (unchecked-byte (bit-xor (aget bs i) 1)))
+        (java.nio.file.Files/write (.toPath ^java.io.File f) bs
+                                   ^"[Ljava.nio.file.OpenOption;" (into-array java.nio.file.OpenOption []))))
+    (let [config {:encryptor {:type :aes-gcm :key et/gcm-key}}
+          store  (<!! (connect-fs-store "/tmp/aes-gcm-tamper" :config config))
+          res    (<!! (k/get store :tampered))]
+      (is (instance? Throwable res) "tampering is detected"))
+    (delete-store "/tmp/aes-gcm-tamper")))

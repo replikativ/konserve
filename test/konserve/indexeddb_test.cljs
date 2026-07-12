@@ -345,3 +345,27 @@
                                         idb/connect-idb-store
                                         idb/delete-idb))
            (done))))
+
+(deftest aes-gcm-async-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-test "aes-gcm-test"
+                                      idb/connect-idb-store
+                                      idb/delete-idb))
+           (done))))
+
+(deftest aes-gcm-wrong-key-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-wrong-key-test "aes-gcm-test"
+                                                idb/connect-idb-store
+                                                idb/delete-idb))
+           (done))))
+
+(deftest seal-unseal-test
+  (async done
+         (go
+           (<! (et/async-seal-unseal-test "aes-gcm-test"
+                                          idb/connect-idb-store
+                                          idb/delete-idb))
+           (done))))
