@@ -33,6 +33,16 @@ All notable, user-visible changes to konserve are documented here.
   follow-up.)
 
 ### Fixed
+- **Node file backend: `delete-store-async` was broken in three ways, and never ran.**
+  Wiring `-delete-store :file` to the async variant (above) exposed it. `iofs/arm-r`
+  yields **`[?err]`** — a vector — but it was bound as a bare `?err`, so the success
+  value `[nil]` was truthy and the function **always took the error branch**: it
+  returned `[nil]` *as if it were an error* and never reached the fsync at all. Once
+  that was fixed, two more surfaced: it fsynced `base` — the directory `arm-r` had just
+  deleted — where the sync twin correctly fsyncs the **parent**; and `sync-base-async`
+  called `.force` on the result of `open-async-file-channel` without checking whether
+  it was an `Error`. It now returns nil on success and the error on failure, matching
+  the sync `delete-store`.
 - **`delete-store` now honours `:sync?` — and `:tiered` actually deletes.**
   `-delete-store` was the one store method that ignored its `opts`: `:memory` and
   `:file` (JVM and Node) returned a plain value whatever `:sync?` said, so an async
