@@ -276,6 +276,34 @@
            (is (false? (store/store-exists? (:frontend-config cfg) {:sync? true}))
                "async tiered delete must have deleted the FRONTEND by the time it delivers"))))))
 
+#?(:clj
+   (deftest delete-store-frontend-only-must-not-delete-the-backend
+     ;; :frontend-only means this store is a read-through CACHE over a backend that
+     ;; someone else OWNS and that this peer must never write. Deleting is the most
+     ;; destructive write there is: a cache peer deleting the shared backend would take
+     ;; the authoritative data with it — exactly the invariant the policy exists to
+     ;; enforce. So a :frontend-only delete removes only the cache.
+     (testing ":frontend-only — delete removes the cache, NOT the shared backend"
+       (let [id  #uuid "550e8400-e29b-41d4-a716-4466554400c0"
+             tmp (System/getProperty "java.io.tmpdir")
+             be  {:backend :file :id id :path (str tmp "/konserve-fo-backend-" (System/currentTimeMillis))}
+             fe  {:backend :file :id id :path (str tmp "/konserve-fo-frontend-" (System/currentTimeMillis))}
+             cfg {:backend :tiered :id id
+                  :write-policy :frontend-only
+                  :read-policy  :frontend-first
+                  :frontend-config fe
+                  :backend-config  be}]
+         (store/create-store cfg {:sync? true})
+         (is (true? (store/store-exists? be {:sync? true})) "backend exists to begin with")
+
+         (<!! (store/delete-store cfg))
+
+         (is (true? (store/store-exists? be {:sync? true}))
+             "a :frontend-only cache must NOT delete the shared, writer-owned backend")
+         (is (false? (store/store-exists? fe {:sync? true}))
+             "it must delete its own cache")
+         (store/delete-store be {:sync? true})))))
+
 ;; =============================================================================
 ;; ClojureScript IndexedDB Tests
 ;; =============================================================================

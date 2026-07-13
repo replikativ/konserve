@@ -30,6 +30,23 @@
 ;; Read policies
 (def read-policies #{:frontend-first :frontend-only})
 
+(defn owns-backend?
+  "Does a tiered store with this write-policy OWN its backend, or is it merely a CACHE over
+   a backend that another peer owns?
+
+   `:frontend-only` is a read-through cache: the backend is read-only to this peer and must
+   never be mutated by it (see the write-policy note above). Deleting is the most destructive
+   mutation there is — a cache peer deleting the shared backend would take the authoritative
+   data down with it — so `delete-store` on such a store removes only its own cache. Under
+   every other policy the store owns both tiers and deleting it deletes both."
+  [write-policy]
+  (not= :frontend-only write-policy))
+
+(def persistent-frontend-backends
+  "Frontend backends with durable storage, i.e. something to delete. A `:memory` frontend is
+   ephemeral: it goes away with the process and has no store to remove."
+  #{:file :indexeddb :lmdb :rocksdb})
+
 ;; Default sync strategies
 (defn populate-missing-strategy
   "Sync strategy that only adds keys missing from frontend."

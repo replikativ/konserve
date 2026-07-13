@@ -423,21 +423,21 @@
   (store-exists? backend-config opts))
 
 (defmethod -delete-store :tiered
-  [{:keys [backend-config frontend-config] :as config} opts]
-  ;; Mirrors -release-store :tiered below. Both sub-deletes MUST be awaited: an async
-  ;; backend (:s3, …) hands back a channel, and the previous version called
-  ;; `(delete-store backend-config)` with no opts — i.e. the {:sync? false} default —
-  ;; and dropped the channel on the floor. Deleting a tiered store over S3 therefore
-  ;; removed nothing at all, silently, with any error swallowed into a channel nobody
-  ;; read.
+  [{:keys [backend-config frontend-config write-policy] :as config} opts]
+  ;; Config plumbing only — WHICH tiers a delete may touch is a tiered-store question, so it
+  ;; is answered by konserve.tiered (`owns-backend?`, `persistent-frontend-backends`), the
+  ;; same way -create-store/-connect-store delegate construction to `connect-tiered-store`.
+  ;;
+  ;; Both sub-deletes MUST be awaited: an async backend (:s3, …) hands back a channel, and
+  ;; dropping it deletes nothing at all.
   (async+sync
    (:sync? opts)
    *default-sync-translation*
    (go-try-
-    ;; Backend is the authoritative source.
-    (<?- (delete-store backend-config opts))
-    ;; Only delete the frontend if it has persistence (a memory cache needs no delete).
-    (when (and frontend-config (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend-config)))
+    (when (tiered/owns-backend? write-policy)
+      (<?- (delete-store backend-config opts)))
+    (when (and frontend-config
+               (tiered/persistent-frontend-backends (:backend frontend-config)))
       (<?- (delete-store frontend-config opts)))
     nil)))
 
