@@ -423,19 +423,21 @@
   (store-exists? backend-config opts))
 
 (defmethod -delete-store :tiered
-  [{:keys [backend-config frontend-config] :as config} opts]
+  [{:keys [backend-config frontend-config write-policy] :as config} opts]
   ;; Mirrors -release-store :tiered below. Both sub-deletes MUST be awaited: an async
-  ;; backend (:s3, …) hands back a channel, and the previous version called
-  ;; `(delete-store backend-config)` with no opts — i.e. the {:sync? false} default —
-  ;; and dropped the channel on the floor. Deleting a tiered store over S3 therefore
-  ;; removed nothing at all, silently, with any error swallowed into a channel nobody
-  ;; read.
+  ;; backend (:s3, …) hands back a channel, and dropping it deletes nothing at all.
   (async+sync
    (:sync? opts)
    *default-sync-translation*
    (go-try-
-    ;; Backend is the authoritative source.
-    (<?- (delete-store backend-config opts))
+    ;; :frontend-only means this store is a read-through CACHE over a backend that
+    ;; SOMEONE ELSE owns and that this peer must never write (see write-policies above).
+    ;; Deleting is the most destructive write there is, so a :frontend-only store deletes
+    ;; only its own cache — deleting the shared backend from a cache peer would take the
+    ;; authoritative data with it. Under every other policy this store owns its backend,
+    ;; so deleting the store deletes both tiers.
+    (when-not (= :frontend-only write-policy)
+      (<?- (delete-store backend-config opts)))
     ;; Only delete the frontend if it has persistence (a memory cache needs no delete).
     (when (and frontend-config (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend-config)))
       (<?- (delete-store frontend-config opts)))

@@ -33,6 +33,14 @@ All notable, user-visible changes to konserve are documented here.
   follow-up.)
 
 ### Fixed
+- **A `:frontend-only` tiered store no longer deletes the shared backend.** `-delete-store
+  :tiered` deleted the backend unconditionally. Under `:write-policy :frontend-only` the
+  store is a read-through **cache** over a backend that another peer OWNS and that this
+  one must never write — deleting is the most destructive write there is, so a cache peer
+  calling `delete-store` (or Datahike's `delete-database`) would take the authoritative
+  data with it. It now deletes only its own cache; under every other policy the store owns
+  its backend and both tiers go. This was latent while tiered delete silently did nothing
+  (see below) — fixing the missing await made it reachable.
 - **Node file backend: `delete-store-async` was broken in three ways, and never ran.**
   Wiring `-delete-store :file` to the async variant (above) exposed it. `iofs/arm-r`
   yields **`[?err]`** — a vector — but it was bound as a bare `?err`, so the success
