@@ -423,13 +423,19 @@
           (first (<! (iofs/aunlink test-path)))))))
 
 (defn- sync-base-async
-  "Helper Function to synchronize the base of the filestore"
+  "Helper Function to synchronize the base of the filestore.
+
+   `open-async-file-channel` yields `err | fc`, so the error has to be checked before
+   the channel is used — calling `.force` on an Error is a TypeError. This went
+   unnoticed because the only caller (`delete-store-async`) never actually reached it."
   [^string base]
   ;; https://www.reddit.com/r/node/comments/4r8k11/how_to_call_fsync_on_a_directory/
   (go
     (let [fc (<! (open-async-file-channel base {:flags "r"}))]
-      (or (<! (.force fc true))
-          (<! (.close fc))))))
+      (if (instance? js/Error fc)
+        fc
+        (or (<! (.force fc true))
+            (<! (.close fc)))))))
 
 (defn- store-exists?-async
   "Checks if path exists."
@@ -443,14 +449,37 @@
              (put! out yes?)))))
 
 (defn delete-store-async
-  "Permanently deletes the base of the store with all files."
+  "Permanently deletes the base of the store with all files.
+
+   Returns nil on success and the error on failure — the same contract as the sync
+   `delete-store` above.
+
+   Two bugs lived here, both hidden because `-delete-store :file` only ever called the
+   SYNC variant until the store multimethod was taught to honour `:sync?`:
+
+   1. `iofs/arm-r` yields **`[?err]`** — a vector (see its docstring) — not a bare err.
+      Binding it as `?err` made the success value `[nil]`, which is truthy, so this
+      ALWAYS took the error branch: it returned `[nil]` as if it were an error, and
+      `sync-base-async` was never called — the parent directory was never fsynced.
+      Sibling helpers here already destructure it correctly (`_lock-async`).
+   2. It fsynced `base` — the directory `arm-r` had just deleted — where the sync twin
+      correctly fsyncs the PARENT (that is the point: you fsync the parent after
+      removing a child). Opening the deleted dir failed, and `sync-base-async` then
+      called `.force` on the resulting Error.
+   3. Even on the intended path it piped `sync-base-async`'s value straight through
+      instead of normalising to nil like the sync twin does."
   [^string base]
-  (with-promise out
-    (take! (iofs/arm-r base)
-           (fn [?err]
-             (if (some? ?err)
-               (put! out ?err)
-               (take! (sync-base-async base) #(put! out %))))))) ;; TODO pipe bad
+  (let [parent-base (.getParent (io/file base))]
+    (with-promise out
+      (take! (iofs/arm-r base)
+             (fn [[?err]]
+               (if (some? ?err)
+                 (put! out ?err)
+                 (take! (sync-base-async parent-base)
+                        (fn [?sync-err]
+                          (if (some? ?sync-err)
+                            (put! out ?sync-err)
+                            (close! out))))))))))
 
 ;;==============================================================================
 
