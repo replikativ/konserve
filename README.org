@@ -473,13 +473,16 @@ Compression and encryption are supported by the default store implementation
 used by all current backends except lmdb and memory.
 
 #+BEGIN_SRC clojure
-  ;; Store configuration with compression and encryption
+  ;; A 256 bit key, as 32 raw bytes or a 64 character hex string. Keep it outside
+  ;; the store you are encrypting. (konserve.encryptor/generate-key) makes one.
+  (def secret (konserve.encryptor/generate-key))
+
   (def config {:backend :file
                :id #uuid "550e8400-e29b-41d4-a716-44665544000c"
                :path "/tmp/secure-store"
-               :config {:encryptor {:type :aes
-                                   :key "s3cr3t"}
-                       :compressor {:type :lz4}}})
+               :config {:encryptor {:type :aes-gcm
+                                    :key secret}
+                        :compressor {:type :lz4}}})
 
   (def store (k/create-store config {:sync? true}))
 #+END_SRC
@@ -487,10 +490,40 @@ used by all current backends except lmdb and memory.
 *Compression:*
 - LZ4 compression (JVM only)
 
-*Encryption:*
-- AES/CBC/PKCS{5/7}Padding with 256 bit
-- Different salt for each written value
-- Same cold storage format for JVM and JS (cross-runtime compatible)
+*Encryption:* =:aes-gcm=
+- AES-256-GCM, authenticated: a tampered, truncated or relocated blob is rejected
+  on read rather than deserialized. Values written under a different key, or moved
+  to another key's blob, fail to authenticate.
+- A fresh CSPRNG salt per written value derives a per-blob key (HKDF-SHA-256), so
+  no key ever encrypts more than one message.
+- Identical cold storage format on JVM and JS (cross-runtime compatible).
+- On ClojureScript this requires the asynchronous API — Web Crypto has no
+  synchronous cipher, so ={:sync? true}= is rejected.
+
+Binary values are *not* encrypted: =bassoc= / =bget= hand your bytes to storage
+untouched, so the format stays yours. On a store with an encryptor configured you
+therefore have to say which you meant — =seal= the payload under the store's own key,
+or declare ={:raw? true}= and own its confidentiality yourself:
+
+#+BEGIN_SRC clojure
+  ;; encrypted under the store's key, and bound to :thumb — it will not unseal
+  ;; under another key, and tampering is rejected
+  (k/bassoc store :thumb (<? (k/seal store :thumb raw-bytes)) {:raw? true})
+  (k/bget store :thumb
+          (fn [{is :input-stream}]
+            (go (<? (k/unseal store :thumb (slurp-bytes is)))))
+          {:raw? true})
+
+  ;; or: I already encrypted these bytes myself, hands off
+  (k/bassoc store :blob my-ciphertext {:raw? true})
+#+END_SRC
+
+*Encryption:* =:aes= — *deprecated*
+- Unauthenticated AES-256-CBC. It cannot detect tampering, and on ClojureScript its
+  per-blob salt comes from =Math.random= rather than a CSPRNG. Blobs written with it
+  stay readable, but do not choose it for new stores.
+- Its JVM and JS salt encodings disagree, so a blob written on one platform fails to
+  decrypt on the other roughly one time in five. =:aes-gcm= has no such problem.
 
 *** Serialization Formats
 

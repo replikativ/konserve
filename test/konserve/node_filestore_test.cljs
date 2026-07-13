@@ -296,3 +296,30 @@
                                         (fn [store-name]
                                           (go (filestore/delete-store store-name)))))
            (done))))
+
+(deftest aes-gcm-async-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-test "/tmp/aes-gcm-test"
+                                      connect-fs-store
+                                      (fn [store-name]
+                                        (go (filestore/delete-store store-name)))))
+           (done))))
+
+(deftest aes-gcm-wrong-key-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-wrong-key-test "/tmp/aes-gcm-test"
+                                                connect-fs-store
+                                                (fn [store-name]
+                                                  (go (filestore/delete-store store-name)))))
+           (done))))
+
+(deftest seal-unseal-test
+  (async done
+         (go
+           (<! (et/async-seal-unseal-test "/tmp/aes-gcm-test"
+                                          connect-fs-store
+                                          (fn [store-name]
+                                            (go (filestore/delete-store store-name)))))
+           (done))))

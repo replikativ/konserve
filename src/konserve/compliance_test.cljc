@@ -13,7 +13,10 @@
 #?(:clj
    (defn compliance-test [store]
      (doseq [opts [{:sync? false} {:sync? true}]
-             :let [<!! (if (:sync? opts) identity <!!)]]
+             ;; binary values are never encrypted — they pass through to storage as
+             ;; given — so an encrypted store requires the caller to say so
+             :let [<!! (if (:sync? opts) identity <!!)
+                   bin-opts (cond-> opts (k/encrypted? store) (clojure.core/assoc :raw? true))]]
 
        (testing "Testing the append store functionality."
          (<!! (k/append store :foolog {:bar 42} opts))
@@ -57,13 +60,13 @@
          (is (= true (<!! (k/dissoc store :foo opts))))
          (is (= false (<!! (k/dissoc store :not-there opts))))
          (is (= nil (<!! (k/get-in store [:foo] nil opts))))
-         (<!! (k/bassoc store :binbar (byte-array (range 10)) opts))
+         (<!! (k/bassoc store :binbar (byte-array (range 10)) bin-opts))
          (<!! (k/bget store :binbar (fn [{:keys [input-stream]}]
                                       (go
                                         (is (= (map byte (slurp input-stream))
                                                (range 10)))
                                         true))
-                      opts))
+                      bin-opts))
          (let  [list-keys (<!! (k/keys store opts))]
            (are [x y] (= x y)
              #{{:key :baz
@@ -200,7 +203,7 @@
              (is (= :hook-test (:key (nth @hook-events 2))))
 
             ;; Test bassoc triggers hook
-             (<!! (k/bassoc store :hook-bin (byte-array [1 2 3]) opts))
+             (<!! (k/bassoc store :hook-bin (byte-array [1 2 3]) bin-opts))
              (is (= 4 (count @hook-events)))
              (is (= :bassoc (:api-op (nth @hook-events 3))))
              (is (= :hook-bin (:key (nth @hook-events 3))))
