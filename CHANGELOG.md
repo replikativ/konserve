@@ -32,6 +32,22 @@ All notable, user-visible changes to konserve are documented here.
   honours `:ignore-existence?`; the multi-key GC delete path is a separate
   follow-up.)
 
+### Fixed
+- **`delete-store` now honours `:sync?` — and `:tiered` actually deletes.**
+  `-delete-store` was the one store method that ignored its `opts`: `:memory` and
+  `:file` (JVM and Node) returned a plain value whatever `:sync?` said, so an async
+  caller could not await the deletion — and `delete-store` defaults to
+  `{:sync? false}`, so async is the *common* path. Worse, `:tiered` called
+  `(delete-store backend-config)` with **no opts** — the async default — and then
+  dropped the returned channel, so **deleting a tiered store over an async backend
+  (e.g. S3) removed nothing at all**, silently, with any error swallowed into a
+  channel nobody read. All four implementations now follow the same contract every
+  other store method obeys: a value under `{:sync? true}`, otherwise a channel that
+  delivers when the deletion is *complete*. The Node file backend now also uses its
+  existing non-blocking `delete-store-async` on the async path.
+  The contract is documented on the `-delete-store` multimethod and pinned by tests
+  (previously `memory-store-delete` *asserted* the broken behaviour).
+
 ### Changed
 - **Probe-elision now covers non-overwrite writes, not only reads.** On a
   `PReadMissSafe` backing, `update-in` / `update` / nested `assoc-in` / `bassoc`
