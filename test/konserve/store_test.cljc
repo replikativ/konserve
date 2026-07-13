@@ -1,5 +1,6 @@
 (ns konserve.store-test
   (:require [clojure.core.async :as a :refer [go <! take! #?(:clj <!!)]]
+            #?(:clj [clojure.core.async.impl.protocols])
             [clojure.test :refer [deftest #?(:cljs async) is testing]]
             [konserve.store :as store]
             [konserve.core :as k]))
@@ -44,10 +45,16 @@
 
 #?(:clj
    (deftest memory-store-delete
-     (testing "delete-store :memory does nothing"
-       (let [id #uuid "550e8400-e29b-41d4-a716-446655440004"]
-         ;; Memory store doesn't have persistent storage to delete
-         (is (nil? (store/delete-store {:backend :memory :id id})))))))
+     (testing "delete-store :memory removes the store from the registry"
+       ;; NB: this used to assert `(nil? (store/delete-store {...}))` with no opts —
+       ;; i.e. it asserted that the ASYNC path returns a plain nil. That was the bug
+       ;; written down as a test. delete-store defaults to {:sync? false} and must
+       ;; return a channel; the value is delivered on it.
+       (let [id #uuid "550e8400-e29b-41d4-a716-446655440004"
+             cfg {:backend :memory :id id}]
+         (store/create-store cfg {:sync? true})
+         (is (nil? (<!! (store/delete-store cfg))))
+         (is (false? (store/store-exists? cfg {:sync? true})))))))
 
 #?(:clj
    (deftest memory-store-release
@@ -177,6 +184,97 @@
 
          ;; Cleanup
          (store/delete-store {:backend :file :path path :id id})))))
+
+;; =============================================================================
+;; -delete-store contract
+;; =============================================================================
+;; Regression: -delete-store was the ONE store method that ignored `opts`.
+;; :memory and :file returned a plain value whatever :sync? said (so an async caller
+;; could not await the deletion), and :tiered went further — it called
+;; `(delete-store backend-config)` with no opts, i.e. the {:sync? false} DEFAULT, and
+;; then dropped the returned channel, so deleting a tiered store over an async backend
+;; removed nothing at all, silently.
+;;
+;; The polymorphism tests above never exercised delete-store; they only used it (with
+;; no opts, un-awaited) as cleanup. Hence: assert the contract explicitly.
+
+#?(:clj
+   (deftest delete-store-async-returns-a-channel-and-completes
+     (testing ":memory — async delete-store returns a channel; store is gone when it delivers"
+       (let [id #uuid "550e8400-e29b-41d4-a716-4466554400a1"
+             cfg {:backend :memory :id id}]
+         (store/create-store cfg {:sync? true})
+         (is (true? (store/store-exists? cfg {:sync? true})))
+         (let [res (store/delete-store cfg)]      ;; default {:sync? false}
+           (is (satisfies? clojure.core.async.impl.protocols/ReadPort res)
+               "async delete-store must return a channel, not a plain value")
+           (<!! res))
+         (is (false? (store/store-exists? cfg {:sync? true}))
+             "store must be gone once the async delete-store channel delivers")))
+
+     (testing ":memory — sync delete-store returns a value, not a channel"
+       (let [id #uuid "550e8400-e29b-41d4-a716-4466554400a2"
+             cfg {:backend :memory :id id}]
+         (store/create-store cfg {:sync? true})
+         (let [res (store/delete-store cfg {:sync? true})]
+           (is (not (satisfies? clojure.core.async.impl.protocols/ReadPort res))
+               "sync delete-store must return a value, not a channel"))
+         (is (false? (store/store-exists? cfg {:sync? true})))))
+
+     (testing ":file — async delete-store returns a channel; store is gone when it delivers"
+       (let [path (str (System/getProperty "java.io.tmpdir")
+                       "/konserve-delete-contract-" (System/currentTimeMillis))
+             id #uuid "550e8400-e29b-41d4-a716-4466554400a3"
+             cfg {:backend :file :path path :id id}]
+         (store/create-store cfg {:sync? true})
+         (is (true? (store/store-exists? cfg {:sync? true})))
+         (let [res (store/delete-store cfg)]
+           (is (satisfies? clojure.core.async.impl.protocols/ReadPort res)
+               "async delete-store must return a channel, not a plain value")
+           (<!! res))
+         (is (false? (store/store-exists? cfg {:sync? true}))
+             "store must be gone once the async delete-store channel delivers")))))
+
+#?(:clj
+   (deftest delete-store-tiered-actually-deletes-the-backend
+     ;; The nasty one: :tiered called (delete-store backend-config) with NO opts —
+     ;; the async default — and never awaited it, so on an async backend it deleted
+     ;; nothing while reporting success.
+     (testing ":tiered — deleting removes BOTH tiers, sync and async"
+       (let [mk (fn [n]
+                  {:backend :tiered
+                   :id #uuid "550e8400-e29b-41d4-a716-4466554400b0"
+                   :frontend-config {:backend :file
+                                     :path (str (System/getProperty "java.io.tmpdir")
+                                                "/konserve-tiered-del-f" n "-"
+                                                (System/currentTimeMillis))
+                                     :id #uuid "550e8400-e29b-41d4-a716-4466554400b0"}
+                   :backend-config  {:backend :file
+                                     :path (str (System/getProperty "java.io.tmpdir")
+                                                "/konserve-tiered-del-b" n "-"
+                                                (System/currentTimeMillis))
+                                     :id #uuid "550e8400-e29b-41d4-a716-4466554400b0"}})]
+         ;; sync
+         (let [cfg (mk "s")]
+           (store/create-store cfg {:sync? true})
+           (is (true? (store/store-exists? cfg {:sync? true})))
+           (store/delete-store cfg {:sync? true})
+           (is (false? (store/store-exists? cfg {:sync? true})))
+           (is (false? (store/store-exists? (:backend-config cfg) {:sync? true}))
+               "tiered delete must delete the authoritative BACKEND")
+           (is (false? (store/store-exists? (:frontend-config cfg) {:sync? true}))
+               "tiered delete must delete a persistent frontend"))
+         ;; async
+         (let [cfg (mk "a")
+               _   (store/create-store cfg {:sync? true})
+               res (store/delete-store cfg)]
+           (is (satisfies? clojure.core.async.impl.protocols/ReadPort res)
+               "async tiered delete-store must return a channel")
+           (<!! res)
+           (is (false? (store/store-exists? (:backend-config cfg) {:sync? true}))
+               "async tiered delete must have deleted the BACKEND by the time it delivers")
+           (is (false? (store/store-exists? (:frontend-config cfg) {:sync? true}))
+               "async tiered delete must have deleted the FRONTEND by the time it delivers"))))))
 
 ;; =============================================================================
 ;; ClojureScript IndexedDB Tests

@@ -604,7 +604,13 @@
 
 (defmethod store/-delete-store :file
   [{:keys [path]} opts]
-  (delete-store path))
+  ;; Honour :sync? like -store-exists?/-release-store do. This used to call the
+  ;; blocking `delete-store` and ignore opts entirely, so an async caller got a plain
+  ;; value where the contract promises a channel — and the non-blocking variant that
+  ;; already existed went unused.
+  (if (:sync? opts)
+    (delete-store path)
+    (delete-store-async path)))
 
 (defmethod store/-release-store :file
   [_config _store opts]

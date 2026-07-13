@@ -105,7 +105,18 @@
 (defmulti -delete-store
   "Private multimethod for deleting stores with fixed arity.
 
-   Dispatch is based on :backend in config."
+   Dispatch is based on :backend in config.
+
+   CONTRACT (the same one every other store method obeys): the return value must
+   follow `opts`. With `{:sync? true}` return the value directly; otherwise return a
+   CHANNEL that delivers when the deletion is COMPLETE. `delete-store` defaults to
+   `{:sync? false}`, so async is the common path, not the exotic one.
+
+   Getting this wrong is invisible in tests and catastrophic in production: a method
+   that returns a plain value on the async path leaves callers unable to await it, and
+   one that returns an *un-awaited* inner channel reports success while nothing has been
+   deleted — with any error swallowed into a channel nobody reads. Every implementation
+   here previously did one or the other."
   (fn [config _opts]
     (validate-store-config config)
     (:backend config)))
@@ -240,11 +251,13 @@
     (if (:sync? opts) false (go-try- false))))
 
 (defmethod -delete-store :memory
-  [{:keys [id] :as config} _opts]
+  [{:keys [id] :as config} opts]
   ;; Only delete from registry if :id provided
   (when id
     (konserve.memory/delete-mem-store id))
-  nil)
+  ;; Honour :sync? like every other store method — see the note on -delete-store's
+  ;; contract at the multimethod definition.
+  (if (:sync? opts) nil (go-try- nil)))
 
 (defmethod -release-store :memory
   [_config _store opts]
@@ -289,8 +302,9 @@
 
 #?(:clj
    (defmethod -delete-store :file
-     [{:keys [path filesystem] :as config} _opts]
-     (konserve.filestore/delete-store filesystem path)))
+     [{:keys [path filesystem] :as config} opts]
+     (let [res (konserve.filestore/delete-store filesystem path)]
+       (if (:sync? opts) res (go-try- res)))))
 
 #?(:clj
    (defmethod -release-store :file
@@ -409,14 +423,23 @@
   (store-exists? backend-config opts))
 
 (defmethod -delete-store :tiered
-  [{:keys [backend-config frontend-config] :as config} _opts]
-  ;; Delete backend (authoritative source)
-  ;; Optionally delete frontend if it's persistent
-  (delete-store backend-config)
-  ;; Only delete frontend if it has persistence (e.g., file-based)
-  (when (and frontend-config (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend-config)))
-    (delete-store frontend-config))
-  nil)
+  [{:keys [backend-config frontend-config] :as config} opts]
+  ;; Mirrors -release-store :tiered below. Both sub-deletes MUST be awaited: an async
+  ;; backend (:s3, …) hands back a channel, and the previous version called
+  ;; `(delete-store backend-config)` with no opts — i.e. the {:sync? false} default —
+  ;; and dropped the channel on the floor. Deleting a tiered store over S3 therefore
+  ;; removed nothing at all, silently, with any error swallowed into a channel nobody
+  ;; read.
+  (async+sync
+   (:sync? opts)
+   *default-sync-translation*
+   (go-try-
+    ;; Backend is the authoritative source.
+    (<?- (delete-store backend-config opts))
+    ;; Only delete the frontend if it has persistence (a memory cache needs no delete).
+    (when (and frontend-config (#{:file :indexeddb :lmdb :rocksdb} (:backend frontend-config)))
+      (<?- (delete-store frontend-config opts)))
+    nil)))
 
 (defmethod -release-store :tiered
   [{:keys [frontend-config backend-config]} store opts]
