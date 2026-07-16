@@ -7,9 +7,45 @@
   (->> (map (fn [[k v]] [v k]) m)
        (into {})))
 
-(defn now []
-  #?(:clj (java.util.Date.)
-     :cljs (js/Date.)))
+(def ^:dynamic *wall-clock-ms*
+  "Raw wall-clock read in epoch milliseconds. Dynamic ONLY so tests can
+   simulate clock retreat; never rebind in production."
+  (fn []
+    #?(:clj (System/currentTimeMillis)
+       :cljs (.getTime (js/Date.)))))
+
+(def ^:private last-stamp
+  "High-water mark of `monotonic-now` stamps issued by this process, in epoch
+   milliseconds. Seeded lazily from the wall clock on first use."
+  (atom 0))
+
+(defn monotonic-now-ms
+  "Strictly monotonic timestamp in epoch milliseconds:
+   `max(wall-clock, previous-stamp + 1)`.
+
+   A hybrid logical clock: it reads as wall time under normal operation, but
+   two invocations NEVER return the same value and the sequence NEVER goes
+   backwards — an NTP step-back, VM suspend/resume or manual clock set makes
+   it tick +1ms per stamp until real time catches up. Restarts re-seed from
+   the wall clock: a retreat across a restart can only make new stamps
+   *smaller* than persisted ones, which garbage collectors must treat as
+   fail-safe (objects retained, never live objects deleted).
+
+   All konserve write stamps and any collector comparing against them MUST
+   read this one source: happens-before between a guard acquisition and the
+   writes it covers is then literal in the stamps, instead of an assumption
+   about the machine clock."
+  []
+  (swap! last-stamp (fn [prev] (max (inc ^long prev) (long (*wall-clock-ms*))))))
+
+(defn now
+  "Monotonic wall-clock Date — see `monotonic-now-ms`. Stamped into every
+   key's `:last-write` metadata; `konserve.gc/sweep!` and external collectors
+   (e.g. datahike's gc-guard safe-point) compare against these stamps and
+   must obtain their cutoffs from THIS function, not a raw clock read."
+  []
+  #?(:clj (java.util.Date. ^long (monotonic-now-ms))
+     :cljs (js/Date. (monotonic-now-ms))))
 
 (defn meta-update
   "Metadata has following 'edn' format
