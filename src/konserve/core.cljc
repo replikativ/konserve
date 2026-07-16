@@ -643,7 +643,12 @@
       (io/copy is tmp-file)))
 
   When called asynchronously (by default or w/ {:sync? false}), the locked-cb
-  must synchronously return a channel."
+  must synchronously return a channel.
+
+  File stores accept `:streaming? true` to expose a bounded view over the stored
+  payload instead of first materializing it. In that mode the callback must fully
+  consume the stream before it (or its returned channel) completes; the view is
+  valid only while Konserve owns the locked backing object."
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]

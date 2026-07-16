@@ -144,6 +144,37 @@
         (is (= (<!! (keys store))
                #{}))))))
 
+(deftest binary-file-reads-are-streaming
+  (let [folder "/tmp/konserve-streaming-read-test"
+        source (java.io.File/createTempFile "konserve-stream" ".bin")
+        size (+ (* 2 1024 1024) 17)]
+    (try
+      (with-open [out (java.io.BufferedOutputStream.
+                       (java.io.FileOutputStream. source))]
+        (let [block (byte-array (map unchecked-byte (range 251)))]
+          (loop [remaining size]
+            (when (pos? remaining)
+              (let [n (min remaining (alength block))]
+                (.write out block 0 n)
+                (recur (- remaining n)))))))
+      (delete-store folder)
+      (let [store (connect-fs-store folder :opts {:sync? true})]
+        (is (true? (bassoc store :large (java.io.FileInputStream. source)
+                           {:sync? true})))
+        (is (= size
+               (bget store :large
+                     (fn [{:keys [input-stream size]}]
+                       (is (not (instance? java.io.ByteArrayInputStream input-stream)))
+                       (is (= size (.available ^java.io.InputStream input-stream)))
+                       (loop [total 0]
+                         (let [n (.read ^java.io.InputStream input-stream
+                                        (byte-array 8192))]
+                           (if (neg? n) total (recur (+ total n))))))
+                     {:sync? true :streaming? true}))))
+      (finally
+        (.delete source)
+        (delete-store folder)))))
+
 #!============
 #! Cache tests
 
