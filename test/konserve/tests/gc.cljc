@@ -15,10 +15,12 @@
      (<?- (k/assoc-in store [:foo] :bar2))
      (<?- (k/assoc-in store [:foo2] :bar2))
      (<?- (k/assoc-in store [:foo3] :bar2))
-     (let [_ (a/<! (a/timeout 10))
-           ts        #?(:cljs (js/Date.) :clj (java.util.Date.))
+     ;; Cutoffs MUST come from the store's monotonic write clock (utils/now):
+     ;; write stamps are strictly increasing and can run AHEAD of the wall
+     ;; clock after a burst of writes, so a raw (Date.) cutoff — even with
+     ;; settling sleeps — can be older than the last write and under-sweep.
+     (let [ts        (utils/now)
            whitelist #{:baz}]
-       (a/<! (a/timeout 10))
        (and
         (is (= [:bar2 "bar2"]        (<?- (k/update-in store [:foo] name))))
         (is (= [nil {:bar 42}]       (<?- (k/assoc-in store  [:baz] {:bar 42}))))
@@ -35,9 +37,7 @@
           (do
             (doseq [i (range 1 11)]
               (<?- (k/assoc store (keyword (str "test" i)) i)))
-            (let [_ (a/<! (a/timeout 10))
-                  ts2 #?(:cljs (js/Date.) :clj (java.util.Date.))]
-              (a/<! (a/timeout 10))
+            (let [ts2 (utils/now)]
               (and
                (is (= 13 (count (<?- (k/keys store)))))
                (is (= 10 (count (<?- (gc/sweep! store #{:foo :baz :binbar} ts2)))))
@@ -48,8 +48,6 @@
                      _ (<?- (k/assoc store :batch3 3))
                      _ (<?- (k/assoc store :batch4 4))
                      _ (<?- (k/assoc store :batch5 5))
-                     _ (a/<! (a/timeout 10))
-                     ts3 #?(:cljs (js/Date.) :clj (java.util.Date.))]
-                 (a/<! (a/timeout 10))
+                     ts3 (utils/now)]
                  (is (= 5 (count (<?- (gc/sweep! store #{:foo :baz :binbar} ts3 2)))))))))
           true))))))
