@@ -18,7 +18,7 @@
    [java.io ByteArrayInputStream FileInputStream Closeable]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
-   [java.nio.file Files StandardCopyOption FileSystem FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
+   [java.nio.file CopyOption Files StandardCopyOption FileSystem FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
    [java.util Date UUID]))
 
 ;; =============================================================================
@@ -31,6 +31,11 @@
   (if filesystem
     (.getPath filesystem base (into-array String (or parts [])))
     (Paths/get base (into-array String (or parts [])))))
+
+(defn- copy-path! [^Path from ^Path to]
+  (let [^"[Ljava.nio.file.CopyOption;" options
+        (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING])]
+    (Files/copy from to options)))
 
 (def ^:dynamic *sync-translation*
   (merge *default-sync-translation*
@@ -186,9 +191,8 @@
                 (go-try-
                  (if filesystem
                    ;; For custom filesystems, use NIO copy
-                   (Files/copy (get-path filesystem base from)
-                               (get-path filesystem base to)
-                               (into-array [StandardCopyOption/REPLACE_EXISTING]))
+                   (copy-path! (get-path filesystem base from)
+                               (get-path filesystem base to))
                    ;; For default filesystem, use io/copy (native-image compatible)
                    (io/copy (.toFile (get-path nil base from))
                             (.toFile (get-path nil base to)))))))
