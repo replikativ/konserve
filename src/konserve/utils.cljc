@@ -7,9 +7,50 @@
   (->> (map (fn [[k v]] [v k]) m)
        (into {})))
 
-(defn now []
-  #?(:clj (java.util.Date.)
-     :cljs (js/Date.)))
+(def ^:dynamic *wall-clock-ms*
+  "Raw wall-clock read in epoch milliseconds. Dynamic ONLY so tests can
+   simulate clock retreat; never rebind in production."
+  (fn []
+    #?(:clj (System/currentTimeMillis)
+       :cljs (.getTime (js/Date.)))))
+
+(def ^:private last-stamp
+  "High-water mark of `monotonic-now` stamps issued by this process, in epoch
+   milliseconds. Seeded lazily from the wall clock on first use."
+  (atom 0))
+
+(defn monotonic-now-ms
+  "Monotonic (non-decreasing) timestamp in epoch milliseconds:
+   `max(wall-clock, previous-stamp)`.
+
+   A monotone hold on the wall clock: stamps read as wall time under normal
+   operation and NEVER go backwards — an NTP step-back, VM suspend/resume or
+   manual clock set holds the stamp flat at the previous value until real
+   time catches up. Deliberately NOT strictly increasing (no `+1` per stamp):
+   under sustained write rates above 1000 stamps/second a strict clock would
+   run ahead of physical time — and after a restart following a bulk import,
+   the re-seeded wall clock would sit BELOW the persisted stamps, stalling
+   collection until real time caught up. Garbage collection only needs a
+   monotonic order: the sweep spares objects whose stamp EQUALS the cutoff,
+   so same-millisecond ties are fail-safe (garbage retained one cycle, never
+   a live object deleted). Restarts re-seed from the wall clock; a retreat
+   across a restart likewise only retains garbage longer.
+
+   All konserve write stamps and any collector comparing against them MUST
+   read this one source: happens-before between a guard acquisition and the
+   writes it covers is then literal in the stamps, instead of an assumption
+   about the machine clock."
+  []
+  (swap! last-stamp (fn [prev] (max ^long prev (long (*wall-clock-ms*))))))
+
+(defn now
+  "Monotonic wall-clock Date — see `monotonic-now-ms`. Stamped into every
+   key's `:last-write` metadata; `konserve.gc/sweep!` and external collectors
+   (e.g. datahike's gc-guard safe-point) compare against these stamps and
+   must obtain their cutoffs from THIS function, not a raw clock read."
+  []
+  #?(:clj (java.util.Date. ^long (monotonic-now-ms))
+     :cljs (js/Date. (monotonic-now-ms))))
 
 (defn meta-update
   "Metadata has following 'edn' format
