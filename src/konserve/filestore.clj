@@ -15,11 +15,46 @@
    [superv.async :refer [go-try- <?-]]
    [replikativ.logging :as log])
   (:import
-   [java.io ByteArrayInputStream FileInputStream Closeable]
+   [java.io ByteArrayInputStream FileInputStream InputStream Closeable]
    [java.nio.channels FileChannel AsynchronousFileChannel CompletionHandler FileLock]
    [java.nio ByteBuffer]
    [java.nio.file CopyOption Files StandardCopyOption FileSystem FileSystems Path Paths OpenOption LinkOption StandardOpenOption]
    [java.util Date UUID]))
+
+(defn- channel-input-stream
+  "Return a bounded, positional InputStream over a file channel.
+
+  Closing this view is intentionally a no-op: Konserve owns the channel and keeps
+  it locked until the bget callback (or its returned channel) completes. Positional
+  reads avoid mutating the channel's shared position."
+  ^InputStream [channel start end]
+  (let [position (atom (long start))
+        read-at (if (instance? FileChannel channel)
+                  (fn [^ByteBuffer buffer pos]
+                    (.read ^FileChannel channel buffer (long pos)))
+                  (fn [^ByteBuffer buffer pos]
+                    (.get (.read ^AsynchronousFileChannel channel buffer (long pos)))))]
+    (proxy [InputStream] []
+      (read
+        ([]
+         (let [one (byte-array 1)
+               n (.read ^InputStream this one 0 1)]
+           (if (neg? n) -1 (bit-and 0xff (aget one 0)))))
+        ([buffer]
+         (.read ^InputStream this buffer 0 (alength ^bytes buffer)))
+        ([buffer offset length]
+         (let [remaining (- (long end) @position)]
+           (if (or (not (pos? remaining)) (zero? length))
+             (if (zero? length) 0 -1)
+             (let [requested (int (min remaining (long length)))
+                   n (long (read-at (ByteBuffer/wrap ^bytes buffer
+                                                     (int offset) requested)
+                                    @position))]
+               (when (pos? n) (swap! position + n))
+               n)))))
+      (available []
+        (int (min Integer/MAX_VALUE (max 0 (- (long end) @position)))))
+      (close [] nil))))
 
 ;; =============================================================================
 ;; Path Helpers - Support for custom FileSystems (e.g., Jimfs for testing)
@@ -341,27 +376,28 @@
                                    (assoc msg :exception t))))))
       ch))
   (-read-binary [this meta-size locked-cb env]
-    (let [{:keys [msg header-size]} env
-          total-size (.size this)]
-      ;; TODO use FileInputStream to not load the file in memory
+    (let [{:keys [msg header-size streaming?]} env
+          total-size (.size this)
+          payload-start (+ header-size meta-size)]
       (go-try-
        (<?-
-        (locked-cb {:input-stream (ByteArrayInputStream.
-                                   (<?-
-                                    (let [ch (chan)
-                                          buffer (ByteBuffer/allocate (- total-size
-                                                                         meta-size
-                                                                         header-size))]
-                                      (.read this buffer (+ header-size meta-size)
-                                             total-size
-                                             (proxy [CompletionHandler] []
-                                               (completed [_res _]
-                                                 (put! ch (.array buffer)))
-                                               (failed [t _att]
-                                                 (put! ch (ex-info "Could not read key."
-                                                                   (assoc msg :exception t))))))
-                                      ch)))
-                    :size         total-size}))
+        (locked-cb
+         {:input-stream
+          (if streaming?
+            (channel-input-stream this payload-start total-size)
+            (ByteArrayInputStream.
+             (<?-
+              (let [ch (chan)
+                    buffer (ByteBuffer/allocate (- total-size payload-start))]
+                (.read this buffer payload-start total-size
+                       (proxy [CompletionHandler] []
+                         (completed [_res _]
+                           (put! ch (.array buffer)))
+                         (failed [t _att]
+                           (put! ch (ex-info "Could not read key."
+                                             (assoc msg :exception t))))))
+                ch))))
+          :size (- total-size payload-start)}))
        (catch Exception e
          (log/trace :konserve/read-binary-error {:error e})
          e)))))
@@ -421,16 +457,17 @@
       (.read this buffer (+ header-size meta-size))
       (.array buffer)))
   (-read-binary [this meta-size locked-cb env]
-    (let [{:keys [header-size]} env
-          total-size (.size this)]
-      ;; TODO use FileInputStream to not load the file in memory
-      (locked-cb {:input-stream (ByteArrayInputStream.
-                                 (let [buffer (ByteBuffer/allocate (- total-size
-                                                                      meta-size
-                                                                      header-size))]
-                                   (.read this buffer (+ header-size meta-size))
-                                   (.array buffer)))
-                  :size         total-size}))))
+    (let [{:keys [header-size streaming?]} env
+          total-size (.size this)
+          payload-start (+ header-size meta-size)]
+      (locked-cb {:input-stream (if streaming?
+                                  (channel-input-stream this payload-start total-size)
+                                  (ByteArrayInputStream.
+                                   (let [buffer (ByteBuffer/allocate
+                                                 (- total-size payload-start))]
+                                     (.read this buffer payload-start)
+                                     (.array buffer))))
+                  :size         (- total-size payload-start)}))))
 
 (extend-type FileLock
   PBackingLock

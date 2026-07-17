@@ -579,7 +579,7 @@
 
   PBinaryKeyValueStore
   (-bget [this key locked-cb opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? streaming?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
                      :operation :read-binary
@@ -589,6 +589,7 @@
                      :config    config
                      :version version
                      :sync? sync?
+                     :streaming? streaming?
                      :buffer-size buffer-size
                      :locked-cb locked-cb
                      :msg       {:type :read-binary-error
