@@ -20,23 +20,28 @@
   (atom 0))
 
 (defn monotonic-now-ms
-  "Strictly monotonic timestamp in epoch milliseconds:
-   `max(wall-clock, previous-stamp + 1)`.
+  "Monotonic (non-decreasing) timestamp in epoch milliseconds:
+   `max(wall-clock, previous-stamp)`.
 
-   A hybrid logical clock: it reads as wall time under normal operation, but
-   two invocations NEVER return the same value and the sequence NEVER goes
-   backwards — an NTP step-back, VM suspend/resume or manual clock set makes
-   it tick +1ms per stamp until real time catches up. Restarts re-seed from
-   the wall clock: a retreat across a restart can only make new stamps
-   *smaller* than persisted ones, which garbage collectors must treat as
-   fail-safe (objects retained, never live objects deleted).
+   A monotone hold on the wall clock: stamps read as wall time under normal
+   operation and NEVER go backwards — an NTP step-back, VM suspend/resume or
+   manual clock set holds the stamp flat at the previous value until real
+   time catches up. Deliberately NOT strictly increasing (no `+1` per stamp):
+   under sustained write rates above 1000 stamps/second a strict clock would
+   run ahead of physical time — and after a restart following a bulk import,
+   the re-seeded wall clock would sit BELOW the persisted stamps, stalling
+   collection until real time caught up. Garbage collection only needs a
+   monotonic order: the sweep spares objects whose stamp EQUALS the cutoff,
+   so same-millisecond ties are fail-safe (garbage retained one cycle, never
+   a live object deleted). Restarts re-seed from the wall clock; a retreat
+   across a restart likewise only retains garbage longer.
 
    All konserve write stamps and any collector comparing against them MUST
    read this one source: happens-before between a guard acquisition and the
    writes it covers is then literal in the stamps, instead of an assumption
    about the machine clock."
   []
-  (swap! last-stamp (fn [prev] (max (inc ^long prev) (long (*wall-clock-ms*))))))
+  (swap! last-stamp (fn [prev] (max ^long prev (long (*wall-clock-ms*))))))
 
 (defn now
   "Monotonic wall-clock Date — see `monotonic-now-ms`. Stamped into every

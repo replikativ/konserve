@@ -14,23 +14,27 @@
   (:require [clojure.test :refer [deftest is testing]]
             [konserve.utils :as utils]))
 
-(deftest stamps-strictly-increase
-  (testing "consecutive stamps are strictly increasing (no ties)"
-    (let [stamps (repeatedly 1000 utils/monotonic-now-ms)]
-      (is (every? true? (map < stamps (rest stamps)))
-          "two stamps must never be equal — ties made sweep boundaries ambiguous"))))
+(deftest stamps-never-decrease
+  (testing "consecutive stamps are non-decreasing, and track wall time (no
+            runaway: a strict +1-per-stamp clock would outrun physical time
+            above 1000 writes/second and stall GC after restarts)"
+    (let [stamps (vec (repeatedly 10000 utils/monotonic-now-ms))]
+      (is (every? true? (map <= stamps (rest stamps)))
+          "stamps must never go backwards")
+      (is (<= (- (peek stamps) ((deref #'utils/*wall-clock-ms*))) 1)
+          "stamps stay pinned to wall time — no accumulation ahead of it"))))
 
 (deftest clock-retreat-does-not-reverse-stamps
-  (testing "a wall-clock step-back cannot produce a smaller stamp"
+  (testing "a wall-clock step-back holds the stamp flat, never backwards"
     (let [t0 (utils/monotonic-now-ms)]
       (binding [utils/*wall-clock-ms* (fn [] (- t0 60000))] ;; clock steps back 60s
         (let [t1 (utils/monotonic-now-ms)
               t2 (utils/monotonic-now-ms)]
-          (is (> t1 t0) "stamp after retreat still advances")
-          (is (> t2 t1) "and keeps advancing while the clock lags")))
+          (is (= t1 t0) "stamp holds at the high-water mark during retreat")
+          (is (= t2 t1) "and keeps holding while the clock lags")))
       ;; recovery: once the wall clock is ahead again, stamps track it
       (let [t3 (utils/monotonic-now-ms)]
-        (is (> t3 t0))))))
+        (is (>= t3 t0))))))
 
 (deftest meta-update-uses-monotonic-stamps
   (testing "last-write stamps from meta-update are strictly ordered even
@@ -39,6 +43,6 @@
           t (.getTime ^#?(:clj java.util.Date :cljs js/Date) (:last-write m1))]
       (binding [utils/*wall-clock-ms* (fn [] (- t 5000))]
         (let [m2 (utils/meta-update :k :edn m1)]
-          (is (> (.getTime ^#?(:clj java.util.Date :cljs js/Date) (:last-write m2))
-                 t)
-              "a write during clock retreat must still stamp AFTER the previous write"))))))
+          (is (>= (.getTime ^#?(:clj java.util.Date :cljs js/Date) (:last-write m2))
+                  t)
+              "a write during clock retreat must not stamp BEFORE the previous write"))))))

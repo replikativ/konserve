@@ -15,11 +15,14 @@
      (<?- (k/assoc-in store [:foo] :bar2))
      (<?- (k/assoc-in store [:foo2] :bar2))
      (<?- (k/assoc-in store [:foo3] :bar2))
-     ;; Cutoffs MUST come from the store's monotonic write clock (utils/now):
-     ;; write stamps are strictly increasing and can run AHEAD of the wall
-     ;; clock after a burst of writes, so a raw (Date.) cutoff — even with
-     ;; settling sleeps — can be older than the last write and under-sweep.
-     (let [ts        (utils/now)
+     ;; Cutoffs MUST come from the store's monotonic write clock (utils/now)
+     ;; — during a wall-clock retreat the stamps hold ABOVE a raw (Date.)
+     ;; read. The clock is non-strict (same-ms ties possible, spared by the
+     ;; sweep — fail-safe), so let a beat pass before capturing the cutoff:
+     ;; wall time advances past all prior stamps and the sweep below is
+     ;; deterministic.
+     (let [_         (a/<! (a/timeout 10))
+           ts        (utils/now)
            whitelist #{:baz}]
        (and
         (is (= [:bar2 "bar2"]        (<?- (k/update-in store [:foo] name))))
@@ -37,7 +40,8 @@
           (do
             (doseq [i (range 1 11)]
               (<?- (k/assoc store (keyword (str "test" i)) i)))
-            (let [ts2 (utils/now)]
+            (let [_ (a/<! (a/timeout 10))
+                  ts2 (utils/now)]
               (and
                (is (= 13 (count (<?- (k/keys store)))))
                (is (= 10 (count (<?- (gc/sweep! store #{:foo :baz :binbar} ts2)))))
@@ -48,6 +52,7 @@
                      _ (<?- (k/assoc store :batch3 3))
                      _ (<?- (k/assoc store :batch4 4))
                      _ (<?- (k/assoc store :batch5 5))
+                     _ (a/<! (a/timeout 10))
                      ts3 (utils/now)]
                  (is (= 5 (count (<?- (gc/sweep! store #{:foo :baz :binbar} ts3 2)))))))))
           true))))))

@@ -6,15 +6,19 @@ All notable, user-visible changes to konserve are documented here.
 
 ### Added
 - **Monotonic write stamps** — `:last-write` metadata is now issued by a
-  process-global hybrid logical clock (`utils/now` = `max(wall-clock,
-  previous-stamp + 1ms)`): stamps are strictly increasing and immune to
-  wall-clock retreat (NTP step-backs, VM suspend/resume, manual clock sets).
-  This makes `konserve.gc/sweep!`'s safety argument hold by construction —
-  an object written under a collector's guard can no longer be stamped
-  *before* the cutoff that protects it and be deleted while live — and
-  eliminates same-millisecond tie ambiguity at sweep boundaries. Stamps
-  still read as wall time (`Date`), so nothing changes for sync or
-  human consumers; external collectors must obtain their cutoffs from
+  process-global monotone clock (`utils/now` = `max(wall-clock,
+  previous-stamp)`): stamps never go backwards under wall-clock retreat
+  (NTP step-backs, VM suspend/resume, manual clock sets) — the stamp holds
+  at its high-water mark until real time catches up. This makes
+  `konserve.gc/sweep!`'s safety argument hold by construction: an object
+  written under a collector's guard can no longer be stamped *before* the
+  cutoff that protects it and be deleted while live. Deliberately
+  non-strict (no `+1` per stamp): a strict clock would run ahead of
+  physical time above 1000 writes/second and stall collection after a
+  restart following a bulk import; same-millisecond ties remain possible
+  and are fail-safe (the sweep spares equality — garbage retained one
+  cycle, never a live deletion). Stamps still read as wall time (`Date`);
+  external collectors must obtain their cutoffs from
   `utils/now`/`utils/monotonic-now-ms` (the same source) rather than raw
   clock reads. Single-process only, as before.
 - **`PReadMissSafe` marker protocol** (`konserve.impl.storage-layout`). A backing
