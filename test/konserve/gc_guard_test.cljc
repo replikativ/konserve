@@ -12,6 +12,7 @@
    async-only, and expressing these as cljs async tests would obscure what they
    are demonstrating without covering anything the guard does differently there."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string]
             [konserve.gc-guard :as guard]
             [konserve.utils :as utils]
             #?@(:clj [[clojure.core.async :refer [<!!]]
@@ -197,3 +198,30 @@
            (is (empty? (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000
                                        {:store-id sid}))))
            (guard/done! sid token))))))
+
+#?(:clj
+   (deftest attached-config-identifies-without-carrying-secrets
+     (testing "the store reports the config it was connected with"
+       (let [id (random-uuid)
+             store (ks/create-store {:backend :memory :id id} {:sync? true})]
+         (is (= id (ks/store-id store)))
+         (is (= :memory (:backend (ks/store-config store))))))
+
+     (testing "credentials are stripped: a config a caller passes once may hold
+               an S3 secret or a JDBC password, and a store is long-lived and
+               printable — identity survives, secrets do not"
+       (let [id (random-uuid)
+             store (ks/create-store {:backend :memory :id id
+                                     :access-key "AKIAEXAMPLE"
+                                     :secret "shhh"
+                                     :password "hunter2"
+                                     :jdbcUrl "jdbc://user:pw@host/db"}
+                                    {:sync? true})
+             cfg (ks/store-config store)
+             printed (pr-str cfg)]
+         (is (= id (:id cfg)) "identity survives")
+         (doseq [k [:access-key :secret :password :jdbcUrl]]
+           (is (not (contains? cfg k)) (str k " must not be retained")))
+         (doseq [leak ["AKIAEXAMPLE" "shhh" "hunter2" "hunter2" "user:pw"]]
+           (is (not (clojure.string/includes? printed leak))
+               "no secret may survive into a printable form"))))))
