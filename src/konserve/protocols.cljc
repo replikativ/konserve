@@ -70,40 +70,67 @@
     "Returns true if the store handles concurrency internally and doesn't need
      application-level locking. Default is false for all stores."))
 
-(def store-id-key
-  "Where a connected store carries its `:id` when the backend has no field of
-   its own for it. Namespaced, so attaching it to a record lands in the
-   extension map without disturbing the declared fields."
-  ::store-id)
+(def store-config-key
+  "Where a connected store carries the config it was connected with, when the
+   backend has no field of its own for it. Namespaced, so attaching it to a
+   record lands in the extension map without disturbing the declared fields.
 
-(defprotocol PStoreIdentity
-  "Which physical store is this?
+   NOT `:config` — a `DefaultStore` already has one of those, holding the
+   backend's behaviour options (`:in-place?`, `:lock-blob?`, `:sync-blob?`).
+   Two different maps, and overwriting one with the other would break every
+   backend that reads it."
+  ::store-config)
+
+(def credential-keys
+  "Config keys stripped before a config is attached to a store.
+
+   Store configs carry secrets — `:access-key` and `:secret` for S3,
+   `:password` and `:jdbcUrl` for JDBC. Those are fine in a config a caller
+   holds and passes once; they are not fine sitting on a long-lived object that
+   any `pr-str`, log line or `ex-info` payload might carry off. Identity
+   (`:backend`, `:id`, `:path`, `:bucket`, …) survives, which is what makes the
+   attached config useful.
+
+   A backend with its own secret-bearing keys should add them here rather than
+   hope nobody prints a store."
+  #{:access-key :secret :secret-key :password :token :credentials :jdbcUrl})
+
+(defprotocol PStoreConfig
+  "What config is this store connected with?
 
    `konserve.store/validate-store-config` REQUIRES a UUID `:id` on every store,
-   and then every backend drops it — nothing on a connected store carried it. A
-   `DefaultStore`'s `:config` holds the backend's behaviour options
-   (`:in-place?`, `:lock-blob?`, `:sync-blob?`), not the store's identity, and
-   backends that bypass `DefaultStore` (LMDB) keep even less.
+   and then every backend drops the config — nothing on a connected store
+   carried it. A `DefaultStore`'s `:config` is a different map (behaviour
+   options), and backends that bypass `DefaultStore` (LMDB) keep less still.
 
-   That left components which must AGREE on a store's name — the GC safe point
-   above all, where datahike, geschichte and a scriptum index share one store
-   and one sweep — passing the id alongside the store by hand. Disagreement
-   there is invisible until a collection deletes something.
+   That left components which must AGREE on a store's identity — the GC safe
+   point above all, where datahike, geschichte and a scriptum index share one
+   store and one sweep — passing the id alongside the store by hand.
+   Disagreement there is invisible until a collection deletes something.
 
-   The default implementation reads the id `konserve.store` attaches on connect,
-   so no backend has to do anything. A backend that would rather hold its id in
-   a real field can implement this and be authoritative."
-  (-store-id [this]
-    "The UUID this store was connected with, or nil for a store built through a
-     backend constructor directly, which never took one."))
+   The default implementation reads what `konserve.store` attaches on connect,
+   so no backend has to do anything. A backend that would rather hold its config
+   in a real field can implement this and be authoritative.
+
+   Credential keys are stripped — see `credential-keys`. The result identifies a
+   store; it is not guaranteed to be enough to reconnect one."
+  (-store-config [this]
+    "The (credential-stripped) config this store was connected with, or nil for
+     a store built through a backend constructor directly, which never took one."))
 
 ;; Default implementations for Object
 
-(extend-protocol PStoreIdentity
+(extend-protocol PStoreConfig
   #?(:clj Object :cljs default)
-  (-store-id [this] (get this store-id-key))
+  (-store-config [this] (get this store-config-key))
   nil
-  (-store-id [_] nil))
+  (-store-config [_] nil))
+
+(defn store-id
+  "The UUID this store was connected with, or nil. Convenience over
+   `-store-config`, since identity is what most callers actually want."
+  [store]
+  (:id (-store-config store)))
 
 (extend-protocol PMultiKeySupport
   #?(:clj Object :cljs default)

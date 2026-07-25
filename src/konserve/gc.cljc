@@ -30,7 +30,7 @@
    (sweep! store whitelist ts batch-size {}))
   ([store whitelist ts batch-size {:keys [store-id]}]
    (go-try-
-    (let [store-id (or store-id (p/-store-id store))
+    (let [store-id (or store-id (p/store-id store))
           ts (if store-id (guard/cutoff store-id ts) ts)
           to-delete (->> (<?- (k/keys store))
                          (filter (fn [{:keys [key last-write] :as meta}]
