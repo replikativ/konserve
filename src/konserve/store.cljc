@@ -31,11 +31,12 @@
      ;; After requiring konserve-s3:
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
+            [konserve.protocols :as p]
             [konserve.tiered :as tiered]
             [konserve.utils :refer [#?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             #?(:clj [konserve.filestore])
-            [clojure.core.async :refer [go] :include-macros true]
+            [clojure.core.async :refer [go <!] :include-macros true]
             [superv.async :refer [go-try- <?-] :include-macros true]))
 
 ;; =============================================================================
@@ -73,6 +74,39 @@
               {:config config :id id :error :invalid-id-type}))
 
       :else config)))
+
+;; =============================================================================
+;; Store identity
+;; =============================================================================
+
+(def store-id
+  "The UUID this store was connected with, or nil — see
+   `konserve.protocols/PStoreIdentity`."
+  p/-store-id)
+
+(defn- remember-id
+  "Give a freshly connected store its own identity.
+
+   Done here because this is the only place every backend passes through with
+   the full config in hand — including backends that bypass `DefaultStore`
+   entirely, like LMDB. The default `PStoreIdentity` implementation reads this
+   back, so no backend has to change; one that prefers a real field can
+   implement the protocol and take over.
+
+   Anything not associable — an exception delivered on the async path, say —
+   passes through untouched."
+  [store id]
+  (if (and id (or (map? store) (record? store)))
+    (assoc store p/store-id-key id)
+    store))
+
+(defn- with-store-id
+  "Apply `remember-id` across both return contracts: a value under `{:sync? true}`,
+   a channel otherwise."
+  [result id opts]
+  (if (:sync? opts)
+    (remember-id result id)
+    (go (remember-id (<! result) id))))
 
 ;; =============================================================================
 ;; Private Multimethods (fixed arity, both config and opts)
@@ -150,7 +184,11 @@
   ([config]
    (connect-store config {:sync? false}))
   ([config opts]
-   (-connect-store config (or opts {:sync? false}))))
+   (let [opts (or opts {:sync? false})]
+     ;; Every backend dispatches through here with the full config, so this is
+     ;; the one place that can hand the store its own identity — including
+     ;; backends like LMDB that bypass DefaultStore entirely.
+     (with-store-id (-connect-store config opts) (:id config) opts))))
 
 (defn create-store
   "Create a new store.
@@ -167,7 +205,8 @@
   ([config]
    (create-store config {:sync? false}))
   ([config opts]
-   (-create-store config (or opts {:sync? false}))))
+   (let [opts (or opts {:sync? false})]
+     (with-store-id (-create-store config opts) (:id config) opts))))
 
 (defn store-exists?
   "Check if a store exists at the given configuration.

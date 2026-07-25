@@ -17,6 +17,7 @@
             #?@(:clj [[clojure.core.async :refer [<!!]]
                       [konserve.core :as k]
                       [konserve.gc :as gc]
+                      [konserve.store :as ks]
                       [konserve.memory :refer [new-mem-store]]])))
 
 ;; =============================================================================
@@ -161,3 +162,38 @@
                "B's sweep must not collect A's in-flight values")
            (is (some? (<!! (k/get store :a-value nil {:sync? false})))))
          (guard/done! sid token-a)))))
+
+#?(:clj
+   (deftest sweep-consults-the-guard-without-being-told-the-store-id
+     (testing "a store connected through konserve.store names itself, so the
+               guard applies with no :store-id argument at all — the case where
+               a caller and a writer could otherwise disagree about the name"
+       (let [id (random-uuid)
+             store (ks/create-store {:backend :memory :id id} {:sync? true})]
+         (is (= id (ks/store-id store)) "the store must carry its own id")
+         (let [token (guard/writing! id)]
+           (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
+           ;; No :store-id passed. The sweep has to find it on the store.
+           (let [deleted (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000 {}))]
+             (is (empty? deleted)
+                 "the derived id must reach the guard and spare the in-flight write")
+             (is (some? (<!! (k/get store :value-1 nil {:sync? false})))))
+           (guard/done! id token))
+         ;; With the sequence closed the same sweep collects normally, which
+         ;; proves the emptiness above came from the guard and not from a sweep
+         ;; that simply never ran.
+         (let [deleted (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000 {}))]
+           (is (contains? (set deleted) :value-1)))))))
+
+#?(:clj
+   (deftest an-explicit-store-id-still-wins
+     (testing "a store built through a backend constructor never took an id, so
+               the caller must still be able to supply one"
+       (let [store (fresh-store)
+             sid (random-uuid)]
+         (is (nil? (ks/store-id store)))
+         (let [token (guard/writing! sid)]
+           (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
+           (is (empty? (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000
+                                       {:store-id sid}))))
+           (guard/done! sid token))))))

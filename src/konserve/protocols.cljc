@@ -70,7 +70,40 @@
     "Returns true if the store handles concurrency internally and doesn't need
      application-level locking. Default is false for all stores."))
 
+(def store-id-key
+  "Where a connected store carries its `:id` when the backend has no field of
+   its own for it. Namespaced, so attaching it to a record lands in the
+   extension map without disturbing the declared fields."
+  ::store-id)
+
+(defprotocol PStoreIdentity
+  "Which physical store is this?
+
+   `konserve.store/validate-store-config` REQUIRES a UUID `:id` on every store,
+   and then every backend drops it — nothing on a connected store carried it. A
+   `DefaultStore`'s `:config` holds the backend's behaviour options
+   (`:in-place?`, `:lock-blob?`, `:sync-blob?`), not the store's identity, and
+   backends that bypass `DefaultStore` (LMDB) keep even less.
+
+   That left components which must AGREE on a store's name — the GC safe point
+   above all, where datahike, geschichte and a scriptum index share one store
+   and one sweep — passing the id alongside the store by hand. Disagreement
+   there is invisible until a collection deletes something.
+
+   The default implementation reads the id `konserve.store` attaches on connect,
+   so no backend has to do anything. A backend that would rather hold its id in
+   a real field can implement this and be authoritative."
+  (-store-id [this]
+    "The UUID this store was connected with, or nil for a store built through a
+     backend constructor directly, which never took one."))
+
 ;; Default implementations for Object
+
+(extend-protocol PStoreIdentity
+  #?(:clj Object :cljs default)
+  (-store-id [this] (get this store-id-key))
+  nil
+  (-store-id [_] nil))
 
 (extend-protocol PMultiKeySupport
   #?(:clj Object :cljs default)
