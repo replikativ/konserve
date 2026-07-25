@@ -1,16 +1,32 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
+            [konserve.gc-guard :as guard]
             [konserve.utils :as utils]
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
 (defn sweep!
+  "Delete every key that is neither in `whitelist` nor written at/after the
+   cutoff. `ts` is the instant the collection started.
+
+   PASS `:store-id` whenever writers on this store take `konserve.gc-guard`.
+   The sweep then derives its own cutoff as `min(ts, safe-point)` instead of
+   trusting `ts`, which is what keeps it from deleting objects that a
+   values-then-pointer sequence has already written but not yet made reachable
+   (see `konserve.gc-guard`). Getting that combination right is fiddly — the
+   guard must be read AFTER `ts` — so it belongs here rather than in every
+   caller. Without `:store-id` the behaviour is unchanged and `ts` is used
+   verbatim, which is only safe if the caller computed it via
+   `konserve.gc-guard/cutoff` itself."
   ([store whitelist ts]
-   (sweep! store whitelist ts 1000))
+   (sweep! store whitelist ts 1000 {}))
   ([store whitelist ts batch-size]
+   (sweep! store whitelist ts batch-size {}))
+  ([store whitelist ts batch-size {:keys [store-id]}]
    (go-try-
-    (let [to-delete (->> (<?- (k/keys store))
+    (let [ts (if store-id (guard/cutoff store-id ts) ts)
+          to-delete (->> (<?- (k/keys store))
                          (filter (fn [{:keys [key last-write] :as meta}]
                                    (not
                                     (or (contains? whitelist key)
