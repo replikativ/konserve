@@ -21,8 +21,8 @@
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                               org.clojure/tools.cli {:mvn/version "1.0.214"}}
                  :extra-paths ["benchmark/src" "test"]}
-           :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.60"}
-                               thheller/shadow-cljs {:mvn/version "2.26.0"}}
+           :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.12.145"}
+                               thheller/shadow-cljs {:mvn/version "3.4.11"}}
                   :extra-paths ["test"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}
