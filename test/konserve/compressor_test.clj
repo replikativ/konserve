@@ -65,12 +65,10 @@
     (is (= 0 (get c/compressor->byte (c/get-compressor :none))))))
 
 (deftest lz4-byte-1-still-means-lz4-frame
-  (testing "the writer switched to the HIGH compressor. That is a compression
-            RATIO change, not a format change: LZ4-HC emits standard LZ4 Frame.
-            If this ever stops holding, every blob written by an older konserve
-            becomes unreadable — so assert it against a frame built the old way,
-            by the convenience constructor, rather than round-tripping our own
-            writer."
+  (testing "byte 1 is LZ4 Frame and must stay readable across versions. Asserted
+            against a frame built by the convenience constructor rather than by
+            round-tripping our own writer, so a change to how we WRITE cannot
+            quietly make older blobs unreadable."
     (let [raw (.getBytes (apply str (repeat 500 "repeated-chunk ")))
           old-frame (let [baos (ByteArrayOutputStream.)
                           o (LZ4FrameOutputStream. baos)]
@@ -116,8 +114,11 @@
                 (format "%s: %d B vs %d B uncompressed" label n raw))))))))
 
 (deftest zstd-beats-lz4-on-serialized-data
-  (testing "the reason byte 2 exists. Not a large margin, but consistent, and
-            zstd-3 is also faster to produce than lz4-hc."
+  (testing "the reason byte 2 exists. zstd-3 is both smaller and faster than
+            LZ4 here -- on one 512-datom blob, 2507 B in 69 us against lz4-hc's
+            4767 B in 1602 us. That measurement is why :lz4 stayed the FAST
+            compressor: whoever picks it wants speed, and ratio is what :zstd
+            is for."
     (when zstd?
       (let [ser (ser/fressian-serializer)
           [lz4-n _] (round-trip (c/lz4-compressor ser) payload)

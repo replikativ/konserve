@@ -1,10 +1,7 @@
 (ns konserve.compressor
   (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]]
             [konserve.utils :refer [invert-map]])
-  #?(:clj (:import [net.jpountz.lz4 LZ4FrameOutputStream LZ4FrameInputStream
-                    LZ4Factory LZ4FrameOutputStream$BLOCKSIZE
-                    LZ4FrameOutputStream$FLG$Bits]
-                   [net.jpountz.xxhash XXHashFactory])))
+  #?(:clj (:import [net.jpountz.lz4 LZ4FrameOutputStream LZ4FrameInputStream])))
 
 (defrecord NullCompressor [serializer]
   PStoreSerializer
@@ -32,39 +29,29 @@
                      :dependency 'com.github.luben/zstd-jni}))))
 
 #?(:clj
-   ;; The HIGH compressor, not the fast one.
+   ;; LZ4 stays the FAST compressor.
    ;;
-   ;; LZ4FrameOutputStream's convenience constructor uses the fast compressor,
-   ;; which on real serialized output is weak enough to be counterproductive:
-   ;; measured on boring's CBOR for a 1000-datom vector against fressian's,
-   ;; lz4-fast left CBOR 17.3% larger where the RAW gap was 12.4% -- i.e. it
-   ;; compressed the tighter input better and WIDENED the difference. lz4-hc
-   ;; closes it to +0.2%.
+   ;; This was briefly switched to the high compressor, on the argument that
+   ;; lz4-fast is weak enough on serialized output to be counterproductive --
+   ;; measured against fressian it left CBOR 17.3% larger where the raw gap was
+   ;; 12.4%, i.e. it compressed the tighter input better and WIDENED the
+   ;; difference. That observation is real but the conclusion was wrong,
+   ;; because the speed of lz4-hc was never measured. On one 512-datom konserve
+   ;; blob, encode:
    ;;
-   ;; This does not change what compressor byte 1 means. LZ4-HC emits standard
-   ;; LZ4 Frame; the unchanged LZ4FrameInputStream reads it, so blobs written by
-   ;; older konserve versions stay readable and blobs written now stay readable
-   ;; by them. Verified both directions before making the switch.
+   ;;   lz4-hc   1602 us -> 4767 B
+   ;;   zstd-3     69 us -> 2507 B
    ;;
-   ;; BLOCK_INDEPENDENCE is required by LZ4FrameOutputStream's own validation
-   ;; once an explicit compressor is supplied; the convenience constructor sets
-   ;; it implicitly.
-   (def ^:private lz4-bits
-     (into-array LZ4FrameOutputStream$FLG$Bits
-                 [LZ4FrameOutputStream$FLG$Bits/BLOCK_INDEPENDENCE])))
-
-#?(:clj
+   ;; zstd-3 is 23x faster AND roughly half the size. lz4-hc is dominated on
+   ;; both axes at once, so it has no niche: whoever picks :lz4 wants speed,
+   ;; and whoever wants ratio should pick :zstd (byte 2).
    (defrecord Lz4Compressor [serializer]
      PStoreSerializer
      (-deserialize [_ read-handlers bytes]
        (let [lz4-byte (LZ4FrameInputStream. bytes)]
          (-deserialize serializer read-handlers lz4-byte)))
      (-serialize [_ bytes write-handlers val]
-       (let [lz4-byte (LZ4FrameOutputStream.
-                       bytes LZ4FrameOutputStream$BLOCKSIZE/SIZE_4MB (long -1)
-                       (.highCompressor (LZ4Factory/fastestInstance))
-                       (.hash32 (XXHashFactory/fastestInstance))
-                       lz4-bits)]
+       (let [lz4-byte (LZ4FrameOutputStream. bytes)]
          (-serialize serializer lz4-byte write-handlers val)
          (.flush lz4-byte)))))
 
