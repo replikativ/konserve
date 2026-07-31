@@ -17,6 +17,13 @@
            ;; serializer. Not a library dependency.
            :pss {:extra-paths ["test" "test-pss"]
                  :extra-deps {org.replikativ/persistent-sorted-set {:local/root "../persistent-sorted-set"}}}
+           ;; zstd (compressor byte 2) is an OPTIONAL dependency -- it ships
+           ;; native binaries for every platform and konserve should not put
+           ;; that in every user's graph for a compressor most will not select.
+           ;; konserve.compressor resolves it reflectively and degrades to a
+           ;; typed error when absent. Present here so the tests exercise it.
+           :zstd {:extra-deps {com.github.luben/zstd-jni {:mvn/version "1.5.6-8"}}}
+
            :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                               org.clojure/tools.cli {:mvn/version "1.0.214"}}
