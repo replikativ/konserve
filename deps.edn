@@ -13,7 +13,11 @@
         com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.339"}
         com.github.pkpkpk/fress {:mvn/version "0.4.317"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}}
- :aliases {:dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
+ :aliases {;; End-to-end vertical check: PSS index nodes through the boring
+           ;; serializer. Not a library dependency.
+           :pss {:extra-paths ["test"]
+                 :extra-deps {org.replikativ/persistent-sorted-set {:local/root "../persistent-sorted-set"}}}
+           :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                               org.clojure/tools.cli {:mvn/version "1.0.214"}}
                  :extra-paths ["benchmark/src" "test"]}
