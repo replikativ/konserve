@@ -6,8 +6,10 @@
   the clj-cbor serializer (byte 2) could not do at all — it throws on any
   handler, so a PSS node could never reach it.
 
-  Run with `clj -M:pss:test -n konserve.boring-pss-test`; the :pss alias pulls
-  in persistent-sorted-set, which is NOT a konserve dependency."
+  Lives in test-pss/ rather than test/ so the default `clj -M:test` run does
+  not need persistent-sorted-set on the classpath. Run it with:
+
+    clj -M:pss:test -d test-pss"
   (:require [boring.core :as boring]
             [clojure.test :refer [deftest testing is]]
             [konserve.core :as k]
