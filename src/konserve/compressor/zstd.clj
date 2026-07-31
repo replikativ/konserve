@@ -8,16 +8,20 @@
   resolves to a compressor that throws an actionable message instead of the
   namespace failing to load.
 
-  Why it exists alongside LZ4 (byte 1): measured on boring's CBOR output for a
-  1000-datom vector, 21 844 B raw ->
+  Why it exists alongside LZ4 (byte 1): the two occupy genuinely different
+  points, and after measuring, nothing sensible sits between them.
 
-      lz4 (fast)   12 225 B
-      lz4-hc        9 014 B
-      zstd-3        ~8 800 B, and faster than lz4-hc to produce
-      zstd-19       ~7 500 B
+  On one 512-datom konserve blob, encode time and resulting size:
 
-  Level 3 is zstd's own default and the right default here: it beats LZ4-HC on
-  both ratio and speed."
+      lz4 (fast)     fast, weak
+      lz4-hc       1602 us -> 4767 B
+      zstd-3         69 us -> 2507 B
+
+  zstd-3 is 23x faster than lz4-hc AND roughly half the size, which is why
+  konserve's LZ4 stays the FAST compressor rather than the high one: whoever
+  selects :lz4 wants speed, and ratio is what this compressor is for. Level 3
+  is zstd's own default and the right default here; the higher levels trade
+  encode time for a few percent."
   (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]])
   (:import [com.github.luben.zstd ZstdInputStream ZstdOutputStream]))
 
