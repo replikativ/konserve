@@ -1,6 +1,6 @@
-(ns konserve.boring-pss-test
+(ns konserve.cbor-pss-test
   "The vertical: persistent-sorted-set index nodes stored through konserve's
-  boring serializer.
+  boring serializer (byte 3), in CBOR.
 
   This is the integration the whole boring effort exists for, and it is the one
   the clj-cbor serializer (byte 2) could not do at all — it throws on any
@@ -16,7 +16,7 @@
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.serializers :as ser]
             [org.replikativ.persistent-sorted-set :as pss]
-            [org.replikativ.persistent-sorted-set.boring :as pb])
+            [org.replikativ.persistent-sorted-set.cbor :as pss-cbor])
   (:import [org.replikativ.persistent_sorted_set IStorage]))
 
 (def ^:private test-dir
@@ -34,7 +34,7 @@
   [dir]
   (let [storage-box (atom nil)
         reads (atom 0)
-        registry (pb/install (boring/tag-registry)
+        registry (pss-cbor/install (boring/tag-registry)
                              {:default-bf 512
                               :resolve-storage (fn [_] @storage-box)
                               :resolve-cmp (fn [_] compare)})
