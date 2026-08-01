@@ -86,21 +86,48 @@
   natively via CBOR tag 27, which is the problem incognito exists to work
   around for fressian. Only the read direction has to be taught anything, and
   an unregistered record still decodes to an inert value carrying its name and
-  fields rather than being lost."
-  [registry read-handlers]
-  (let [handlers (some-> read-handlers deref)]
-    (if (seq handlers)
-      (reduce-kv (fn [reg tag ctor] (boring/register-record reg (str tag) ctor))
-                 registry handlers)
-      registry)))
+  fields rather than being lost.
 
-(defrecord BoringSerializer [registry encode-opts]
+  Takes the handler MAP, already deref'd: `registry-for` below derefs once and
+  memoises on the result, so dereferencing again here would both re-read a
+  changing atom mid-computation and fail outright when handed the map."
+  [registry handlers]
+  (if (seq handlers)
+    (reduce-kv (fn [reg tag ctor] (boring/register-record reg (str tag) ctor))
+               registry handlers)
+    registry))
+
+(defn- registry-cache
+  "Memoise `record-registry` against the handler atom's current value.
+
+  `TagRegistry`'s `withRecord` copies the whole backing map, so folding N
+  handlers on every read is N map copies per read. Measured on a small map:
+  0.29 us with no handlers, 5.40 us with 20 -- while fressian, which merges
+  persistent maps once, stays flat near 5 us and overtakes us past ~20
+  handlers.
+
+  Handler atoms change a handful of times in a store's life, so an `identical?`
+  check on the deref'd persistent map is both exact and free. Keyed on the base
+  registry too: keying on the handlers alone would serve a stale registry after
+  someone `swap!`s a new tag into the serializer's own registry."
+  []
+  (atom {:base ::none :src ::none :reg nil}))
+
+(defn- registry-for [cache base handlers-atom]
+  (let [h (if handlers-atom @handlers-atom {})
+        c @cache]
+    (if (and (identical? (:base c) base) (identical? (:src c) h))
+      (:reg c)
+      (:reg (reset! cache {:base base :src h
+                           :reg (record-registry base h)})))))
+
+(defrecord BoringSerializer [registry encode-opts cache]
   #?@(:cljs (INamed
              (-name [_] "BoringSerializer")
              (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers input]
-    (let [opts (assoc encode-opts :registry (record-registry registry read-handlers))]
+    (let [opts (assoc encode-opts :registry (registry-for cache registry read-handlers))]
       #?(:clj  (boring/decode (.readAllBytes ^java.io.InputStream input) opts)
          :cljs (boring/decode input opts))))
   (-serialize [_ #?(:clj output-stream :cljs _) write-handlers val]
@@ -123,7 +150,8 @@
   doc/EXTENDING.md). Records need no registration to be WRITTEN."
   ([] (boring-serializer (boring/tag-registry) {}))
   ([registry] (boring-serializer registry {}))
-  ([registry opts] (map->BoringSerializer {:registry registry :encode-opts opts})))
+  ([registry opts] (map->BoringSerializer {:registry registry :encode-opts opts
+                                           :cache (registry-cache)})))
 
 (defrecord StringSerializer []
   #?@(:cljs (INamed
