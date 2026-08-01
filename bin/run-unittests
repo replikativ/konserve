@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-echo "Running JVM tests"
+# Two passes, because zstd-jni is an OPTIONAL dependency and both states are
+# real for users:
+#
+#   without  -- byte 2 must degrade to an actionable typed error rather than
+#               failing to load the namespace
+#   with     -- the compressor itself, and the cross-language reader test that
+#               needs a zstd-compressed blob to read
+#
+# Running only the first left the zstd code path and the Python interop test
+# unexecuted in CI; running only the second left the degradation path
+# unexecuted. Neither alone is the shipping configuration.
 
+echo "Running JVM tests (zstd-jni absent)"
 TIMBRE_LEVEL=':warn' clojure -X:test
+
+echo "Running JVM tests (zstd-jni present)"
+TIMBRE_LEVEL=':warn' clojure -X:zstd:test

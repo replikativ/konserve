@@ -1,5 +1,6 @@
 (ns konserve.serializers
   (:require #?(:clj [clj-cbor.core :as cbor])
+            [boring.core :as boring]
             #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
             [konserve.protocols :refer [PStoreSerializer]]
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
@@ -58,6 +59,72 @@
   ([read-handlers write-handlers] (map->FressianSerializer {:custom-read-handlers read-handlers
                                                             :custom-write-handlers write-handlers})))
 
+;; ---------------------------------------------------------------------------
+;; boring (CBOR) -- serializer byte 3.
+;;
+;; Added ALONGSIDE the clj-cbor serializer (byte 2) rather than replacing it.
+;; The serializer id is written into every blob header, so it is durable wire
+;; state: repurposing byte 2 would silently reinterpret data already on disk.
+;; Byte 2 stays readable forever; byte 3 is what new stores write.
+;;
+;; Two things it fixes over byte 2:
+;;   - byte 2 THROWS if given any read or write handler, so it could never
+;;     serialize a record or a PSS node. This one supports handlers.
+;;   - byte 2 is #?(:clj ...) only, because clj-cbor has no ClojureScript.
+;;     This one runs on both platforms from the same code.
+;; ---------------------------------------------------------------------------
+
+(defn- record-registry
+  "Fold incognito-style record handlers into a boring registry.
+
+  incognito keys its handlers by `(-> r type pr-str normalize-ns symbol)` --
+  the type name with `/` -> `.` and `-` -> `_`. That is exactly boring's own
+  wire name for a record (`boring.data/record-type-name`), so the mapping is
+  a straight rename with no translation.
+
+  Note boring does not NEED write handlers for records: it emits the type name
+  natively via CBOR tag 27, which is the problem incognito exists to work
+  around for fressian. Only the read direction has to be taught anything, and
+  an unregistered record still decodes to an inert value carrying its name and
+  fields rather than being lost."
+  [registry read-handlers]
+  (let [handlers (some-> read-handlers deref)]
+    (if (seq handlers)
+      (reduce-kv (fn [reg tag ctor] (boring/register-record reg (str tag) ctor))
+                 registry handlers)
+      registry)))
+
+(defrecord BoringSerializer [registry encode-opts]
+  #?@(:cljs (INamed
+             (-name [_] "BoringSerializer")
+             (-namespace [_] "konserve.serializers")))
+  PStoreSerializer
+  (-deserialize [_ read-handlers input]
+    (let [opts (assoc encode-opts :registry (record-registry registry read-handlers))]
+      #?(:clj  (boring/decode (.readAllBytes ^java.io.InputStream input) opts)
+         :cljs (boring/decode input opts))))
+  (-serialize [_ #?(:clj output-stream :cljs _) write-handlers val]
+    ;; write-handlers are incognito's optional per-record value transforms.
+    ;; boring carries the type natively, so nothing here needs them; they are
+    ;; accepted and ignored rather than rejected, because byte 2 REJECTING them
+    ;; is precisely why it was unusable.
+    (let [opts (assoc encode-opts :registry registry)]
+      #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
+         :cljs (boring/encode val opts)))))
+
+(defn boring-serializer
+  "A portable CBOR serializer backed by boring.
+
+  `opts` are boring's encode options; `:shapes true` is worth enabling for
+  stores holding many same-shaped maps -- it strips repeated keys and was
+  measured at 36% smaller on datom-like content.
+
+  `registry` is a boring tag registry for custom types (see boring's
+  doc/EXTENDING.md). Records need no registration to be WRITTEN."
+  ([] (boring-serializer (boring/tag-registry) {}))
+  ([registry] (boring-serializer registry {}))
+  ([registry opts] (map->BoringSerializer {:registry registry :encode-opts opts})))
+
 (defrecord StringSerializer []
   #?@(:cljs (INamed
              (-name [_] "StringSerializer")
@@ -79,9 +146,13 @@
        (into {})))
 
 (def byte->serializer
+  "Serializer id -> instance. THE ID IS PERSISTED IN EVERY BLOB HEADER, so this
+  map is durable wire state: an id's meaning must never change, and a new
+  serializer takes the next free id rather than reusing one."
   {0 (string-serializer)
    1 (fressian-serializer)
-   #?@(:clj [2 (cbor-serializer)])})
+   #?@(:clj [2 (cbor-serializer)])          ; legacy, JVM-only, rejects handlers
+   3 (boring-serializer)})
 
 (def serializer-class->byte
   (construct->class byte->serializer))

@@ -1,7 +1,8 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
-        mvxcvi/clj-cbor {:mvn/version "1.1.1"}
+        mvxcvi/clj-cbor {:mvn/version "1.1.1"} ;; legacy: serializer byte 2, JVM-only
+        org.replikativ/boring {:mvn/version "0.1.4"} ;; serializer byte 3, portable
         org.replikativ/incognito {:mvn/version "0.3.69"}
         org.replikativ/hasch {:mvn/version "0.3.96"}
         org.replikativ/superv.async {:mvn/version "0.3.50"}
@@ -12,12 +13,23 @@
         com.github.pkpkpk/cljs-node-io {:mvn/version "2.0.339"}
         com.github.pkpkpk/fress {:mvn/version "0.4.317"}
         org.clojars.mmb90/cljs-cache {:mvn/version "0.1.4"}}
- :aliases {:dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
+ :aliases {;; End-to-end vertical check: PSS index nodes through the boring
+           ;; serializer. Not a library dependency.
+           :pss {:extra-paths ["test" "test-pss"]
+                 :extra-deps {org.replikativ/persistent-sorted-set {:local/root "../persistent-sorted-set"}}}
+           ;; zstd (compressor byte 2) is an OPTIONAL dependency -- it ships
+           ;; native binaries for every platform and konserve should not put
+           ;; that in every user's graph for a compressor most will not select.
+           ;; konserve.compressor resolves it reflectively and degrades to a
+           ;; typed error when absent. Present here so the tests exercise it.
+           :zstd {:extra-deps {com.github.luben/zstd-jni {:mvn/version "1.5.6-8"}}}
+
+           :dev {:extra-deps {criterium/criterium {:mvn/version "0.4.6"}
                               metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                               org.clojure/tools.cli {:mvn/version "1.0.214"}}
                  :extra-paths ["benchmark/src" "test"]}
-           :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.60"}
-                               thheller/shadow-cljs {:mvn/version "2.26.0"}}
+           :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.12.145"}
+                               thheller/shadow-cljs {:mvn/version "3.4.11"}}
                   :extra-paths ["test"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}

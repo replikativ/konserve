@@ -1,0 +1,4 @@
+#!/bin/bash
+
+nvm use stable
+export CHROME_BIN='/snap/bin/chromium'
