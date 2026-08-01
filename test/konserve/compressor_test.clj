@@ -121,7 +121,7 @@
             is for."
     (when zstd?
       (let [ser (ser/fressian-serializer)
-          [lz4-n _] (round-trip (c/lz4-compressor ser) payload)
+            [lz4-n _] (round-trip (c/lz4-compressor ser) payload)
             [zstd-n _] (round-trip (c/zstd-compressor ser) payload)]
         (is (<= zstd-n lz4-n)
             (format "zstd %d B vs lz4-hc %d B" zstd-n lz4-n))))))
