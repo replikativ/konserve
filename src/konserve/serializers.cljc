@@ -97,29 +97,42 @@
                registry handlers)
     registry))
 
-(defn- registry-cache
-  "Memoise `record-registry` against the handler atom's current value.
+(def ^:private ^:const registry-cache-size
+  "How many (base, handlers) pairs one serializer instance remembers.
 
-  `TagRegistry`'s `withRecord` copies the whole backing map, so folding N
-  handlers on every read is N map copies per read. Measured on a small map:
-  0.29 us with no handlers, 5.40 us with 20 -- while fressian, which merges
-  persistent maps once, stays flat near 5 us and overtakes us past ~20
-  handlers.
+  Not 1. `byte->serializer` holds a SINGLE boring serializer instance, shared by
+  every store that does not override it in its config -- so a one-entry cache
+  thrashes the moment two stores with different handler maps are open at once,
+  and falls straight back to refolding per read (measured: 0.20 us -> 5.56 us).
+  A handful of entries covers the realistic case; the scan is pointer
+  comparisons."
+  4)
 
-  Handler atoms change a handful of times in a store's life, so an `identical?`
-  check on the deref'd persistent map is both exact and free. Keyed on the base
-  registry too: keying on the handlers alone would serve a stale registry after
-  someone `swap!`s a new tag into the serializer's own registry."
-  []
-  (atom {:base ::none :src ::none :reg nil}))
+(defn- registry-cache []
+  (atom []))
 
-(defn- registry-for [cache base handlers-atom]
+(defn- registry-for
+  "The read registry for `base` plus `handlers-atom`'s current handlers,
+  memoised.
+
+  Keyed on BOTH the base registry and the handler map, by identity. Keying on
+  the handlers alone would serve a stale registry after someone `swap!`s a new
+  tag into the serializer's own registry: the encoder derefs it per frame, so
+  the same change would take effect for writing and never for reading."
+  [cache base handlers-atom]
   (let [h (if handlers-atom @handlers-atom {})
-        c @cache]
-    (if (and (identical? (:base c) base) (identical? (:src c) h))
-      (:reg c)
-      (:reg (reset! cache {:base base :src h
-                           :reg (record-registry base h)})))))
+        entries @cache
+        hit (some (fn [e] (when (and (identical? (:base e) base)
+                                     (identical? (:src e) h))
+                            e))
+                  entries)]
+    (if hit
+      (:reg hit)
+      (let [reg (record-registry base h)]
+        (swap! cache (fn [es]
+                       (vec (take registry-cache-size
+                                  (cons {:base base :src h :reg reg} es)))))
+        reg))))
 
 (defrecord BoringSerializer [registry encode-opts cache]
   #?@(:cljs (INamed
