@@ -65,6 +65,22 @@ All notable, user-visible changes to konserve are documented here.
   being switched to the high one.
 
 ### Fixed
+- **Compression combined with encryption never worked.** The read path nested
+  the wrappers the opposite way round from the write path, so it tried to
+  *decompress ciphertext*: `zstd` + `aes` failed with "Unknown frame
+  descriptor", `lz4` + `aes` with "Stream unsupported". Both defaults are null,
+  and null is identity, so the order was invisible in every configuration the
+  tests covered — while the README documents compression and encryption
+  configured together. A new `konserve.compressor-encryptor-matrix-test` walks
+  every compressor × encryptor × serializer combination through a real store,
+  and asserts that a compressed+encrypted blob is smaller than an
+  encrypted-only one, which pins the order rather than just the round trip.
+- **The LZ4 compressor truncated its own frames.** It called `.flush` rather
+  than `.close`, and `LZ4FrameOutputStream.flush` does not write the frame's
+  EndMark. Fressian never noticed, because it stops reading at the end of a
+  value; the CBOR serializer reads to EOF and hit the truncation with "Stream
+  ended prematurely". A compressor bug that only one serializer could see,
+  which is why the matrix runs over both.
 - **LZ4 was broken on every GraalVM JDK, not just native images.**
   `native-image-build?` tested only whether `org.graalvm.nativeimage.ImageInfo`
   was on the classpath — and that class ships with every GraalVM JDK, so an

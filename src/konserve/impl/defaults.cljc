@@ -147,7 +147,18 @@
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
           fn-read (partial -deserialize
-                           (compressor ((encryptor (:encryptor config)) serializer))
+                           ;; Encryptor OUTERMOST, matching the write path.
+                           ;;
+                           ;; Bytes on disk are encrypt(compress(serialize(v))),
+                           ;; so reading them must decrypt BEFORE decompressing.
+                           ;; This nested the other way -- compressor outermost --
+                           ;; and so tried to decompress ciphertext. Any
+                           ;; compressor combined with any encryptor failed:
+                           ;; zstd+aes with "Unknown frame descriptor", lz4+aes
+                           ;; with "Stream unsupported". Invisible while either
+                           ;; side is the null implementation, which is the
+                           ;; default and is what the tests used.
+                           ((encryptor (:encryptor config)) (compressor serializer))
                            read-handlers)]
       (case operation
         :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))

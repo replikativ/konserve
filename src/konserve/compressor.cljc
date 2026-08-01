@@ -51,9 +51,21 @@
        (let [lz4-byte (LZ4FrameInputStream. bytes)]
          (-deserialize serializer read-handlers lz4-byte)))
      (-serialize [_ bytes write-handlers val]
+       ;; close, not flush -- the same requirement zstd has, for the same
+       ;; reason. `flush` does NOT write the LZ4 frame's EndMark, so the frame
+       ;; is truncated and LZ4FrameInputStream reports "Stream ended
+       ;; prematurely" on read.
+       ;;
+       ;; This was invisible with the Fressian serializer, which stops reading
+       ;; as soon as it has a complete value and never reaches the missing
+       ;; EndMark. The CBOR serializer reads the stream to EOF, so it hit the
+       ;; truncation -- a compressor bug that only one serializer could see.
+       ;;
+       ;; Closing the wrapper closes `bytes` too; konserve hands each blob a
+       ;; fresh stream, which is what makes that safe.
        (let [lz4-byte (LZ4FrameOutputStream. bytes)]
          (-serialize serializer lz4-byte write-handlers val)
-         (.flush lz4-byte)))))
+         (.close lz4-byte)))))
 
 (defn null-compressor [serializer]
   (NullCompressor. serializer))
