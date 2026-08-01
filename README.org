@@ -485,7 +485,20 @@ used by all current backends except lmdb and memory.
 #+END_SRC
 
 *Compression:*
-- LZ4 compression (JVM only)
+- =:lz4= — fast, JVM only. Compressor byte 1.
+- =:zstd= — smaller, JVM only. Compressor byte 2. Requires the optional
+  dependency =com.github.luben/zstd-jni=; without it, selecting =:zstd= throws
+  an actionable error rather than failing to load.
+
+On one 512-datom blob, zstd at its default level 3 was both **23x faster than
+LZ4-HC and roughly half the size** (69 us -> 2507 B against 1602 us -> 4767 B),
+which is why konserve's LZ4 stays the *fast* compressor: whoever selects =:lz4=
+wants speed, and ratio is what =:zstd= is for.
+
+Note for readers outside Clojure: konserve compresses through zstd-jni's
+streaming writer, which cannot know the total length before it starts, so the
+frame header carries **no content size**. A one-shot decompressor fails on
+these frames; use a streaming one. See =interop/read_konserve_blob.py=.
 
 *Encryption:*
 - AES/CBC/PKCS{5/7}Padding with 256 bit
@@ -499,6 +512,32 @@ Different formats for =edn= serialization like [[https://github.com/clojure/data
 have a reasonable default setting. You can extend the serialization
 protocol to other formats if needed. [[https://github.com/replikativ/incognito][Incognito]] support is available for
 custom records.
+
+| =:StringSerializer=   | 0 | =pr-str= / =read-string=                     |
+| =:FressianSerializer= | 1 | fressian, JVM only                           |
+| =:CBORSerializer=     | 2 | clj-cbor, JVM only                           |
+| =:BoringSerializer=   | 3 | [[https://github.com/replikativ/boring][boring]] — CBOR, JVM *and* ClojureScript |
+
+**** Reading a store from another language
+
+=:BoringSerializer= writes [[https://www.rfc-editor.org/rfc/rfc8949][RFC 8949 CBOR]], so a store written by Clojure is
+readable by anything with a CBOR library — no Clojure and no JVM involved.
+=interop/read_konserve_blob.py= is the entire format in one file, and it is
+executed by =konserve.interop-python-test= against a real blob rather than
+pasted into this document, so it cannot drift away from what konserve writes.
+
+The layout is a 20-byte header followed by the metadata and value segments,
+each compressed *independently* so metadata can be read without touching the
+value:
+
+#+BEGIN_SRC
+  byte 0     storage layout version (1)
+  byte 1     serializer id      (3 = BoringSerializer)
+  byte 2     compressor id      (0 none, 1 lz4, 2 zstd)
+  byte 3     encryptor id       (0 none, 1 aes)
+  bytes 4-7  metadata length, big-endian
+  bytes 8-19 spare, zero
+#+END_SRC
 
 **** Tagged Literals
 

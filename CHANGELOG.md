@@ -47,8 +47,30 @@ All notable, user-visible changes to konserve are documented here.
   `store-key-not-found-ex` on an absent key. (`dissoc`'s single-key fast path also
   honours `:ignore-existence?`; the multi-key GC delete path is a separate
   follow-up.)
+- **`:BoringSerializer` (serializer byte 3)** — [boring](https://github.com/replikativ/boring),
+  an RFC 8949 CBOR codec that runs on the JVM *and* ClojureScript from one
+  implementation. Unlike `:CBORSerializer` (byte 2, clj-cbor) it accepts read
+  handlers rather than throwing on them, and unlike `:FressianSerializer` it is
+  not JVM-only. Because the payload is standard CBOR, a store written by
+  Clojure can be read by any language with a CBOR library:
+  `interop/read_konserve_blob.py` is the whole format in one file, and
+  `konserve.interop-python-test` runs it against a real blob so it cannot drift
+  from what konserve writes.
+- **`:zstd` compressor (compressor byte 2)**, via the optional dependency
+  `com.github.luben/zstd-jni`. Loaded reflectively so the native binaries stay
+  out of every user's dependency graph; when absent, byte 2 resolves to a
+  compressor that throws an actionable message instead of the namespace failing
+  to load. On one 512-datom blob zstd-3 was 23x faster than LZ4-HC *and* about
+  half the size, which is why `:lz4` stays the fast compressor rather than
+  being switched to the high one.
 
 ### Fixed
+- **LZ4 was broken on every GraalVM JDK, not just native images.**
+  `native-image-build?` tested only whether `org.graalvm.nativeimage.ImageInfo`
+  was on the classpath — and that class ships with every GraalVM JDK, so an
+  ordinary JVM run on GraalVM took the native-image path: NPE on write, throw
+  on read. It now asks `ImageInfo/inImageCode`, which is the question that was
+  meant.
 - **A `:frontend-only` tiered store no longer deletes the shared backend.** `-delete-store
   :tiered` deleted the backend unconditionally. Under `:write-policy :frontend-only` the
   store is a read-through **cache** over a backend that another peer OWNS and that this
