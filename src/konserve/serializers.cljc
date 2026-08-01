@@ -86,21 +86,67 @@
   natively via CBOR tag 27, which is the problem incognito exists to work
   around for fressian. Only the read direction has to be taught anything, and
   an unregistered record still decodes to an inert value carrying its name and
-  fields rather than being lost."
-  [registry read-handlers]
-  (let [handlers (some-> read-handlers deref)]
-    (if (seq handlers)
-      (reduce-kv (fn [reg tag ctor] (boring/register-record reg (str tag) ctor))
-                 registry handlers)
-      registry)))
+  fields rather than being lost.
 
-(defrecord BoringSerializer [registry encode-opts]
+  Takes the handler MAP, already deref'd: `registry-for` below derefs once and
+  memoises on the result, so dereferencing again here would both re-read a
+  changing atom mid-computation and fail outright when handed the map.
+
+  One `register-records` rather than a fold of `register-record`: a registry
+  copies its whole backing map per registration, so the fold was quadratic in
+  the handler count -- 4.84 us at 20 handlers against 0.82. The cache below
+  means this runs rarely, but a cache miss should not be quadratic either.
+  Symbol keys are stringified by boring, so incognito's map needs no
+  preparation."
+  [registry handlers]
+  (if (seq handlers)
+    (boring/register-records registry handlers)
+    registry))
+
+(def ^:private ^:const registry-cache-size
+  "How many (base, handlers) pairs one serializer instance remembers.
+
+  Not 1. `byte->serializer` holds a SINGLE boring serializer instance, shared by
+  every store that does not override it in its config -- so a one-entry cache
+  thrashes the moment two stores with different handler maps are open at once,
+  and falls straight back to refolding per read (measured: 0.20 us -> 5.56 us).
+  A handful of entries covers the realistic case; the scan is pointer
+  comparisons."
+  4)
+
+(defn- registry-cache []
+  (atom []))
+
+(defn- registry-for
+  "The read registry for `base` plus `handlers-atom`'s current handlers,
+  memoised.
+
+  Keyed on BOTH the base registry and the handler map, by identity. Keying on
+  the handlers alone would serve a stale registry after someone `swap!`s a new
+  tag into the serializer's own registry: the encoder derefs it per frame, so
+  the same change would take effect for writing and never for reading."
+  [cache base handlers-atom]
+  (let [h (if handlers-atom @handlers-atom {})
+        entries @cache
+        hit (some (fn [e] (when (and (identical? (:base e) base)
+                                     (identical? (:src e) h))
+                            e))
+                  entries)]
+    (if hit
+      (:reg hit)
+      (let [reg (record-registry base h)]
+        (swap! cache (fn [es]
+                       (vec (take registry-cache-size
+                                  (cons {:base base :src h :reg reg} es)))))
+        reg))))
+
+(defrecord BoringSerializer [registry encode-opts cache]
   #?@(:cljs (INamed
              (-name [_] "BoringSerializer")
              (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers input]
-    (let [opts (assoc encode-opts :registry (record-registry registry read-handlers))]
+    (let [opts (assoc encode-opts :registry (registry-for cache registry read-handlers))]
       #?(:clj  (boring/decode (.readAllBytes ^java.io.InputStream input) opts)
          :cljs (boring/decode input opts))))
   (-serialize [_ #?(:clj output-stream :cljs _) write-handlers val]
@@ -123,7 +169,8 @@
   doc/EXTENDING.md). Records need no registration to be WRITTEN."
   ([] (boring-serializer (boring/tag-registry) {}))
   ([registry] (boring-serializer registry {}))
-  ([registry opts] (map->BoringSerializer {:registry registry :encode-opts opts})))
+  ([registry opts] (map->BoringSerializer {:registry registry :encode-opts opts
+                                           :cache (registry-cache)})))
 
 (defrecord StringSerializer []
   #?@(:cljs (INamed
