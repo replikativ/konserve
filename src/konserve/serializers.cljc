@@ -90,11 +90,17 @@
 
   Takes the handler MAP, already deref'd: `registry-for` below derefs once and
   memoises on the result, so dereferencing again here would both re-read a
-  changing atom mid-computation and fail outright when handed the map."
+  changing atom mid-computation and fail outright when handed the map.
+
+  One `register-records` rather than a fold of `register-record`: a registry
+  copies its whole backing map per registration, so the fold was quadratic in
+  the handler count -- 4.84 us at 20 handlers against 0.82. The cache below
+  means this runs rarely, but a cache miss should not be quadratic either.
+  Symbol keys are stringified by boring, so incognito's map needs no
+  preparation."
   [registry handlers]
   (if (seq handlers)
-    (reduce-kv (fn [reg tag ctor] (boring/register-record reg (str tag) ctor))
-               registry handlers)
+    (boring/register-records registry handlers)
     registry))
 
 (def ^:private ^:const registry-cache-size
