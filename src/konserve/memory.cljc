@@ -79,7 +79,15 @@
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (<! (locked-cb {:input-stream (second (get @state key))}))))))
+                  ;; `:blob` because that is what this store has — the bytes that
+                  ;; were `bassoc`'d, with nothing to drain. `:input-stream` stays
+                  ;; alongside it: it was always a misnomer here (it is not a
+                  ;; stream and never was), but callbacks destructure it, and on
+                  ;; the JVM they get away with it only because
+                  ;; `clojure.java.io/copy` accepts a `byte[]`. Removing it would
+                  ;; break them; naming the truth next to it does not.
+                  (go (<! (locked-cb (let [v (second (get @state key))]
+                                       {:input-stream v :blob v})))))))
   (-bassoc [_ key meta-up-fn input opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
