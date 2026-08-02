@@ -631,12 +631,26 @@
                     acc))))))
 
 (defn bget
-  "Calls locked-cb with a platform specific binary representation inside
-  the lock, e.g. wrapped InputStream on the JVM and Blob in
-  JavaScript. You need to properly close/dispose the object when you
-  are done!
+  "Calls locked-cb with a platform specific binary representation inside the lock.
+  You need to properly close/dispose the object when you are done!
 
-  You have to do all work in locked-cb, e.g.
+  The callback receives a MAP, and which keys it carries depends on the backend:
+
+    :blob          bytes, already materialised — nothing to drain
+    :input-stream  a streaming handle, valid only for the callback's extent
+
+  Concretely: the JVM filestore passes `:input-stream` (an InputStream);
+  node-filestore passes `:blob` (a js/Buffer) when synchronous and
+  `:input-stream` (an fs.ReadStream, plus `:size`) when asynchronous; indexeddb
+  passes `:input-stream` (a WHATWG ReadableStream); the memory store passes both,
+  since it holds the bytes outright.
+
+  If you just want the bytes — which is most callers — do not write this by hand
+  for each backend. `konserve.binary/to-bytes` is that callback:
+
+    (k/bget store :my-key (konserve.binary/to-bytes opts) opts)
+
+  Write your own when you need to stream rather than materialise, e.g.
 
   (fn [{is :input-stream}]
     (let [tmp-file (io/file \"/tmp/my-private-copy\")]

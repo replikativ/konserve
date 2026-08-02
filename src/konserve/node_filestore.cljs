@@ -74,12 +74,19 @@
           bytes-read (iofs/read fd buf {:position pos :length (alength buf)})]
       (verify-read-size value-size bytes-read)
       buf))
-  (-read-binary [this meta-size locked-cb _env]
+  (-read-binary [_this meta-size locked-cb _env]
+    ;; `iofs/read`'s positional arity is (fd buffer BUFFER-offset length
+    ;; FILE-position). This passed the file offset as the buffer offset and read
+    ;; from position 0 — both arguments in the wrong place. Since the header
+    ;; guarantees offset > 0, buffer-offset + length always exceeded the buffer,
+    ;; so every sync bget raised ERR_OUT_OF_RANGE; no test caught it because the
+    ;; existing coverage goes through the async path. Uses the options-map arity
+    ;; now, like -read-value directly above, where the two cannot be confused.
     (let [blob-size ^number (.-size (fs.fstatSync fd))
           offset (+ meta-size storage-layout/header-size)
           value-len (- blob-size offset)
-          blob (js/Buffer. value-len)
-          bytes-read (iofs/read (.-fd this) blob offset value-len 0)]
+          blob (js/Buffer.alloc value-len)
+          bytes-read (iofs/read fd blob {:position offset :length value-len})]
       (verify-read-size value-len bytes-read)
       (locked-cb {:blob blob})))
   (-write-header [_this header _env]
