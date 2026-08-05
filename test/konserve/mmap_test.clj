@@ -208,3 +208,35 @@
     (is (some? (connect-fs-store (fresh-dir "null-cmp")
                                  :compressor null-compressor
                                  :opts {:sync? true})))))
+
+(deftest encoding-is-per-blob-not-per-store
+  (testing "a store's serializer applies to what it writes NEXT. Blobs already
+            on disk keep the encoding they were written with, and every read
+            dispatches on that blob's own header -- so switching a store's
+            default needs no migration and leaves a mix, by design.
+
+            konserve.mmap must therefore judge the BLOB, never the store: a
+            boring-configured store still holds fressian blobs it cannot
+            navigate, and that is correct rather than a failure."
+    (let [dir (fresh-dir "mixed")
+          fressian-store (connect-fs-store dir :opts {:sync? true})
+          _ (k/assoc fressian-store "old" {:a 1} {:sync? true})
+          boring-store (connect-fs-store
+                        dir :default-serializer :BoringSerializer
+                        :opts {:sync? true})
+          _ (k/assoc boring-store "new" value {:sync? true})]
+      (testing "both blobs read correctly through EITHER store"
+        (is (= {:a 1} (k/get boring-store "old" nil {:sync? true})))
+        (is (some? (k/get fressian-store "new" nil {:sync? true}))))
+      (testing "the boring blob is navigable"
+        (is (true? (kmm/navigable? boring-store "new")))
+        (when ffm?
+          (is (= "name-137" (kmm/with-mmap-value [c boring-store "new"]
+                              (nav/value (get-in c ["customer-137" "name"])))))))
+      (testing "and the fressian one is not -- judged by its own header, not by
+                the store that happens to be asking"
+        (is (false? (kmm/navigable? boring-store "old")))
+        (is (= 1 (:serializer (ex-data (try (kmm/value-location boring-store "old")
+                                            (catch Exception e e)))))))
+      (testing "a missing key is not navigable rather than throwing"
+        (is (false? (kmm/navigable? boring-store "absent")))))))
