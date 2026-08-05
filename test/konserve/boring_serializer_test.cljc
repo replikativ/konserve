@@ -129,8 +129,8 @@
           ser       (ser/boring-serializer)
           handlers  (atom {'konserve.boring_serializer_test.BPoint map->BPoint})
           back      (p/-deserialize ser handlers
-                                     #?(:clj (java.io.ByteArrayInputStream. old-bytes)
-                                        :cljs old-bytes))]
+                                    #?(:clj (java.io.ByteArrayInputStream. old-bytes)
+                                       :cljs old-bytes))]
       (is (= BPoint (type back)) "old-format record must reconstruct")
       (is (= (->BPoint 3 4) back)))))
 
