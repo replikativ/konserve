@@ -24,6 +24,9 @@
             [konserve.memory :refer [map->MemoryStore]]
             [konserve.protocols :as p]
             [konserve.serializers :as ser]
+            [boring.core :as boring]
+            [boring.data :as bdata]
+            #?(:clj [boring.nav :as nav])
             #?@(:clj [[clojure.java.io :as io]
                       [konserve.filestore :refer [connect-fs-store delete-store]]]))
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
@@ -93,12 +96,43 @@
        (is (= "1.50" (str (round-trip 1.50M)))))))
 
 (deftest records-round-trip-with-a-read-handler
-  (testing "incognito-style handlers are keyed by the normalized type symbol,
-            which is exactly boring's own wire name — so the bridge is a rename"
+  (testing "incognito-style handlers are keyed by the MUNGED type symbol
+            (`/` -> `.`, `-` -> `_`). That was boring's own wire name until
+            0.1.11, which writes the true `namespace/Name` instead — so the
+            bridge registers both spellings and this key must keep working."
     (let [back (round-trip (->BPoint 3 4)
                            {'konserve.boring_serializer_test.BPoint map->BPoint})]
       (is (= (->BPoint 3 4) back))
+      (is (= BPoint (type back)))))
+
+  (testing "and a handler keyed by boring's OWN spelling works too, since a
+            caller who reads boring's docs rather than incognito's will write
+            it that way"
+    (let [back (round-trip (->BPoint 3 4)
+                           {'konserve.boring-serializer-test/BPoint map->BPoint})]
       (is (= BPoint (type back))))))
+
+(deftest a-record-written-before-0-1-11-still-reads
+  (testing "THE UPGRADE CASE, and the reason both spellings are registered.
+            A konserve store is durable: every record written through boring
+            0.1.6 carries the MUNGED name on disk forever, while everything
+            written from now on carries the true one. A reader that knows only
+            the new spelling silently returns an UnknownRecord for half the
+            store — no error, just the wrong type.
+
+            The bytes here are a tag-27 frame naming `konserve.boring_serializer
+            _test.BPoint`, which is exactly what 0.1.6 wrote, decoded through
+            the same handler map a user upgrading would already have."
+    (let [old-bytes (boring/encode
+                     (bdata/unknown-record
+                      "konserve.boring_serializer_test.BPoint" {:x 3 :y 4}))
+          ser       (ser/boring-serializer)
+          handlers  (atom {'konserve.boring_serializer_test.BPoint map->BPoint})
+          back      (p/-deserialize ser handlers
+                                    #?(:clj (java.io.ByteArrayInputStream. old-bytes)
+                                       :cljs old-bytes))]
+      (is (= BPoint (type back)) "old-format record must reconstruct")
+      (is (= (->BPoint 3 4) back)))))
 
 (deftest records-survive-without-a-read-handler
   (testing "an unregistered record must not be LOST. boring writes the type
@@ -151,3 +185,30 @@
                      "byte 3 — NOT 1 (fressian) and NOT 2 (clj-cbor)"))))
            (finally
              (delete-store dir)))))))
+
+#?(:clj
+   (deftest values-are-indexed-and-navigable
+     (testing "a stored value carries an offset index by default, so it can be
+               navigated without materialising the rest of it. Small values are
+               exempt automatically: nothing clears boring's :index-min, so no
+               frame is emitted and the bytes are unchanged."
+       (let [big  (into {} (for [i (range 200)]
+                             [(str "customer-" i) {"name" (str "name-" i)}]))
+             ser  (ser/boring-serializer)
+             ->b  (fn [s v] (let [o (ByteArrayOutputStream.)]
+                              (p/-serialize s o (atom {}) v)
+                              (.toByteArray o)))
+             bs   (->b ser big)]
+         (testing "it still decodes to the same value"
+           (is (= big (round-trip big))))
+         (testing "and boring.nav can reach one key through the index"
+           (is (= "name-137"
+                  (nav/value (get-in (nav/source bs) ["customer-137" "name"])))))
+         (testing "a small value gets no frame, so it costs nothing"
+           (is (= (seq (boring/encode {:a 1} {:stringref false}))
+                  (seq (->b ser {:a 1})))))
+         (testing "{:index 0} is the off switch and restores stringref"
+           (let [plain (->b (ser/boring-serializer (boring/tag-registry) {:index 0}) big)]
+             (is (= big (boring/decode plain)))
+             (is (< (alength plain) (alength bs))
+                 "unindexed keeps stringref, so it is smaller uncompressed")))))))

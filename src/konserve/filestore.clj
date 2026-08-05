@@ -3,8 +3,6 @@
    [clojure.core.async :refer [go <!! chan close! put!]]
    [clojure.java.io :as io]
    [clojure.string :refer [includes? ends-with?]]
-   [konserve.compressor :refer [null-compressor]]
-   [konserve.encryptor :refer [null-encryptor]]
    [konserve.impl.defaults :refer [update-blob connect-default-store key->store-key store-key->uuid-key]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          PBackingBlob -close
@@ -707,6 +705,14 @@
   The :filesystem option allows using a custom java.nio.file.FileSystem (e.g., Jimfs for testing).
   When provided, all path operations will use that filesystem instead of the default.
 
+  Compression and encryption are set UNDER :config, as a type keyword:
+
+      (connect-fs-store path :config {:compressor {:type :lz4}})
+
+  A top-level :compressor/:encryptor is refused rather than ignored -- it used
+  to be silently dropped, leaving the store uncompressed while the caller
+  believed otherwise.
+
   Defaults are
   {:base           path
    :serializer     fressian-serializer
@@ -723,9 +729,12 @@
                 filesystem nil}
            :as params}]
   ;; check config
+  ;; NO :compressor / :encryptor here. They were defaults that
+  ;; `connect-default-store` never read -- it derives both from
+  ;; `(get-in config [:compressor :type])` -- so they were dead, and worse,
+  ;; they made a top-level `:compressor` look supported when passing one did
+  ;; nothing at all. That path now throws; see connect-default-store.
   (let [store-config (merge {:default-serializer :FressianSerializer
-                             :compressor         null-compressor
-                             :encryptor          null-encryptor
                              :read-handlers      (atom {})
                              :write-handlers     (atom {})
                              :buffer-size        (* 1024 1024)

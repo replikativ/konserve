@@ -5,8 +5,8 @@
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
-   [konserve.compressor :refer [get-compressor]]
-   [konserve.encryptor :refer [get-encryptor]]
+   [konserve.compressor :refer [get-compressor null-compressor]]
+   [konserve.encryptor :refer [get-encryptor null-encryptor]]
    [konserve.protocols :refer [PEDNKeyValueStore
                                PBinaryKeyValueStore
                                -serialize -deserialize
@@ -755,7 +755,8 @@
            read-handlers      (atom {})
            write-handlers     (atom {})
            buffer-size        (* 1024 1024)
-           opts               {:sync? false}}}]
+           opts               {:sync? false}}
+    :as   params}]
   ;; check config
   (let [complete-config (merge {:sync-blob? true
                                 :in-place? false
@@ -763,6 +764,31 @@
                                config)
         compressor (get-compressor (get-in config [:compressor :type]))
         encryptor (get-encryptor (get-in config [:encryptor :type]))]
+    ;; A top-level `:compressor`/`:encryptor` is REFUSED rather than ignored.
+    ;; Both are read from `config` above, so passing a function at the top
+    ;; level -- which reads exactly like it should work, and which
+    ;; `connect-fs-store` itself used to hand us as a default -- did nothing
+    ;; at all: the store came back on `null-compressor` and wrote a 0 into
+    ;; every blob header while the caller believed their data was compressed.
+    ;; Silence is the wrong answer for a durable property nobody re-checks.
+    ;; Only a MEANINGFUL one is refused. konserve-rocksdb passes
+    ;; `:compressor null-compressor` and `:encryptor null-encryptor` as dead
+    ;; defaults -- the same pattern konserve's own filestore carried until it
+    ;; was removed -- and throwing on those would break a maintained backend on
+    ;; upgrade for a value that asks for nothing. Passing `lz4-compressor`,
+    ;; which is someone actually trying to configure compression and silently
+    ;; getting none, is what has to be loud.
+    (when (or (and (contains? params :compressor)
+                   (not= (:compressor params) null-compressor))
+              (and (contains? params :encryptor)
+                   (not= (:encryptor params) null-encryptor)))
+      (throw (ex-info (str "konserve: :compressor and :encryptor are set under "
+                           ":config, not at the top level. Write "
+                           "{:config {:compressor {:type :lz4}}} -- a TYPE "
+                           "keyword, not a function. Accepted types: :lz4, "
+                           ":zstd, or omit for none.")
+                      {:type :store-configuration-error
+                       :got (select-keys params [:compressor :encryptor])})))
     (async+sync
      (:sync? opts) *default-sync-translation*
      (go-try-

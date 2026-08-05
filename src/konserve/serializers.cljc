@@ -1,6 +1,7 @@
 (ns konserve.serializers
   (:require #?(:clj [clj-cbor.core :as cbor])
             [boring.core :as boring]
+            [clojure.string :as str]
             #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
             [konserve.protocols :refer [PStoreSerializer]]
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
@@ -74,13 +75,99 @@
 ;;     This one runs on both platforms from the same code.
 ;; ---------------------------------------------------------------------------
 
+(def ^:private ^:const default-index-stride
+  "Anchor every 16th entry, boring's own default. Containers smaller than
+  `:index-min` (also 16) get no node at all, so a small value pays NOTHING --
+  `encode-indexed` on a three-element vector emits the same bytes a plain
+  encode does. That is what makes indexing affordable as a default: konserve's
+  meta blobs and small values are untouched."
+  16)
+
+(def ^:private ^:const writer-buffer-size
+  "Chunk size for the per-call Writer. The value is staged by the store
+  anyway, so this trades allocation against flush count rather than peak
+  memory."
+  8192)
+
+(defn- indexing?
+  "Whether this serializer should seal an offset index onto each value.
+
+  ON BY DEFAULT, and `{:index 0}` is the documented off switch -- boring's own
+  option validator says so for every entry point that takes it.
+
+  Why default on: the index makes a stored value navigable with
+  `boring.nav` -- reaching one key without materialising the rest -- and it is
+  close to free where it matters. Measured, datom-shaped content at 200 and
+  5 000 records: +27% and +25% raw, but +3.7% and -0.7% under zstd, because
+  indexing forces `:stringref false` and zstd recovers what stringref was
+  saving. Non-datom shapes cost about 20% under zstd.
+
+  It is also FORWARD-COMPATIBLE, which is what makes it safe to switch on for
+  existing deployments: an indexed value is a two-item CBOR sequence, and
+  `decode` returns the first item and ignores the frame. Verified against
+  boring 0.1.6 -- an 0.1.11 indexed blob decodes there correctly.
+
+  The caveat is compression, and it is not small: a compressed blob has to be
+  decompressed whole before anything can navigate it, so with a compressor on
+  the index saves DECODE (materialising objects) but not IO. Only an
+  uncompressed store gets the mmap and ranged-read win. See
+  .internal/boring-indexing.md."
+  [opts]
+  (pos? (long (get opts :index default-index-stride))))
+
+(defn- boring-wire-name
+  "incognito's munged key as boring >= 0.1.11 spells it, or nil if it is
+  already in that form.
+
+  `my_ns.core.MyRecord` -> `my-ns.core/MyRecord`: the LAST dot becomes the
+  namespace/name separator, and underscores in the namespace part become
+  hyphens. A key that already contains `/` is left alone -- it is either
+  boring's own spelling or a hand-picked name, and neither wants munging."
+  [k]
+  (let [s (str k)]
+    (when-not (str/includes? s "/")
+      (let [i (str/last-index-of s ".")]
+        (when (and i (pos? i))
+          (str (str/replace (subs s 0 i) "_" "-")
+               "/" (subs s (inc i))))))))
+
+(defn- with-boring-names
+  "`handlers` plus an entry under each key's boring wire name, where that
+  differs. The original key wins if both spell the same thing."
+  [handlers]
+  (reduce-kv (fn [m k v]
+               (if-let [n (boring-wire-name k)]
+                 (assoc m n v)
+                 m))
+             handlers
+             handlers))
+
 (defn- record-registry
   "Fold incognito-style record handlers into a boring registry.
 
   incognito keys its handlers by `(-> r type pr-str normalize-ns symbol)` --
-  the type name with `/` -> `.` and `-` -> `_`. That is exactly boring's own
-  wire name for a record (`boring.data/record-type-name`), so the mapping is
-  a straight rename with no translation.
+  the type name with `/` -> `.` and `-` -> `_`. That USED to be exactly
+  boring's own wire name for a record, making the mapping a straight rename.
+
+  **It stopped being true in boring 0.1.11**, which writes a record's true
+  `namespace/Name` as written and munges nothing. So a handler keyed
+  `my_ns.MyRecord` no longer matches a record boring now names
+  `my-ns/MyRecord`, and the symptom is silent: the record decodes to an
+  `UnknownRecord` carrying the right name and fields, with no error.
+
+  BOTH SPELLINGS ARE REGISTERED, and that is a persistence requirement rather
+  than a convenience. A konserve store is durable: records written under
+  boring 0.1.6 carry the munged name on disk forever, and records written from
+  now on carry the true one. A reader that knows only one of them silently
+  fails on half the store. Registering both makes an existing store keep
+  working across the upgrade.
+
+  The un-munging is best-effort by construction -- `my-ns` and `my_ns` both
+  munge to `my_ns`, so the inverse cannot be exact, and boring resolves the
+  same ambiguity on the JVM by scanning loaded namespaces (which ClojureScript
+  cannot do). Here it does not have to be exact: the key as given is
+  registered too, so a genuine underscore namespace still resolves through
+  that one.
 
   Note boring does not NEED write handlers for records: it emits the type name
   natively via CBOR tag 27, which is the problem incognito exists to work
@@ -100,7 +187,7 @@
   preparation."
   [registry handlers]
   (if (seq handlers)
-    (boring/register-records registry handlers)
+    (boring/register-records registry (with-boring-names handlers))
     registry))
 
 (def ^:private ^:const registry-cache-size
@@ -155,11 +242,28 @@
     ;; accepted and ignored rather than rejected, because byte 2 REJECTING them
     ;; is precisely why it was unusable.
     (let [opts (assoc encode-opts :registry registry)]
-      #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
-         :cljs (boring/encode val opts)))))
+      (if (indexing? opts)
+        ;; `write-indexed!` on the JVM rather than `encode-indexed`, even though
+        ;; the store stages into a ByteArrayOutputStream either way:
+        ;; `encode-indexed` builds the whole array and then WALKS it to derive
+        ;; the index -- two passes and two copies -- while this captures the
+        ;; nodes as the writer emits them. A fresh Writer per call because a
+        ;; Writer is not thread-safe and this serializer is shared; that costs
+        ;; ~600 bytes since boring 0.1.11 made the index scaffolding lazy.
+        #?(:clj  (boring/write-indexed! (boring/writer writer-buffer-size)
+                                        val output-stream opts)
+           :cljs (boring/encode-indexed val opts))
+        #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
+           :cljs (boring/encode val opts))))))
 
 (defn boring-serializer
   "A portable CBOR serializer backed by boring.
+
+  **BETA. Not yet recommended for production stores.** The codec itself is
+  well covered, but its use as konserve's STORE serializer has not been
+  exercised at scale or over a long-lived store, and byte 3 has not carried
+  real data through an upgrade cycle. Fressian (byte 1) remains the default
+  and the tested choice. Try this on data you can regenerate.
 
   `opts` are boring's encode options; `:shapes true` is worth enabling for
   stores holding many same-shaped maps -- it strips repeated keys and was

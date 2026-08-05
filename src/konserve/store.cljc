@@ -268,29 +268,52 @@
 ;; ===== :file Backend (JVM only) =====
 ;; ClojureScript/Node.js :file backend is external - require konserve.node-filestore
 
+;; LIFECYCLE-ONLY KEYS, and everything else is forwarded.
+;;
+;; These methods used to hand `connect-fs-store` four keys by name -- :path,
+;; :config, :filesystem, :opts -- and silently drop the rest. So a config
+;; carrying `:default-serializer :BoringSerializer` produced a FRESSIAN store,
+;; and `:read-handlers` produced a store with no handlers, both without a word.
+;; Measured: the blob header read [1 1 1 0] -- serializer 1, fressian -- for a
+;; store that asked for boring.
+;;
+;; Re-listing keys by hand is what made that inevitable: every option added to
+;; `connect-fs-store` had to be added here too, and nothing enforced it. So the
+;; list here is of keys the LIFECYCLE owns and the backend must not see, which
+;; changes only when this namespace changes. Backend-specific validation is the
+;; backend's job -- `connect-fs-store` is where a bad `:config` should be
+;; refused, not here.
+(def ^:private lifecycle-keys
+  "Keys `konserve.store` consumes itself. Everything else reaches the backend."
+  #{:backend :path :id})
+
+#?(:clj
+   (defn- fs-store-args
+     "`connect-fs-store` arguments from a lifecycle config, as a kwarg seq."
+     [all-config opts]
+     (mapcat identity (-> all-config
+                          (as-> c (apply dissoc c lifecycle-keys))
+                          (assoc :opts opts)))))
+
 #?(:clj
    (defmethod -connect-store :file
-     [{:keys [path config filesystem] :as all-config} opts]
+     [{:keys [path filesystem] :as all-config} opts]
      (let [exists (konserve.filestore/store-exists? filesystem path)]
        (when-not exists
          (throw (ex-info (str "File store does not exist at path: " path)
                          {:path path :config all-config})))
-       (konserve.filestore/connect-fs-store path
-                                            :config config
-                                            :filesystem filesystem
-                                            :opts opts))))
+       (apply konserve.filestore/connect-fs-store path
+              (fs-store-args all-config opts)))))
 
 #?(:clj
    (defmethod -create-store :file
-     [{:keys [path config filesystem] :as all-config} opts]
+     [{:keys [path filesystem] :as all-config} opts]
      (let [exists (konserve.filestore/store-exists? filesystem path)]
        (when exists
          (throw (ex-info (str "File store already exists at path: " path)
                          {:path path :config all-config})))
-       (konserve.filestore/connect-fs-store path
-                                            :config config
-                                            :filesystem filesystem
-                                            :opts opts))))
+       (apply konserve.filestore/connect-fs-store path
+              (fs-store-args all-config opts)))))
 
 #?(:clj
    (defmethod -store-exists? :file
