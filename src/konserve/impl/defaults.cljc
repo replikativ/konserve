@@ -5,8 +5,8 @@
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
    [konserve.serializers :refer [key->serializer]]
-   [konserve.compressor :refer [get-compressor]]
-   [konserve.encryptor :refer [get-encryptor]]
+   [konserve.compressor :refer [get-compressor null-compressor]]
+   [konserve.encryptor :refer [get-encryptor null-encryptor]]
    [konserve.protocols :refer [PEDNKeyValueStore
                                PBinaryKeyValueStore
                                -serialize -deserialize
@@ -771,7 +771,17 @@
     ;; at all: the store came back on `null-compressor` and wrote a 0 into
     ;; every blob header while the caller believed their data was compressed.
     ;; Silence is the wrong answer for a durable property nobody re-checks.
-    (when (or (contains? params :compressor) (contains? params :encryptor))
+    ;; Only a MEANINGFUL one is refused. konserve-rocksdb passes
+    ;; `:compressor null-compressor` and `:encryptor null-encryptor` as dead
+    ;; defaults -- the same pattern konserve's own filestore carried until it
+    ;; was removed -- and throwing on those would break a maintained backend on
+    ;; upgrade for a value that asks for nothing. Passing `lz4-compressor`,
+    ;; which is someone actually trying to configure compression and silently
+    ;; getting none, is what has to be loud.
+    (when (or (and (contains? params :compressor)
+                   (not= (:compressor params) null-compressor))
+              (and (contains? params :encryptor)
+                   (not= (:encryptor params) null-encryptor)))
       (throw (ex-info (str "konserve: :compressor and :encryptor are set under "
                            ":config, not at the top level. Write "
                            "{:config {:compressor {:type :lz4}}} -- a TYPE "

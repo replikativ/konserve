@@ -10,7 +10,8 @@
             [konserve.filestore :refer [connect-fs-store]]
             [konserve.mmap :as kmm]
             [boring.nav :as nav]
-            [konserve.store :as st])
+            [konserve.store :as st]
+            [konserve.compressor :refer [null-compressor lz4-compressor]])
   (:import [java.io File FileInputStream FileOutputStream]))
 
 (def ^:private ffm?
@@ -155,8 +156,7 @@
            (:type (ex-data (try (connect-fs-store
                                  (fresh-dir "cmp-toplevel")
                                  :default-serializer :BoringSerializer
-                                 :compressor (requiring-resolve
-                                              'konserve.compressor/lz4-compressor)
+                                 :compressor lz4-compressor
                                  :opts {:sync? true})
                                 (catch Exception e e))))))))
 
@@ -197,3 +197,14 @@
                (mk (fresh-dir "life-both")
                    {:default-serializer :BoringSerializer
                     :config {:compressor {:type :lz4}}})))))))
+
+(deftest a-null-compressor-at-the-top-level-is-tolerated
+  (testing "konserve-rocksdb passes `:compressor null-compressor` as a dead
+            default -- the same pattern konserve's own filestore carried until
+            it was removed. Throwing on that would break a maintained backend
+            on upgrade for a value that asks for nothing. Only a MEANINGFUL
+            compressor is refused, because that is someone trying to configure
+            compression and silently getting none."
+    (is (some? (connect-fs-store (fresh-dir "null-cmp")
+                                 :compressor null-compressor
+                                 :opts {:sync? true})))))
