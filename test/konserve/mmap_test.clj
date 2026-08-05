@@ -9,7 +9,8 @@
             [konserve.core :as k]
             [konserve.filestore :refer [connect-fs-store]]
             [konserve.mmap :as kmm]
-            [boring.nav :as nav])
+            [boring.nav :as nav]
+            [konserve.store :as st])
   (:import [java.io File FileInputStream FileOutputStream]))
 
 (def ^:private ffm?
@@ -158,3 +159,41 @@
                                               'konserve.compressor/lz4-compressor)
                                  :opts {:sync? true})
                                 (catch Exception e e))))))))
+
+;; --------------------------------------------------------------------------
+;; The lifecycle API must not drop what it is given.
+
+(deftest lifecycle-config-reaches-the-backend
+  (testing "`konserve.store/create-store` used to forward four keys by name --
+            :path, :config, :filesystem, :opts -- and silently drop the rest.
+            A config asking for `:default-serializer :BoringSerializer` produced
+            a FRESSIAN store, header byte 1, without a word.
+
+            Asserted on the HEADER rather than the store record, because the
+            header is what a later reader actually dispatches on, and every bug
+            in this family was invisible precisely because nothing checked the
+            resulting bytes."
+    (let [hdr-of (fn [dir]
+                   (with-open [in (FileInputStream. ^File (blob-of dir))]
+                     (let [b (byte-array 4)] (.read in b)
+                          (vec (map #(bit-and % 0xff) b)))))
+          mk (fn [dir cfg]
+               (let [store (st/create-store
+                            (merge {:backend :file :path dir
+                                    :id (java.util.UUID/randomUUID)}
+                                   cfg)
+                            {:sync? true})]
+                 (k/assoc store "customers" value {:sync? true})
+                 [(hdr-of dir) (:default-serializer store)]))]
+      (testing "the default is still fressian, byte 1"
+        (is (= [[1 1 0 0] :FressianSerializer] (mk (fresh-dir "life-default") {}))))
+      (testing ":default-serializer reaches the store AND the header"
+        (is (= [[1 3 0 0] :BoringSerializer]
+               (mk (fresh-dir "life-boring")
+                   {:default-serializer :BoringSerializer}))))
+      (testing "and it composes with :config, which was the one key that did
+                get forwarded"
+        (is (= [[1 3 1 0] :BoringSerializer]
+               (mk (fresh-dir "life-both")
+                   {:default-serializer :BoringSerializer
+                    :config {:compressor {:type :lz4}}})))))))

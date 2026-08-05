@@ -259,6 +259,12 @@
 (defn boring-serializer
   "A portable CBOR serializer backed by boring.
 
+  **BETA. Not yet recommended for production stores.** The codec itself is
+  well covered, but its use as konserve's STORE serializer has not been
+  exercised at scale or over a long-lived store, and byte 3 has not carried
+  real data through an upgrade cycle. Fressian (byte 1) remains the default
+  and the tested choice. Try this on data you can regenerate.
+
   `opts` are boring's encode options; `:shapes true` is worth enabling for
   stores holding many same-shaped maps -- it strips repeated keys and was
   measured at 36% smaller on datom-like content.
