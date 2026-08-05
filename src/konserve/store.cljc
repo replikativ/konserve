@@ -339,31 +339,38 @@
 ;; Default Error Handling
 ;; =============================================================================
 
+(def ^:private known-backends
+  "The backends a user can reach, for the unsupported-backend error.
+
+  ONE string, FOUR call sites. It was four copies, and they had already
+  drifted: `:jdbc` and `:gcs` were missing from all of them while both are
+  listed in the README as available. An error message that names an incomplete
+  set sends someone looking for a backend that exists."
+  (str "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
+       "\nExternal backends: :file (Node.js - konserve.node-filestore),"
+       " :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb, :jdbc,"
+       " :gcs"
+       "\nMake sure the corresponding backend module is required before use."))
+
 (defmethod -connect-store :default
   [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
-               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
-               "\nMake sure the corresponding backend module is required before use.")
+               known-backends)
           {:backend backend :config config})))
 
 (defmethod -create-store :default
   [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
-               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
-               "\nMake sure the corresponding backend module is required before use.")
+               known-backends)
           {:backend backend :config config})))
 
 (defmethod -store-exists? :default
   [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
-               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
-               "\nMake sure the corresponding backend module is required before use.")
+               known-backends)
           {:backend backend :config config})))
 
 ;; ===== :tiered Backend (built-in) =====
@@ -483,9 +490,7 @@
   [{:keys [backend] :as config} _opts]
   (throw (ex-info
           (str "Unsupported store backend: " backend
-               "\n\nBuilt-in backends: :memory (all platforms), :file (JVM only), :tiered"
-               "\nExternal backends: :file (Node.js - konserve.node-filestore), :indexeddb (browser), :s3, :dynamodb, :redis, :lmdb, :rocksdb"
-               "\nMake sure the corresponding backend module is required before use.")
+               known-backends)
           {:backend backend :config config})))
 
 (defmethod -release-store :default

@@ -330,10 +330,7 @@ After requiring a backend module, it automatically registers with the multimetho
 - =:lmdb= - LMDB ([[https://github.com/replikativ/konserve-lmdb][konserve-lmdb]])
 - =:rocksdb= - RocksDB ([[https://github.com/replikativ/konserve-rocksdb][konserve-rocksdb]])
 - =:jdbc= - JDBC databases ([[https://github.com/replikativ/konserve-jdbc][konserve-jdbc]])
-
-*** Unofficial Backends
-
-- [[https://github.com/The-Literal-Company/konserve-gcs][konserve-gcs]] - Google Cloud Storage
+- =:gcs= - Google Cloud Storage ([[https://github.com/replikativ/konserve-gcs][konserve-gcs]])
 
 *** Outdated Backends
 
@@ -570,7 +567,7 @@ system by defining multimethod implementations for:
 All backends must implement strict semantics where =create-store= errors if the store
 already exists and =connect-store= errors if the store doesn't exist. See existing
 external backends (konserve-s3, konserve-lmdb, konserve-rocksdb, konserve-redis,
-konserve-dynamodb) for reference implementations.
+konserve-dynamodb, konserve-jdbc, konserve-gcs) for reference implementations.
 
 ** Projects Building on Konserve
    :PROPERTIES:
