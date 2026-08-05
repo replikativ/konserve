@@ -1,6 +1,7 @@
 (ns konserve.serializers
   (:require #?(:clj [clj-cbor.core :as cbor])
             [boring.core :as boring]
+            [clojure.string :as str]
             #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
             [konserve.protocols :refer [PStoreSerializer]]
             [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
@@ -74,13 +75,59 @@
 ;;     This one runs on both platforms from the same code.
 ;; ---------------------------------------------------------------------------
 
+(defn- boring-wire-name
+  "incognito's munged key as boring >= 0.1.11 spells it, or nil if it is
+  already in that form.
+
+  `my_ns.core.MyRecord` -> `my-ns.core/MyRecord`: the LAST dot becomes the
+  namespace/name separator, and underscores in the namespace part become
+  hyphens. A key that already contains `/` is left alone -- it is either
+  boring's own spelling or a hand-picked name, and neither wants munging."
+  [k]
+  (let [s (str k)]
+    (when-not (str/includes? s "/")
+      (let [i (str/last-index-of s ".")]
+        (when (and i (pos? i))
+          (str (str/replace (subs s 0 i) "_" "-")
+               "/" (subs s (inc i))))))))
+
+(defn- with-boring-names
+  "`handlers` plus an entry under each key's boring wire name, where that
+  differs. The original key wins if both spell the same thing."
+  [handlers]
+  (reduce-kv (fn [m k v]
+               (if-let [n (boring-wire-name k)]
+                 (assoc m n v)
+                 m))
+             handlers
+             handlers))
+
 (defn- record-registry
   "Fold incognito-style record handlers into a boring registry.
 
   incognito keys its handlers by `(-> r type pr-str normalize-ns symbol)` --
-  the type name with `/` -> `.` and `-` -> `_`. That is exactly boring's own
-  wire name for a record (`boring.data/record-type-name`), so the mapping is
-  a straight rename with no translation.
+  the type name with `/` -> `.` and `-` -> `_`. That USED to be exactly
+  boring's own wire name for a record, making the mapping a straight rename.
+
+  **It stopped being true in boring 0.1.11**, which writes a record's true
+  `namespace/Name` as written and munges nothing. So a handler keyed
+  `my_ns.MyRecord` no longer matches a record boring now names
+  `my-ns/MyRecord`, and the symptom is silent: the record decodes to an
+  `UnknownRecord` carrying the right name and fields, with no error.
+
+  BOTH SPELLINGS ARE REGISTERED, and that is a persistence requirement rather
+  than a convenience. A konserve store is durable: records written under
+  boring 0.1.6 carry the munged name on disk forever, and records written from
+  now on carry the true one. A reader that knows only one of them silently
+  fails on half the store. Registering both makes an existing store keep
+  working across the upgrade.
+
+  The un-munging is best-effort by construction -- `my-ns` and `my_ns` both
+  munge to `my_ns`, so the inverse cannot be exact, and boring resolves the
+  same ambiguity on the JVM by scanning loaded namespaces (which ClojureScript
+  cannot do). Here it does not have to be exact: the key as given is
+  registered too, so a genuine underscore namespace still resolves through
+  that one.
 
   Note boring does not NEED write handlers for records: it emits the type name
   natively via CBOR tag 27, which is the problem incognito exists to work
@@ -100,7 +147,7 @@
   preparation."
   [registry handlers]
   (if (seq handlers)
-    (boring/register-records registry handlers)
+    (boring/register-records registry (with-boring-names handlers))
     registry))
 
 (def ^:private ^:const registry-cache-size
