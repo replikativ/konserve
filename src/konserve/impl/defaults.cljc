@@ -745,6 +745,111 @@
   (-set-write-hooks! [this hooks-atom]
     (assoc this :write-hooks hooks-atom)))
 
+(def ^:const encoding-keys
+  "What `:config :encoding` may contain.
+
+  The first three ARE the blob header -- serializer, compressor and encryptor
+  are bytes 1, 2 and 3 of every blob, and a later reader dispatches on them.
+  That is what makes this group real rather than a tidy-up: get one wrong and
+  the bytes on disk mean something else.
+
+  The handlers and the serializer registry are not in the header. They are
+  here because they are about turning a value into bytes, and because keeping
+  them next to `:serializer` is what makes \"your handlers must match what was
+  written\" legible -- separating them is how a record wire-name change went
+  unnoticed until a test asserted equality with the input."
+  #{:serializer :compressor :encryptor :serializers :read-handlers :write-handlers})
+
+(defn- deprecated!
+  [from to]
+  (log/warn :konserve/deprecated-config
+            {:msg (str "konserve: " from " is deprecated; use " to
+                       ". Both work for now.")
+             :from from :to to}))
+
+(defn normalize-store-config
+  "A store config in canonical shape: everything about value-to-bytes under
+  `:config :encoding`.
+
+      {:backend :file :path \"...\" :id #uuid \"...\"      ; which store
+       :config {:encoding {:serializer :BoringSerializer  ; header byte 1
+                           :compressor {:type :zstd}      ; header byte 2
+                           :encryptor  {:type :aes}}      ; header byte 3
+                :sync-blob? true                          ; local policy
+                :in-place?  false}}
+
+  Three levels, three rules: the top says WHICH store, `:encoding` says how a
+  value becomes bytes and is durable, the rest of `:config` is local policy you
+  can change between runs without anything on disk caring.
+
+  OLD SPELLINGS STILL WORK and warn. `:default-serializer` and the handler maps
+  used to sit at the top level while `:compressor` sat inside `:config`, with
+  no rule saying why -- which is how five backends each guessed differently and
+  three of them silently ignored what they were handed.
+
+  Canonical wins if both are present, so a caller migrating one key at a time
+  never gets a surprise from the leftover."
+  [params]
+  (let [enc (get-in params [:config :encoding] {})
+        ;; Old top-level spellings. These DID work through `connect-fs-store`,
+        ;; so they are the real deprecation surface; the same keys through the
+        ;; lifecycle API were dropped and cannot have been relied on.
+        enc (reduce (fn [e [old new]]
+                      (if (and (contains? params old) (not (contains? e new)))
+                        (do (deprecated! old (str ":config :encoding " new))
+                            (assoc e new (get params old)))
+                        e))
+                    enc
+                    [[:default-serializer :serializer]
+                     [:serializers :serializers]
+                     [:read-handlers :read-handlers]
+                     [:write-handlers :write-handlers]])
+        ;; And the old `:config` spellings, which are what works today.
+        enc (reduce (fn [e k]
+                      (if (and (contains? (:config params) k) (not (contains? e k)))
+                        (do (deprecated! (str ":config " k) (str ":config :encoding " k))
+                            (assoc e k (get-in params [:config k])))
+                        e))
+                    enc
+                    [:compressor :encryptor])
+        bad (remove encoding-keys (keys enc))]
+    (when (seq bad)
+      (throw (ex-info (str "konserve: unknown key(s) in :config :encoding: "
+                           (pr-str (vec bad)) ". Accepted: "
+                           (pr-str (vec (sort encoding-keys))) ".")
+                      {:type :store-configuration-error :unknown (vec bad)})))
+    (-> params
+        (dissoc :default-serializer :serializers :read-handlers :write-handlers)
+        (update :config #(-> (or % {}) (dissoc :compressor :encryptor)
+                             (assoc :encoding enc))))))
+
+(defn assert-encoding-supported!
+  "Throw unless the config's encoding is one `backend-name` can honour.
+
+  `supported` is `{:serializers #{...} :compressors #{...} :encryptors #{...}}`
+  of ACCEPTED values; `nil` for a slot means anything goes. Compressor and
+  encryptor are named by `:type` keyword, with `:none` standing for absent.
+
+  For backends that cannot honour an arbitrary encoding -- konserve-lmdb uses
+  its own buffer format, and others hardcoded a serializer for years -- so that
+  they REFUSE rather than accept and quietly write something else. Every config
+  bug this shape has produced was a backend accepting a setting it then
+  ignored; a shared helper means the refusal reads the same everywhere instead
+  of being spelled five ways or not at all."
+  [backend-name config {:keys [serializers compressors encryptors]}]
+  (let [enc (get-in config [:config :encoding] {})
+        chk (fn [allowed got what]
+              (when (and allowed (not (contains? allowed got)))
+                (throw (ex-info (str "konserve: " backend-name " does not support "
+                                     what " " (pr-str got) ". Supported: "
+                                     (pr-str (vec (sort-by str allowed))) ".")
+                                {:type :store-configuration-error
+                                 :backend backend-name what got}))))]
+    (chk serializers (or (:serializer enc) :FressianSerializer) :serializer)
+    (chk compressors (or (get-in enc [:compressor :type]) :none) :compressor)
+    (chk encryptors  (or (get-in enc [:encryptor :type]) :none) :encryptor))
+  config)
+
 (defn connect-default-store
   "Create general store in given base of backing store."
   [backing
@@ -757,13 +862,29 @@
            buffer-size        (* 1024 1024)
            opts               {:sync? false}}
     :as   params}]
-  ;; check config
-  (let [complete-config (merge {:sync-blob? true
+  ;; NORMALISED FIRST, so everything below reads one shape. `params` is what
+  ;; the caller wrote, in any accepted spelling; `p` is canonical.
+  (let [p (normalize-store-config params)
+        config (:config p)
+        enc (:encoding config)
+        default-serializer (or (:serializer enc) default-serializer)
+        serializers (or (:serializers enc) serializers)
+        read-handlers (or (:read-handlers enc) read-handlers)
+        write-handlers (or (:write-handlers enc) write-handlers)
+        ;; `:compressor`/`:encryptor` are ALSO left at `:config` level, because
+        ;; the use sites read them there: `update-blob` applies the encryptor
+        ;; to `(:encryptor config)`, which is where its KEY lives, not just its
+        ;; type. Moving them under `:encoding` and stopping there silently
+        ;; stripped the encryption key -- 34 tests in the compressor/encryptor
+        ;; matrix caught it. `:encoding` is where a caller CONFIGURES them;
+        ;; this keeps the existing readers working until they are migrated too.
+        complete-config (merge {:sync-blob? true
                                 :in-place? false
                                 :lock-blob? true}
-                               config)
-        compressor (get-compressor (get-in config [:compressor :type]))
-        encryptor (get-encryptor (get-in config [:encryptor :type]))]
+                               config
+                               (select-keys enc [:compressor :encryptor]))
+        compressor (get-compressor (get-in enc [:compressor :type]))
+        encryptor (get-encryptor (get-in enc [:encryptor :type]))]
     ;; A top-level `:compressor`/`:encryptor` is REFUSED rather than ignored.
     ;; Both are read from `config` above, so passing a function at the top
     ;; level -- which reads exactly like it should work, and which
