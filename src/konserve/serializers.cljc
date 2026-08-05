@@ -75,6 +75,46 @@
 ;;     This one runs on both platforms from the same code.
 ;; ---------------------------------------------------------------------------
 
+(def ^:private ^:const default-index-stride
+  "Anchor every 16th entry, boring's own default. Containers smaller than
+  `:index-min` (also 16) get no node at all, so a small value pays NOTHING --
+  `encode-indexed` on a three-element vector emits the same bytes a plain
+  encode does. That is what makes indexing affordable as a default: konserve's
+  meta blobs and small values are untouched."
+  16)
+
+(def ^:private ^:const writer-buffer-size
+  "Chunk size for the per-call Writer. The value is staged by the store
+  anyway, so this trades allocation against flush count rather than peak
+  memory."
+  8192)
+
+(defn- indexing?
+  "Whether this serializer should seal an offset index onto each value.
+
+  ON BY DEFAULT, and `{:index 0}` is the documented off switch -- boring's own
+  option validator says so for every entry point that takes it.
+
+  Why default on: the index makes a stored value navigable with
+  `boring.nav` -- reaching one key without materialising the rest -- and it is
+  close to free where it matters. Measured, datom-shaped content at 200 and
+  5 000 records: +27% and +25% raw, but +3.7% and -0.7% under zstd, because
+  indexing forces `:stringref false` and zstd recovers what stringref was
+  saving. Non-datom shapes cost about 20% under zstd.
+
+  It is also FORWARD-COMPATIBLE, which is what makes it safe to switch on for
+  existing deployments: an indexed value is a two-item CBOR sequence, and
+  `decode` returns the first item and ignores the frame. Verified against
+  boring 0.1.6 -- an 0.1.11 indexed blob decodes there correctly.
+
+  The caveat is compression, and it is not small: a compressed blob has to be
+  decompressed whole before anything can navigate it, so with a compressor on
+  the index saves DECODE (materialising objects) but not IO. Only an
+  uncompressed store gets the mmap and ranged-read win. See
+  .internal/boring-indexing.md."
+  [opts]
+  (pos? (long (get opts :index default-index-stride))))
+
 (defn- boring-wire-name
   "incognito's munged key as boring >= 0.1.11 spells it, or nil if it is
   already in that form.
@@ -202,8 +242,19 @@
     ;; accepted and ignored rather than rejected, because byte 2 REJECTING them
     ;; is precisely why it was unusable.
     (let [opts (assoc encode-opts :registry registry)]
-      #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
-         :cljs (boring/encode val opts)))))
+      (if (indexing? opts)
+        ;; `write-indexed!` on the JVM rather than `encode-indexed`, even though
+        ;; the store stages into a ByteArrayOutputStream either way:
+        ;; `encode-indexed` builds the whole array and then WALKS it to derive
+        ;; the index -- two passes and two copies -- while this captures the
+        ;; nodes as the writer emits them. A fresh Writer per call because a
+        ;; Writer is not thread-safe and this serializer is shared; that costs
+        ;; ~600 bytes since boring 0.1.11 made the index scaffolding lazy.
+        #?(:clj  (boring/write-indexed! (boring/writer writer-buffer-size)
+                                        val output-stream opts)
+           :cljs (boring/encode-indexed val opts))
+        #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
+           :cljs (boring/encode val opts))))))
 
 (defn boring-serializer
   "A portable CBOR serializer backed by boring.

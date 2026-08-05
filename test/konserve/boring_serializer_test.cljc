@@ -26,6 +26,7 @@
             [konserve.serializers :as ser]
             [boring.core :as boring]
             [boring.data :as bdata]
+            #?(:clj [boring.nav :as nav])
             #?@(:clj [[clojure.java.io :as io]
                       [konserve.filestore :refer [connect-fs-store delete-store]]]))
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
@@ -184,3 +185,30 @@
                      "byte 3 — NOT 1 (fressian) and NOT 2 (clj-cbor)"))))
            (finally
              (delete-store dir)))))))
+
+#?(:clj
+   (deftest values-are-indexed-and-navigable
+     (testing "a stored value carries an offset index by default, so it can be
+               navigated without materialising the rest of it. Small values are
+               exempt automatically: nothing clears boring's :index-min, so no
+               frame is emitted and the bytes are unchanged."
+       (let [big  (into {} (for [i (range 200)]
+                             [(str "customer-" i) {"name" (str "name-" i)}]))
+             ser  (ser/boring-serializer)
+             ->b  (fn [s v] (let [o (ByteArrayOutputStream.)]
+                              (p/-serialize s o (atom {}) v)
+                              (.toByteArray o)))
+             bs   (->b ser big)]
+         (testing "it still decodes to the same value"
+           (is (= big (round-trip big))))
+         (testing "and boring.nav can reach one key through the index"
+           (is (= "name-137"
+                  (nav/value (get-in (nav/source bs) ["customer-137" "name"])))))
+         (testing "a small value gets no frame, so it costs nothing"
+           (is (= (seq (boring/encode {:a 1} {:stringref false}))
+                  (seq (->b ser {:a 1})))))
+         (testing "{:index 0} is the off switch and restores stringref"
+           (let [plain (->b (ser/boring-serializer (boring/tag-registry) {:index 0}) big)]
+             (is (= big (boring/decode plain)))
+             (is (< (alength plain) (alength bs))
+                 "unindexed keeps stringref, so it is smaller uncompressed")))))))
