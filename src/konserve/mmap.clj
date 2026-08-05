@@ -117,8 +117,10 @@
       (throw (ex-info (str "konserve.mmap: this blob is compressed (compressor "
                            cb "), and a compressed blob must be decompressed "
                            "whole before anything can navigate it -- which is "
-                           "the cost this avoids. Use an uncompressed store for "
-                           "navigable values, or konserve.core/get.")
+                           "the cost this avoids. Encoding is per BLOB, not per "
+                           "store, so values written while no compressor was "
+                           "configured stay navigable; this one was not. Use "
+                           "konserve.core/get for it.")
                       {:type :konserve/not-navigable :compressor cb :key key})))
     (when-not (zero? eb)
       (throw (ex-info (str "konserve.mmap: this blob is encrypted (encryptor "
@@ -126,6 +128,27 @@
                            "decrypted whole first. Use konserve.core/get.")
                       {:type :konserve/not-navigable :encryptor eb :key key})))
     [(.getPath f) (+ header-size (be-int hdr 4))]))
+
+(defn navigable?
+  "Whether `key`'s blob can be navigated in place, without throwing.
+
+  ENCODING IS PER BLOB, not per store. A store's serializer and compressor are
+  applied to what it writes NEXT; blobs already on disk keep the encoding they
+  were written with, and every read dispatches on that blob's own header. So a
+  store that switches to boring holds a mix, indefinitely and by design --
+  nothing needs migrating.
+
+  Which makes a mixed store the normal case rather than an error, and asking
+  cheaper than catching:
+
+      (if (navigable? store k)
+        (with-mmap-value [c store k] (nav/value (get-in c path)))
+        (get-in (k/get store k nil {:sync? true}) path))
+
+  Reads only the 20-byte header."
+  [store key]
+  (try (boolean (value-location store key))
+       (catch Exception _ false)))
 
 (defn mmap-value
   "`[cursor arena]` over the value of `key`. **Prefer `with-mmap-value`**,
