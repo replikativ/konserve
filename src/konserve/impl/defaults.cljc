@@ -755,7 +755,8 @@
            read-handlers      (atom {})
            write-handlers     (atom {})
            buffer-size        (* 1024 1024)
-           opts               {:sync? false}}}]
+           opts               {:sync? false}}
+    :as   params}]
   ;; check config
   (let [complete-config (merge {:sync-blob? true
                                 :in-place? false
@@ -763,6 +764,21 @@
                                config)
         compressor (get-compressor (get-in config [:compressor :type]))
         encryptor (get-encryptor (get-in config [:encryptor :type]))]
+    ;; A top-level `:compressor`/`:encryptor` is REFUSED rather than ignored.
+    ;; Both are read from `config` above, so passing a function at the top
+    ;; level -- which reads exactly like it should work, and which
+    ;; `connect-fs-store` itself used to hand us as a default -- did nothing
+    ;; at all: the store came back on `null-compressor` and wrote a 0 into
+    ;; every blob header while the caller believed their data was compressed.
+    ;; Silence is the wrong answer for a durable property nobody re-checks.
+    (when (or (contains? params :compressor) (contains? params :encryptor))
+      (throw (ex-info (str "konserve: :compressor and :encryptor are set under "
+                           ":config, not at the top level. Write "
+                           "{:config {:compressor {:type :lz4}}} -- a TYPE "
+                           "keyword, not a function. Accepted types: :lz4, "
+                           ":zstd, or omit for none.")
+                      {:type :store-configuration-error
+                       :got (select-keys params [:compressor :encryptor])})))
     (async+sync
      (:sync? opts) *default-sync-translation*
      (go-try-

@@ -118,3 +118,43 @@
                           (catch Exception e e)))]
       (is (= :konserve/not-navigable (:type d)))
       (is (= 1 (:encryptor d))))))
+
+;; --------------------------------------------------------------------------
+;; The bug this file's compression guard could not be tested against.
+
+(deftest compression-is-configured-under-config
+  (testing "`:config {:compressor {:type :lz4}}` is the spelling that works,
+            and it must land in the blob header. `connect-default-store` reads
+            both compressor and encryptor from `config`, never from a
+            top-level key."
+    (let [dir   (fresh-dir "cmp-config")
+          store (connect-fs-store dir :default-serializer :BoringSerializer
+                                  :config {:compressor {:type :lz4}}
+                                  :opts {:sync? true})]
+      (k/assoc store "customers" value {:sync? true})
+      (let [^bytes hdr (with-open [in (FileInputStream. ^File (blob-of dir))]
+                         (let [b (byte-array 4)] (.read in b) b))]
+        (is (= 1 (bit-and (aget hdr 2) 0xff)) "compressor byte 1 = lz4"))
+      (testing "and konserve.mmap refuses it, since a compressed blob has to be
+                decompressed whole before anything can navigate it"
+        (is (= :konserve/not-navigable
+               (:type (ex-data (try (kmm/value-location store "customers")
+                                    (catch Exception e e))))))))))
+
+(deftest a-top-level-compressor-is-refused-not-ignored
+  (testing "passing a compressor FUNCTION at the top level reads like it should
+            work and did nothing: the store came back on null-compressor and
+            wrote a 0 into every header while the caller believed their data
+            was compressed. `connect-fs-store` even shipped
+            `:compressor null-compressor` as a default that was never read.
+
+            Silence is the wrong answer for a durable property nobody
+            re-checks, so this now throws and names the right spelling."
+    (is (= :store-configuration-error
+           (:type (ex-data (try (connect-fs-store
+                                 (fresh-dir "cmp-toplevel")
+                                 :default-serializer :BoringSerializer
+                                 :compressor (requiring-resolve
+                                              'konserve.compressor/lz4-compressor)
+                                 :opts {:sync? true})
+                                (catch Exception e e))))))))
