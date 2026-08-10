@@ -203,7 +203,8 @@
            (is (= big (round-trip big))))
          (testing "and boring.nav can reach one key through the index"
            (is (= "name-137"
-                  (nav/value (get-in (nav/source bs) ["customer-137" "name"])))))
+                  (nav/value (get-in (nav/root (nav/source bs))
+                                     ["customer-137" "name"])))))
          (testing "a small value gets no frame, so it costs nothing"
            (is (= (seq (boring/encode {:a 1} {:stringref false}))
                   (seq (->b ser {:a 1})))))

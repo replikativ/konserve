@@ -83,12 +83,6 @@
   meta blobs and small values are untouched."
   16)
 
-(def ^:private ^:const writer-buffer-size
-  "Chunk size for the per-call Writer. The value is staged by the store
-  anyway, so this trades allocation against flush count rather than peak
-  memory."
-  8192)
-
 (defn- indexing?
   "Whether this serializer should seal an offset index onto each value.
 
@@ -97,10 +91,30 @@
 
   Why default on: the index makes a stored value navigable with
   `boring.nav` -- reaching one key without materialising the rest -- and it is
-  close to free where it matters. Measured, datom-shaped content at 200 and
-  5 000 records: +27% and +25% raw, but +3.7% and -0.7% under zstd, because
-  indexing forces `:stringref false` and zstd recovers what stringref was
-  saving. Non-datom shapes cost about 20% under zstd.
+  close to free where it matters. Re-measured against boring 0.1.16, indexed
+  against `{:index 0}` on otherwise identical options:
+
+      datom-shaped,   200 records   10 193 vs 10 108 bytes   +0.8%
+      datom-shaped, 5 000 records  259 595 vs 258 909        +0.3%
+      non-datom map,  500 entries   13 350 vs  12 792        +4.4%
+
+  An indexed value keeps its stringref namespace, so the frame is all it
+  costs.
+
+  SMALL VALUES PAY NOTHING, which is why this is affordable as a default.
+  Where no container clears the placement rule and no string is referenced,
+  the frame would describe nothing and boring emits neither it nor the
+  stringref envelope -- the result is byte-for-byte a plain encode. Measured
+  through this serializer: `{:a 1}` is 7 bytes, `{}` is 1, `[1 2 3]` is 4,
+  `{:id 1 :name \"alice\"}` is 22.
+
+  A value large enough to earn a frame DOES open a stringref namespace -- it
+  begins `d9 01 00`, tag 256 -- and such a document is navigable only through
+  its index, since the pointer table that resolves a reference lives in the
+  frame. So `{:trust-index :ignore}`, boring's recipe for navigating bytes you
+  do not trust, is refused on those with `:boring/stringref-not-navigable`.
+  For untrusted input use `boring/decode`, which builds the table by decoding
+  in order and reads no frame at all.
 
   It is also FORWARD-COMPATIBLE, which is what makes it safe to switch on for
   existing deployments: an indexed value is a two-item CBOR sequence, and
@@ -243,15 +257,25 @@
     ;; is precisely why it was unusable.
     (let [opts (assoc encode-opts :registry registry)]
       (if (indexing? opts)
-        ;; `write-indexed!` on the JVM rather than `encode-indexed`, even though
-        ;; the store stages into a ByteArrayOutputStream either way:
-        ;; `encode-indexed` builds the whole array and then WALKS it to derive
-        ;; the index -- two passes and two copies -- while this captures the
-        ;; nodes as the writer emits them. A fresh Writer per call because a
-        ;; Writer is not thread-safe and this serializer is shared; that costs
-        ;; ~600 bytes since boring 0.1.11 made the index scaffolding lazy.
-        #?(:clj  (boring/write-indexed! (boring/writer writer-buffer-size)
-                                        val output-stream opts)
+        ;; `encode-indexed` ON BOTH PLATFORMS, which used to be `write-indexed!`
+        ;; on the JVM. The reason given for that -- "`encode-indexed` builds the
+        ;; whole array and then WALKS it to derive the index, two passes and two
+        ;; copies" -- has not been true since boring consolidated its builders:
+        ;; `encode-indexed` IS `write-indexed!` into a ByteArrayOutputStream,
+        ;; and it captures nodes from the writer exactly the same way. There was
+        ;; no second pass left to avoid, and this store stages into a
+        ;; ByteArrayOutputStream regardless, so nothing was being streamed.
+        ;;
+        ;; What the buffered entry point can do that the streaming one cannot is
+        ;; DECLINE AN INDEX FRAME THAT DESCRIBES NOTHING. An indexed write seals
+        ;; a frame whenever it opens a stringref namespace, even with no
+        ;; container worth a node, because "namespace with no pointer table" has
+        ;; to keep meaning one thing for `boring.nav`. On a large value that is
+        ;; noise; on the small values a KV store is mostly made of it is the
+        ;; whole file -- `{:a 1}` came out at 50 bytes here against 7. Measured
+        ;; over 20 konserve-shaped values, 3195 bytes against 2514, 21% smaller.
+        #?(:clj  (.write ^java.io.OutputStream output-stream
+                         ^bytes (boring/encode-indexed val opts))
            :cljs (boring/encode-indexed val opts))
         #?(:clj  (.write ^java.io.OutputStream output-stream ^bytes (boring/encode val opts))
            :cljs (boring/encode val opts))))))
