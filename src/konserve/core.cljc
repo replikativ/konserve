@@ -6,7 +6,7 @@
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks -lock-free?]]
-            [konserve.utils :refer [meta-update multi-key-capable? invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
+            [konserve.utils :refer [meta-update multi-key-capable? kv-keys invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             [konserve.impl.storage-layout :as storage-layout]
             [konserve.impl.defaults :as defaults]
@@ -421,7 +421,22 @@
    `(multi-assoc store nodes (uniform-meta nodes {:immutable? true}) opts)`.
    `kvs` may be a kv-map, an ordered seq of [k v] pairs, or a plain seq of keys.
    Note the result is a plain lookup map — per-key meta is unordered by nature;
-   ordering lives in `kvs` (see `multi-assoc`)."
+   ordering lives in `kvs` (see `multi-assoc`).
+
+   PREFER `{:meta-all m}` IN `opts` FOR A WHOLE-BATCH ANNOTATION, which needs no
+   keys at all and therefore cannot get them wrong.
+
+   THE SHAPE TEST BELOW IS A GUESS AND CANNOT BE MADE SOUND. A key that is
+   itself a 2-element vector is indistinguishable from a `[k v]` pair: `[[:a 1]]`
+   is both a valid one-key seq and a valid one-pair seq, and no inspection of
+   the data separates them. So `(uniform-meta (keys {[:a 1] v}) ..)` returns
+   `{:a ..}` — the annotation lands on a key nobody wrote.
+
+   Narrowing the test was tried and rejected: keying off `MapEntry` fixes the
+   `(keys m)` case and breaks the hand-built pair-vector instead, which only
+   moves the failure onto a different caller. What IS fixed is the SILENCE —
+   `multi-assoc` refuses a `meta` map whose keys are disjoint from `kvs`, so a
+   misread shape raises at the call site instead of dropping metadata."
   [kvs meta]
   (let [ks (cond
              (map? kvs)                      (clojure.core/keys kvs)
@@ -485,10 +500,51 @@
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-try-
-                (let [mfn    (if meta
+                (let [meta-all (:meta-all opts)
+                      _ (when (and meta meta-all)
+                          (throw (#?(:clj ex-info :cljs js/Error.)
+                                  "Pass either a per-key `meta` or `:meta-all`, not both"
+                                  {:type :konserve/ambiguous-meta})))
+                      ;; UNIFORM ANNOTATION NEEDS NO KEYS, and that is the whole
+                      ;; point of `:meta-all`. `uniform-meta` existed to turn one
+                      ;; annotation into a per-key map, which meant DERIVING THE
+                      ;; KEYS from `kvs` -- and a key that is itself a 2-element
+                      ;; vector is indistinguishable from a `[k v]` pair, so
+                      ;; `(uniform-meta (keys m) ..)` on `{[:a 1] v}` produced
+                      ;; `{:a ..}` and the annotation was silently dropped.
+                      ;; Naming the two intents removes the guess entirely.
+                      mfn    (cond
+                               meta-all
+                               (fn [key type old] (clojure.core/merge meta-all (meta-update key type old)))
+                               meta
                                ;; per-key meta map: `(get meta key)` (nil ⇒ just the built meta)
                                (fn [key type old] (clojure.core/merge (clojure.core/get meta key) (meta-update key type old)))
-                               meta-update)
+                               :else meta-update)
+                      ;; A `meta` MAP THAT NAMES NO KEY OF THIS BATCH IS ALWAYS A
+                      ;; MISTAKE, and it used to be a silent one: the write
+                      ;; succeeded and the annotation vanished. `uniform-meta`
+                      ;; produces exactly that when it misreads its input shape
+                      ;; -- a 2-element vector key is indistinguishable from a
+                      ;; [k v] pair, so `(uniform-meta (keys {[:a 1] v}) ..)`
+                      ;; keys the map by `:a`. A hand-built map with a typo does
+                      ;; the same. Checked here because this is the only place
+                      ;; holding both halves.
+                      ;;
+                      ;; DISJOINT THROWS, PARTIAL DOES NOT: annotating a SUBSET
+                      ;; is the documented mixed-batch case -- immutable nodes
+                      ;; plus the mutable pointer that makes them reachable --
+                      ;; so a single overlapping key is enough to be intentional.
+                      _ (when (seq meta)
+                          (let [ks (set (kv-keys kvs))]
+                            (when-not (some ks (clojure.core/keys meta))
+                              (throw (#?(:clj ex-info :cljs js/Error.)
+                                      (str "multi-assoc: none of `meta`'s keys appear in `kvs`, "
+                                           "so no value would receive it. If this came from "
+                                           "`uniform-meta`, pass the kv-map itself, name the keys, "
+                                           "or use {:meta-all m} in opts.")
+                                      {:type :konserve/meta-keys-disjoint
+                                       :meta-keys (vec (clojure.core/keys meta))
+                                       :kvs-keys (vec ks)})))))
                       result (try
                                (<?- (-multi-assoc store kvs mfn opts))
                                (catch #?(:clj Exception :cljs js/Error) e
@@ -503,9 +559,20 @@
                                                        :reason (:reason (ex-data e))}))
                                       (throw e))
                                     :cljs (throw e))))]
+                  ;; HOOKS ALWAYS SEE A PER-KEY MAP, whichever way the caller
+                  ;; expressed it. `:meta-all` is expanded here and never escapes
+                  ;; this namespace, so a consumer like konserve-sync keeps its
+                  ;; `(get m k)` and needs no change -- teaching every consumer a
+                  ;; second spelling would recreate the dropped-annotation bug one
+                  ;; layer out, in any consumer that was not updated.
+                  ;;
+                  ;; Expanded ONLY when a hook is registered, so the write path
+                  ;; still avoids building an N-entry map to say one thing.
                   (invoke-write-hooks! store (cond-> {:api-op :multi-assoc :kvs kvs}
-                                               ;; per-key meta map forwarded verbatim (pure data)
-                                               meta (clojure.core/assoc :meta meta)))
+                                               meta     (clojure.core/assoc :meta meta)
+                                               meta-all (clojure.core/assoc
+                                                         :meta (zipmap (kv-keys kvs)
+                                                                       (clojure.core/repeat meta-all)))))
                   result)))))
 
 (defn dissoc
