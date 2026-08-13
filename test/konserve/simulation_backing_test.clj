@@ -546,6 +546,110 @@
       (let [all-keys (<!! (k/keys store))]
         (is (= 3 (count all-keys)))))))
 
+;; =============================================================================
+;; Corruption Tests
+;; =============================================================================
+;;
+;; The three :*-corrupt-rate knobs flip bits in bytes returned by a read rather
+;; than throwing. The property that matters is not WHICH error surfaces but that
+;; corruption is never silently absorbed: a read returns exactly what was
+;; written, or it fails. Returning a different value would be the serious bug.
+
+(defn- read-under-corruption
+  "Write `{:value \"original\"}` cleanly, then read it back through a store that
+   corrupts `knob` on every read. Returns [:returned v] or [:threw class]."
+  [knob reader]
+  (let [dir *test-dir*]
+    (let [{:keys [store]} (create-sync-wrapped-store dir backing/no-faults-config 1)]
+      (k/assoc store :corrupt-key {:value "original"} {:sync? true}))
+    (let [{:keys [store]} (create-sync-wrapped-store
+                           dir (assoc backing/no-faults-config knob 1.0) 7)]
+      (try [:returned (reader store)]
+           (catch Throwable t [:threw (class t)])))))
+
+(deftest corruption-is-never-silently-absorbed-test
+  (testing "a corrupted value read fails rather than returning wrong data"
+    (let [[outcome v] (read-under-corruption
+                       :read-value-corrupt-rate
+                       #(k/get % :corrupt-key nil {:sync? true}))]
+      (is (or (= outcome :threw) (= v {:value "original"}))
+          (str "corrupted value read returned wrong data silently: " v))
+      ;; At rate 1.0 the corruption always fires, so it must be detected.
+      (is (= :threw outcome)
+          "value corruption at rate 1.0 should be detected, not absorbed")))
+
+  (testing "a corrupted header read fails rather than returning wrong data"
+    (let [[outcome v] (read-under-corruption
+                       :read-header-corrupt-rate
+                       #(k/get % :corrupt-key nil {:sync? true}))]
+      (is (or (= outcome :threw) (= v {:value "original"}))
+          (str "corrupted header read returned wrong data silently: " v))
+      (is (= :threw outcome)
+          "header corruption at rate 1.0 should be detected, not absorbed")))
+
+  (testing "a corrupted meta read fails rather than returning wrong metadata"
+    ;; k/get does not consult the meta bytes, so meta corruption is only
+    ;; observable through get-meta.
+    (let [[outcome _] (read-under-corruption
+                       :read-meta-corrupt-rate
+                       #(k/get-meta % :corrupt-key nil {:sync? true}))]
+      (is (= :threw outcome)
+          "meta corruption at rate 1.0 should be detected, not absorbed"))))
+
+;; =============================================================================
+;; Durability Under Faults
+;; =============================================================================
+
+(deftest acknowledged-writes-are-durable-under-chaos-test
+  (testing "every write that returned normally is readable afterwards, and
+            data written before the chaos survives it"
+    ;; The strongest property in this domain, and the one chaos-mode testing
+    ;; exists to check: konserve may FAIL a write under injected faults, but it
+    ;; must never acknowledge a write it then loses, and must never damage data
+    ;; it already holds. Swept across seeds because a single fault schedule
+    ;; exercises only one interleaving of failure points.
+    ;; 100 seeds ~= 3.5s. Seed count is the axis that finds new interleavings:
+    ;; each seed is a distinct fault schedule, whereas repeating one schedule
+    ;; re-runs the same failure points.
+    (let [n-seeds 100
+          n-ops 25
+          violations (atom [])]
+      (doseq [seed (range 1 (inc n-seeds))]
+        (let [dir (create-temp-dir)]
+          ;; Pre-existing data, written cleanly.
+          (let [{:keys [store]} (create-sync-wrapped-store dir backing/no-faults-config 1)]
+            (dotimes [i 5]
+              (k/assoc store (keyword (str "pre" i)) {:value i} {:sync? true})))
+          ;; Chaos phase: remember only the writes that were acknowledged.
+          (let [{:keys [store]} (create-sync-wrapped-store dir backing/chaos-fault-config seed)
+                acked (atom {})]
+            (dotimes [i n-ops]
+              (let [key (keyword (str "chaos" i))
+                    value {:value i :seed seed}]
+                (try
+                  (k/assoc store key value {:sync? true})
+                  (swap! acked assoc key value)
+                  (catch Throwable _ nil))))
+            ;; Verify through a fault-free store.
+            (let [{:keys [store]} (create-sync-wrapped-store dir backing/no-faults-config 2)
+                  read-safely (fn [key]
+                                (try (k/get store key nil {:sync? true})
+                                     (catch Throwable t {:threw (str t)})))]
+              (doseq [[key value] @acked]
+                (let [got (read-safely key)]
+                  (when-not (= value got)
+                    (swap! violations conj {:kind :acknowledged-write-lost
+                                            :seed seed :key key
+                                            :wrote value :read got}))))
+              (dotimes [i 5]
+                (let [got (read-safely (keyword (str "pre" i)))]
+                  (when-not (= {:value i} got)
+                    (swap! violations conj {:kind :pre-existing-data-damaged
+                                            :seed seed :index i :read got}))))))))
+      (is (empty? @violations)
+          (str "durability violated in " (count @violations) " case(s) across "
+               n-seeds " seeds: " (vec (take 5 @violations)))))))
+
 (comment
   ;; Run tests
   (clojure.test/run-tests 'konserve.simulation-backing-test)

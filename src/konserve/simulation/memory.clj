@@ -272,13 +272,3 @@
   []
   (->MemoryBackingStore (atom {}) (atom false)))
 
-(defn get-blob-data
-  "Get raw blob data for inspection (testing helper)."
-  [backing store-key]
-  (when-let [blob (get @(:blobs-atom backing) store-key)]
-    @(:data-atom blob)))
-
-(defn list-all-blobs
-  "List all blob keys in the store (testing helper)."
-  [backing]
-  (keys @(:blobs-atom backing)))

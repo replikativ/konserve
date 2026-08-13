@@ -435,3 +435,101 @@
       (is (seq (crash/get-synced-data state-atom)))
       (is (empty? (crash/get-pending-data state-atom))
           "No pending data after successful sync"))))
+
+;; =============================================================================
+;; Crash Point x Value Shape Matrix
+;; =============================================================================
+;;
+;; The tests above each pin one crash point to one simple value. This sweeps
+;; every crash point across value shapes that exercise different write-path
+;; sizes and structures, in both of the two cases that matter: overwriting an
+;; existing key, and writing a key that does not exist yet.
+;;
+;; The invariant is the whole point of crash-consistency testing: after a crash
+;; and recovery a reader sees EXACTLY the old value or EXACTLY the new one --
+;; never a partial value, never a throw, and (when a prior value was durably
+;; synced) never nil.
+;;
+;; Deterministic by construction: crash points are chosen explicitly and this
+;; namespace injects no randomness, so a failure here reproduces exactly. It
+;; runs entirely in memory, which is why the whole matrix costs ~150ms.
+
+(def ^:private crash-matrix-shapes
+  "[old new] pairs spanning small/large, growing/shrinking, empty/populated,
+   flat/nested, and nil-valued writes."
+  (let [big (apply str (repeat 5000 \x))]
+    [[{:a 1}                        {:a 2}]
+     [{:s "short"}                  {:s big}]
+     [{:s big}                      {:s "short"}]
+     [{}                            {:now "non-empty"}]
+     [{:was "non-empty"}            {}]
+     [{:nested {:deep {:v [1 2 3]}}} {:nested {:deep {:v [4 5 6 7 8 9]}}}]
+     [{:v (vec (range 500))}        {:v (vec (range 3))}]
+     [{:v (vec (range 3))}          {:v (vec (range 500))}]
+     [{:unicode "ascii"}            {:unicode "ümläut ✓ 日本語"}]
+     [{:mixed [1 "two" :three {:four 4}]} {:mixed []}]
+     [{:value nil}                  {:value :now-set}]
+     [{:value :was-set}             {:value nil}]]))
+
+(defn- brief
+  "A short printable summary of a value, so failure messages stay readable even
+   when the shape is a 5 KB string or a 500-element vector."
+  [v]
+  (let [s (pr-str v)]
+    (if (<= (count s) 70) s (str (subs s 0 70) "... <" (count s) " chars>"))))
+
+(defn- crash-round
+  "Write `old` (unless ::absent) and let it sync. Then write `new`, crashing at
+   `crash-point`. Crash, recover, read. Returns nil when the invariant holds, or
+   a map describing the violation."
+  [crash-point old new]
+  (let [{:keys [store state-atom crash-point-atom]} (create-test-store)
+        prior? (not= old ::absent)]
+    (when prior?
+      (sync-assoc! store :k old))
+    (crash/set-crash-point! crash-point-atom crash-point)
+    (try
+      (sync-assoc! store :k new)
+      (catch ExceptionInfo _ nil))
+    (crash/simulate-crash! state-atom)
+    (crash/clear-crash-point! crash-point-atom)
+    (let [got (try (sync-get store :k)
+                   (catch Throwable t {::threw (str t)}))
+          acceptable (if prior? #{old new} #{nil new})]
+      (when-not (contains? acceptable got)
+        ;; Shapes include 5 KB strings and 500-element vectors; printing them in
+        ;; full makes a failure unreadable. Summarise instead.
+        {:crash-point crash-point
+         :prior (if prior? (brief old) ::absent)
+         :attempted (brief new)
+         :read (brief got)}))))
+
+(defn- violations-at
+  "Run every shape at `crash-point`. `prior` is :overwrite (write the old value
+   first) or :new-key (the key starts absent). Returns the violations."
+  [crash-point prior]
+  (vec (for [[old new] crash-matrix-shapes
+             :let [v (crash-round crash-point
+                                  (if (= prior :new-key) ::absent old)
+                                  new)]
+             :when v]
+         v)))
+
+(defn- report-violations [crash-point violations]
+  (is (empty? violations)
+      (str crash-point ": " (count violations) " of " (count crash-matrix-shapes)
+           " shapes violated the invariant -- " (vec (take 2 violations)))))
+
+(deftest crash-matrix-overwrite-test
+  (testing "every crash point x value shape, overwriting an existing key:
+            the reader sees exactly the old or the new value"
+    ;; One assertion per crash point, so a failure names the point directly
+    ;; rather than burying it in a list of twelve shapes.
+    (doseq [crash-point (sort crash/crash-points)]
+      (report-violations crash-point (violations-at crash-point :overwrite)))))
+
+(deftest crash-matrix-new-key-test
+  (testing "every crash point x value shape, writing a key that does not exist:
+            the reader sees exactly nil or the new value"
+    (doseq [crash-point (sort crash/crash-points)]
+      (report-violations crash-point (violations-at crash-point :new-key)))))

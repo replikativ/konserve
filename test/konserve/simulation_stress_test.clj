@@ -585,16 +585,15 @@
 
         (.await latch 30 TimeUnit/SECONDS)
 
-        ;; With proper locking, should be exact
-        ;; Without, we might lose some updates - test documents actual behavior
+        ;; konserve serialises update-in on a per-key lock, so every increment
+        ;; must land. This is asserted exactly, not merely reported: a weaker
+        ;; check (final-value is positive) passes even when most updates are
+        ;; lost, and would not catch a regression in the locking path.
         (let [final-value (:value (sync-get store :shared-counter))
               expected (* n-threads n-updates)]
-          (is (pos? final-value) "Should have some updates")
-          ;; Document whether we get exact count or not
-          (when (< final-value expected)
-            (println (format "Note: Lost %d updates out of %d (%.1f%%)"
-                             (- expected final-value) expected
-                             (* 100.0 (/ (- expected final-value) expected))))))
+          (is (= expected final-value)
+              (format "lost %d of %d updates -- per-key locking did not hold"
+                      (- expected final-value) expected)))
 
         (finally
           (.shutdown executor))))))

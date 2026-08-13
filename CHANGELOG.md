@@ -11,10 +11,15 @@ All notable, user-visible changes to konserve are documented here.
   runs replay exactly), a crash simulator that tracks sync points and discards
   unsynced state at each of the six steps of the `DefaultStore` write path, and
   an in-memory backing store for tests that should not touch a filesystem. Comes
-  with 95 tests / 2409 assertions covering error propagation, atomicity,
+  with 99 tests / 2427 assertions covering error propagation, atomicity,
   durability across reopen, orphaned `.new`/`.backup` handling, GC under crash,
-  and concurrency and resource-exhaustion stress. Folded in from an out-of-tree
-  repository so the backing implementations track the protocols they wrap. See
+  and concurrency and resource-exhaustion stress. Two properties carry most of
+  the weight: corruption is never silently absorbed (a read returns exactly what
+  was written or fails), and acknowledged writes are durable under chaos, swept
+  across seeds. The suite is mutation-tested — removing fault injection, crash
+  injection, resource limits, deletes or konserve's per-key lock each produces
+  failures. Folded in from an out-of-tree repository so the backing
+  implementations track the protocols they wrap. See
   [doc/simulation-testing.md](doc/simulation-testing.md).
 
   These namespaces are marked `^:no-doc` and are **internal**: they ship in the

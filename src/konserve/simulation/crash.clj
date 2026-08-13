@@ -574,29 +574,9 @@
   [state-atom]
   (:pending-new-files @state-atom))
 
-(defn has-orphan-files?
-  "Check if there are orphan .new files after a crash.
-   In real filesystem, these would be left behind."
-  [state-atom]
-  (boolean (seq (:pending-new-files @state-atom))))
-
 ;; =============================================================================
 ;; Test Helpers
 ;; =============================================================================
-
-(defn verify-no-partial-data
-  "Verify that no partial data is visible.
-   Returns true if data integrity is maintained."
-  [state-atom store-key expected-header-size expected-meta-size]
-  (let [state @state-atom
-        data (get (:synced-blobs state) store-key)]
-    (if (nil? data)
-      true  ; No data is valid (old value preserved)
-      (let [total-size (count data)
-            min-valid-size (+ expected-header-size expected-meta-size 1)]
-        ;; Data must be either empty or complete
-        (or (zero? total-size)
-            (>= total-size min-valid-size))))))
 
 (defn verify-atomicity
   "Verify that a write either fully completed or had no effect.

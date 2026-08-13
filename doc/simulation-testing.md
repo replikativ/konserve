@@ -87,16 +87,25 @@ exhaustion paths can be exercised without filling a disk.
 
 ## What is covered
 
-95 tests, 2,409 assertions.
+99 tests, 2,427 assertions.
 
-**`simulation_backing_test`** (23) — error propagation from each `PBackingStore`
+**`simulation_backing_test`** (25) — error propagation from each `PBackingStore`
 method up to the public API, in both sync and async modes; atomicity (a failed
 write leaves no trace, a failed atomic move does not corrupt the previous
 value); durability across store reopen; that orphaned `.new` and `.backup`
 files left by a failed write neither break subsequent operations nor appear in
 `keys`; history recording; chaos-mode survival.
 
-**`simulation_crash_test`** (20) — a crash at each of the six points, with
+Two properties there carry most of the weight. **Corruption is never silently
+absorbed**: with each of the three corrupt-rates pinned at 1.0, a read must
+either return exactly what was written or fail — returning different data would
+be the serious bug. **Acknowledged writes are durable under chaos**: swept
+across 100 seeds, konserve may *fail* a write under injected faults, but must
+never acknowledge one it then loses, nor damage data it already holds. The
+sweep matters because a single fault schedule exercises one interleaving of
+failure points; a fixed seed proves little on its own.
+
+**`simulation_crash_test`** (22) — a crash at each of the six points, with
 recovery checked afterwards; repeated crash/recovery cycles; the no-partial-data
 and atomicity invariants; crashes concurrent with other writers; empty values,
 large values, and first writes to a new key.
@@ -125,16 +134,49 @@ Worth stating plainly, so results are not read as stronger than they are:
   Elle-shaped (`:invoke`/`:ok`/`:fail` with process ids), but no checker is run
   against it. The consistency claims here rest on hand-written invariants, not
   on a model checker.
-- **Two tests are characterizations, not assertions.**
-  `update-in-concurrent-test` runs 5 threads × 20 `update-in`s and only asserts
-  the result is positive, printing any lost updates rather than failing. No
-  lost updates are observed on the current implementation, so this could be
-  tightened to an equality assertion — it has not been, so it would not catch a
-  regression. `delete-during-update-test` similarly asserts only that no errors
-  occur while delete races update, deliberately accepting either winner.
+- **One test is a characterization, not an assertion.**
+  `delete-during-update-test` asserts only that no errors occur while a delete
+  races an update, deliberately accepting either winner — the race has no single
+  correct outcome. Every other test asserts an exact expected result.
 - **Crash simulation models sync semantics, not the filesystem.** It reproduces
   what konserve's write path promises about sync points; it does not model
   reordering within a physical device or partial sector writes.
+- **Assertion counts are uneven.** `simulation_stress_test` contributes 2,227 of
+  the 2,427 assertions because it loops. Assertion count is a poor proxy for
+  sensitivity here: the crash matrix runs 144 crash rounds behind 12 assertions,
+  aggregating per crash point so a failure names the point rather than printing
+  twelve shapes.
+
+## Does the suite actually bite?
+
+The tests have been mutation-tested — the implementation was deliberately broken
+to confirm the suite notices. Removing fault injection fails 14 assertions;
+disabling crash-point injection fails 27 of 33; a crash that wipes synced data
+fails 12 (and 6 of the matrix's 12); a crash that leaves atomic moves applied
+fails 2; unenforced resource limits fail 4; a silently no-op delete raises 8
+errors; disabling corruption fails 3; making an injected fault silent — so a
+write is acknowledged but does nothing — fails the durability sweep; removing
+konserve's store-level per-key lock fails 5, including genuine header corruption
+from racing writers.
+
+Two findings from that exercise are worth keeping:
+
+**konserve has two independent locking layers** — the blob lock (`:lock-blob?`,
+default true) and `konserve.core`'s per-key registry. Removing either alone is
+survivable for a counter workload; removing both corrupts blobs outright. A
+mutation test that disables only one looks deceptively inert.
+
+**The matrix deliberately accepts a crash that leaves an atomic move applied.**
+Its invariant is "the reader sees exactly the old or the new value", and a
+completed move legitimately yields the new one. The stricter property — that a
+crash *reverts* an unsynced move — is `atomicity-invariant-test`'s job. The two
+are complementary, and neither subsumes the other.
+
+Sweeps at roughly twenty times the suite's volume found no violations either:
+200 seeds × 30 chaos operations (6,000 fault-injected writes) against the
+durability invariant, and 288 crash rounds across value shapes. Runtime is not
+this suite's limiting factor; assertion strength is, which is why the budget went
+into seed breadth and shape breadth rather than into repeating fixed scenarios.
 
 ## Why it lives here
 

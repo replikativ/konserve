@@ -512,17 +512,7 @@
   [simulated-backing]
   @(:history-atom simulated-backing))
 
-(defn clear-history!
-  "Clear the operation history."
-  [simulated-backing]
-  (reset! (:history-atom simulated-backing) []))
-
 (defn count-faults
   "Count how many faults were injected."
   [simulated-backing]
   (count (filter #(= :fail (:op-type %)) (get-history simulated-backing))))
-
-(defn count-crashes
-  "Count how many crashes were simulated."
-  [simulated-backing]
-  (count (filter #(= :crash (:op-type %)) (get-history simulated-backing))))
