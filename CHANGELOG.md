@@ -5,6 +5,26 @@ All notable, user-visible changes to konserve are documented here.
 ## Unreleased
 
 ### Added
+- **Simulation testing harness** (`konserve.simulation.backing`, `.crash`,
+  `.memory`). A fault-injecting wrapper around any `PBackingStore` (19
+  per-operation error and corruption rates, seeded from a `SplittableRandom` so
+  runs replay exactly), a crash simulator that tracks sync points and discards
+  unsynced state at each of the six steps of the `DefaultStore` write path, and
+  an in-memory backing store for tests that should not touch a filesystem. Comes
+  with 99 tests / 2427 assertions covering error propagation, atomicity,
+  durability across reopen, orphaned `.new`/`.backup` handling, GC under crash,
+  and concurrency and resource-exhaustion stress. Two properties carry most of
+  the weight: corruption is never silently absorbed (a read returns exactly what
+  was written or fails), and acknowledged writes are durable under chaos, swept
+  across seeds. The suite is mutation-tested — removing fault injection, crash
+  injection, resource limits, deletes or konserve's per-key lock each produces
+  failures. Folded in from an out-of-tree repository so the backing
+  implementations track the protocols they wrap. See
+  [doc/simulation-testing.md](doc/simulation-testing.md).
+
+  These namespaces are marked `^:no-doc` and are **internal**: they ship in the
+  jar so backends and downstream projects can test against them, but they carry
+  no compatibility guarantee and may change or move in any release.
 - **Monotonic write stamps** — `:last-write` metadata is now issued by a
   process-global monotone clock (`utils/now` = `max(wall-clock,
   previous-stamp)`): stamps never go backwards under wall-clock retreat
