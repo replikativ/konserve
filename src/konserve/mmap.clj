@@ -50,10 +50,12 @@
   and an in-memory variant that works for every backend is a separate
   question: konserve's read path already slices the value bytes out, so that
   one needs no offset at all, but it saves only decode and not IO."
-  (:require [konserve.impl.defaults :refer [key->store-key]]
+  (:require [konserve.core :as k]
+            [konserve.impl.defaults :refer [key->store-key]]
             [konserve.impl.storage-layout :refer [header-size]]
             [konserve.serializers :as ser])
-  (:import [java.io File FileInputStream]))
+  (:import [java.io File FileInputStream FileOutputStream]
+           [java.nio.file Files Path StandardCopyOption CopyOption]))
 
 (def ^:private boring-serializer-byte
   "Byte 3 in the blob header. Read from the registry rather than written as a
@@ -184,3 +186,177 @@
      (with-open [a# arena#]
        (let [~binding c#]
          ~@body))))
+
+;; ---------------------------------------------------------------------------
+;; High-level in-place / splice edits (EXPERIMENTAL)
+;;
+;; These edit a filestore value WITHOUT decoding the whole thing: a same-length
+;; change is poked in place through a memory mapping (the offset index stays
+;; valid, only touched pages dirtied); any other change splices only the altered
+;; bytes and rewrites the blob crash-safely via `.new` + atomic rename. An
+;; ineligible blob -- not boring, compressed, encrypted, or stringref-wrapped --
+;; falls back to the ordinary `konserve.core` op, so dispatch is always safe:
+;; worst case is a correct answer at full cost. Synchronous; single-writer.
+;;
+;; CONFIGURE THE STORE FOR EDITING. A value is only eligible when it is boring,
+;; uncompressed, unencrypted, AND not stringref-wrapped -- and boring's default
+;; opens a stringref namespace on larger values, whose byte lengths depend on
+;; everything encoded before them. So an editable store must use a deterministic,
+;; stringref-off profile, keyed BY NAME (konserve keys serializers by keyword,
+;; not by byte):
+;;
+;;   (connect-fs-store dir
+;;     :serializers {:BoringSerializer
+;;                   (konserve.serializers/boring-serializer (boring.core/tag-registry)
+;;                                                           {:profile :archival})}
+;;     :default-serializer :BoringSerializer
+;;     :config {:id (random-uuid)})
+;;
+;; `:archival` sorts keys and turns stringref off. A store left on boring's
+;; default writes stringref blobs, which these ops correctly refuse (falling
+;; back), so nothing breaks -- the fast path simply never engages.
+;;
+;; MEASURED: on a 1.7 MB / 200k-key value, a same-length `update-in!` is ~2.7 ms
+;; against ~375 ms for `konserve.core/update-in` (139x), because the whole value
+;; is never decoded or re-encoded. The gap widens with value size.
+;; ---------------------------------------------------------------------------
+
+(defn- boring-serializer-instance [store]
+  (get (:serializers store) (get ser/byte->key boring-serializer-byte)))
+
+(defn- edit-eopts
+  "The boring encode options this store writes byte-3 blobs with, forced
+  stringref-off (an editable blob is never stringref-wrapped; see below)."
+  [store]
+  (assoc (:encode-opts (boring-serializer-instance store)) :stringref false))
+
+(defn- stringref-blob?
+  "Whether the value at `voff` opens a stringref namespace (tag 256, `d9 01 00`).
+  Such a value's byte lengths depend on everything encoded before it, so editing
+  it in place is unsafe; those blobs fall back to a full read."
+  [^String fpath ^long voff]
+  (with-open [in (FileInputStream. fpath)]
+    (.skip in voff)
+    (let [b (byte-array 3)]
+      (and (= 3 (.read in b))
+           (= 0xd9 (bit-and (aget b 0) 0xff))
+           (= 0x01 (bit-and (aget b 1) 0xff))
+           (= 0x00 (bit-and (aget b 2) 0xff))))))
+
+(defn edit-eligible?
+  "Whether `key`'s blob can be edited in place or by splice: navigable (boring,
+  uncompressed, unencrypted) AND not stringref-wrapped. Reads at most 23 bytes."
+  [store key]
+  (try
+    (let [[fpath voff] (value-location store key)]
+      (not (stringref-blob? fpath voff)))
+    (catch Exception _ false)))
+
+(defn- path-of ^Path [^String s] (Path/of s (into-array String [])))
+
+(defn- splice-write!
+  "Transform the value region of `fpath` (bytes from `voff` to EOF) with `xform`
+  and write the blob back crash-safely: `.new` + fsync + atomic rename. The
+  20-byte header and the metadata (both before `voff`) are copied unchanged."
+  [^String fpath ^long voff xform]
+  (let [p    (path-of fpath)
+        blob (Files/readAllBytes p)
+        value (java.util.Arrays/copyOfRange blob (int voff) (alength blob))
+        nv   ^bytes (xform value)
+        out  (byte-array (+ (int voff) (alength nv)))]
+    (System/arraycopy blob 0 out 0 (int voff))
+    (System/arraycopy nv 0 out (int voff) (alength nv))
+    (let [tmp (str fpath ".new")]
+      (with-open [o (FileOutputStream. tmp)]
+        (.write o ^bytes out)
+        (.force (.getChannel o) true))
+      (Files/move (path-of tmp) p
+                  (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
+                                          StandardCopyOption/REPLACE_EXISTING])))
+    true))
+
+(defn- resolve-mmap [sym]
+  (try (requiring-resolve sym) (catch Throwable _ nil)))
+
+(defn- edit-fn
+  "Resolve a `boring.edit` function by name, or throw a clear error naming the
+  requirement. `boring.edit` is JDK-9 safe, but it ships in a newer boring than
+  konserve's floor; resolving it dynamically keeps this namespace loadable on the
+  boring already on the classpath and turns a missing dependency into a message
+  rather than a load failure."
+  [sym]
+  (or (resolve-mmap (symbol "boring.edit" (name sym)))
+      (throw (ex-info (str "konserve.mmap: the in-place edit ops need boring.edit, "
+                           "which ships in a newer boring than the one on the "
+                           "classpath. Upgrade org.replikativ/boring.")
+                      {:type :konserve/boring-too-old :fn sym}))))
+
+;; `boring.edit/absent` is the literal keyword `:boring.edit/absent`; comparing
+;; against it needs no resolve.
+(def ^:private edit-absent :boring.edit/absent)
+
+(defn- recoverable-poke-miss? [e]
+  (contains? #{:boring/not-pokeable :boring/path-absent} (:type (ex-data e))))
+
+(defn assoc-in!
+  "Set the value at `key-vec` = `[store-key & path]` to `v`, editing the blob in
+  place (same-length poke via mmap) or by splicing only the changed bytes
+  (crash-safe rename), never decoding the whole value. Falls back to
+  `konserve.core/assoc-in` for an ineligible blob. Synchronous; returns `v`."
+  ([store key-vec v] (assoc-in! store key-vec v {}))
+  ([store key-vec v opts]
+   (let [k (first key-vec) path (vec (rest key-vec))]
+     (if-not (edit-eligible? store k)
+       (do (k/assoc-in store key-vec v (assoc opts :sync? true)) v)
+       (let [eopts (edit-eopts store)
+             [fpath voff] (value-location store k)
+             poke! (resolve-mmap 'boring.mmap/poke!)]
+         (or (when (and poke! (seq path))
+               (try (poke! fpath path v (assoc eopts :offset voff)) v
+                    (catch clojure.lang.ExceptionInfo e
+                      (if (recoverable-poke-miss? e) nil (throw e)))))
+             (do (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path v eopts)) v)))))))
+
+(defn update-in!
+  "Apply `f` to the value at `key-vec` = `[store-key & path]`, poking in place
+  when `(f old)` is the same length else splicing. Falls back to
+  `konserve.core/update-in` for an ineligible blob or an empty path.
+  Synchronous; returns `[old new]`."
+  ([store key-vec f] (update-in! store key-vec f {}))
+  ([store key-vec f opts]
+   (let [k (first key-vec) path (vec (rest key-vec))]
+     (if (or (empty? path) (not (edit-eligible? store k)))
+       (k/update-in store key-vec f (assoc opts :sync? true))
+       (let [eopts (edit-eopts store)
+             [fpath voff] (value-location store k)
+             poke-update! (resolve-mmap 'boring.mmap/poke-update!)]
+         (or (when poke-update!
+               (try (poke-update! fpath path f (assoc eopts :offset voff))
+                    (catch clojure.lang.ExceptionInfo e
+                      (if (recoverable-poke-miss? e) nil (throw e)))))
+             (let [value (Files/readAllBytes (path-of fpath))
+                   value (java.util.Arrays/copyOfRange value (int voff) (alength value))
+                   old0  ((edit-fn 'value-at-path) value path eopts)
+                   old   (if (= old0 edit-absent) nil old0)
+                   nv    (f old)]
+               (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path nv eopts))
+               [old nv])))))))
+
+(defn dissoc-in!
+  "Remove the nested key at the end of `key-vec` = `[store-key & path]`, splicing
+  only the parent container. `path` must be non-empty. Falls back to
+  `konserve.core/update-in` (dissoc on the parent) for an ineligible blob.
+  Synchronous; returns `true`."
+  ([store key-vec] (dissoc-in! store key-vec {}))
+  ([store key-vec opts]
+   (let [k (first key-vec) path (vec (rest key-vec))]
+     (when (empty? path)
+       (throw (ex-info "konserve.mmap/dissoc-in! needs a nested path; use konserve.core/dissoc for a top-level key"
+                       {:type :konserve/bad-argument :key-vec key-vec})))
+     (if-not (edit-eligible? store k)
+       (do (k/update-in store (into [k] (butlast path))
+                        #(dissoc % (last path)) (assoc opts :sync? true))
+           true)
+       (let [eopts (edit-eopts store)
+             [fpath voff] (value-location store k)]
+         (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path eopts)))))))
