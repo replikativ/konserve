@@ -345,6 +345,21 @@
 ;; `torn?` IS A MANUAL SIGNAL. Nothing consults it automatically -- a caller using
 ;; `:checked` is responsible for checking `torn?` on read and reconstructing.
 
+(defn- locked-edit
+  "Run `thunk` holding `store`/`key`'s in-process lock -- the SAME per-key lock
+  `konserve.core` writes take (`go-locked`) -- so an mmap edit serializes against
+  `konserve.core` writes and against other mmap edits on that key. On by default
+  (~1 us uncontended, negligible against any file write); `:lock? false` opts out
+  for a caller that manages its own exclusion.
+
+  ONLY the mmap-write branch is wrapped, never the ineligible fallback: that
+  fallback calls `konserve.core`, which locks the same key, and the registry is
+  NOT reentrant -- double-locking one key on one thread would deadlock."
+  [store key opts thunk]
+  (if (get opts :lock? true)
+    (k/locked store key (thunk))
+    (thunk)))
+
 (defn- durability [opts] (get opts :durability :rename))
 
 (defn- in-place? [opts] (contains? #{:checked :raw} (durability opts)))
@@ -439,26 +454,28 @@
    (let [k (first key-vec) path (vec (rest key-vec))]
      (if-not (edit-eligible? store k)
        (do (k/assoc-in store key-vec v (assoc opts :sync? true)) v)
-       (let [eopts (edit-eopts store)
-             [fpath voff] (value-location store k)]
-         (if-not (in-place? opts)
-           ;; :rename -- always the crash-safe rename path, no in-place mutation
-           (rename-assoc! fpath voff path v eopts)
-           ;; :checked / :raw -- poke (marker-wrapped for :checked), then splice
-           (let [poke! (resolve-mmap 'boring.mmap/poke!)
-                 outcome (when (and poke! (seq path))
-                           (try (with-dirty fpath opts
-                                            #(poke! fpath path v (assoc eopts :offset voff)))
-                                ::poked
-                                (catch clojure.lang.ExceptionInfo e
-                                  (case (:type (ex-data e))
-                                    :boring/not-pokeable ::size-change
-                                    :boring/path-absent  ::structural
-                                    (throw e)))))]
-             (cond
-               (= outcome ::poked) v
-               (and (= outcome ::size-change) (in-place-splice! fpath voff path v eopts opts)) v
-               :else (rename-assoc! fpath voff path v eopts)))))))))
+       (locked-edit store k opts
+        (fn []
+          (let [eopts (edit-eopts store)
+                [fpath voff] (value-location store k)]
+            (if-not (in-place? opts)
+              ;; :rename -- always the crash-safe rename path, no in-place mutation
+              (rename-assoc! fpath voff path v eopts)
+              ;; :checked / :raw -- poke (marker-wrapped for :checked), then splice
+              (let [poke! (resolve-mmap 'boring.mmap/poke!)
+                    outcome (when (and poke! (seq path))
+                              (try (with-dirty fpath opts
+                                               #(poke! fpath path v (assoc eopts :offset voff)))
+                                   ::poked
+                                   (catch clojure.lang.ExceptionInfo e
+                                     (case (:type (ex-data e))
+                                       :boring/not-pokeable ::size-change
+                                       :boring/path-absent  ::structural
+                                       (throw e)))))]
+                (cond
+                  (= outcome ::poked) v
+                  (and (= outcome ::size-change) (in-place-splice! fpath voff path v eopts opts)) v
+                  :else (rename-assoc! fpath voff path v eopts)))))))))))
 
 (defn update-in!
   "Apply `f` to the value at `key-vec` = `[store-key & path]`. Under `:checked`/
@@ -474,17 +491,19 @@
    (let [k (first key-vec) path (vec (rest key-vec))]
      (if (or (empty? path) (not (edit-eligible? store k)))
        (k/update-in store key-vec f (assoc opts :sync? true))
-       (let [eopts (edit-eopts store)
-             [fpath voff] (value-location store k)]
-         (if-not (in-place? opts)
-           (rename-update! fpath voff path f eopts)
-           (let [poke-update! (resolve-mmap 'boring.mmap/poke-update!)]
-             (or (when poke-update!
-                   (try (with-dirty fpath opts
-                                    #(poke-update! fpath path f (assoc eopts :offset voff)))
-                        (catch clojure.lang.ExceptionInfo e
-                          (if (recoverable-poke-miss? e) nil (throw e)))))
-                 (rename-update! fpath voff path f eopts)))))))))
+       (locked-edit store k opts
+        (fn []
+          (let [eopts (edit-eopts store)
+                [fpath voff] (value-location store k)]
+            (if-not (in-place? opts)
+              (rename-update! fpath voff path f eopts)
+              (let [poke-update! (resolve-mmap 'boring.mmap/poke-update!)]
+                (or (when poke-update!
+                      (try (with-dirty fpath opts
+                                       #(poke-update! fpath path f (assoc eopts :offset voff)))
+                           (catch clojure.lang.ExceptionInfo e
+                             (if (recoverable-poke-miss? e) nil (throw e)))))
+                    (rename-update! fpath voff path f eopts)))))))))))
 
 (defn dissoc-in!
   "Remove the nested key at the end of `key-vec` = `[store-key & path]`, splicing
@@ -501,6 +520,8 @@
        (do (k/update-in store (into [k] (butlast path))
                         #(dissoc % (last path)) (assoc opts :sync? true))
            true)
-       (let [eopts (edit-eopts store)
-             [fpath voff] (value-location store k)]
-         (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path (assoc eopts :index :maintain))))))))
+       (locked-edit store k opts
+        (fn []
+          (let [eopts (edit-eopts store)
+                [fpath voff] (value-location store k)]
+            (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path (assoc eopts :index :maintain))))))))))
