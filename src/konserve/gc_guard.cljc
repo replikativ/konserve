@@ -42,7 +42,9 @@
    above konserve. Writers in another process are outside that contract already,
    for reasons more basic than GC (they lose each other's writes). Readers are
    unconstrained."
-  (:require [konserve.utils :as ku])
+  (:require [clojure.core.async :as async]
+            [clojure.core.async.impl.protocols :as async-protocols]
+            [konserve.utils :as ku])
   #?(:clj (:import [java.util Date]))
   ;; Self-require the macro namespace so `with-unreferenced-writes` is available
   ;; to ClojureScript consumers that `:refer` it.
@@ -112,6 +114,43 @@
       (reduce (fn [a b] (if (< (ms a) (ms b)) a b)) starts)
       (now))))
 
+(defn stale
+  "Sequences on `store-id` open longer than `max-age-ms`, as `{token start}`.
+
+  A LEAKED ENTRY IS SILENT AND TOTAL: an open sequence holds the safe point at
+  its start instant, so one that never closes stops collection on this store
+  for the lifetime of the process, and the store grows without bound with
+  nothing logged. Nothing here expires entries automatically — a long-running
+  sequence is legitimate and guessing at a timeout would break it — so this is
+  the introspection a caller needs to notice, and `sweep-stale!` is the
+  deliberate way to act on it.
+
+  Every escape from a values-then-pointer sequence should already release its
+  token: `with-unreferenced-writes` closes on the throw path and, for an async
+  body, when its channel delivers. What this catches is the rest — a body whose
+  channel never delivers, a hand-rolled `writing!` whose `done!` is missed, or
+  a `done!` given the wrong store-id."
+  [store-id max-age-ms]
+  (let [cut (- (ms (now)) max-age-ms)]
+    (into {} (filter (fn [[_ start]] (< (ms start) cut))) (get @in-flight store-id))))
+
+(defn sweep-stale!
+  "Force-close sequences on `store-id` older than `max-age-ms`. Returns what was
+  closed, as `stale` reports it.
+
+  A BLUNT INSTRUMENT, and the last resort: closing a sequence that is genuinely
+  still writing reopens exactly the blind spot the guard exists to cover. Reach
+  for it when `stale` shows an entry that cannot still be live — a crashed
+  writer's, or one whose age exceeds anything the application can produce —
+  and prefer fixing the missing `done!`."
+  [store-id max-age-ms]
+  (let [leaked (stale store-id max-age-ms)]
+    (when (seq leaked)
+      (swap! in-flight (fn [m]
+                         (let [m' (apply update m store-id dissoc (keys leaked))]
+                           (if (empty? (get m' store-id)) (dissoc m' store-id) m')))))
+    leaked))
+
 (defn cutoff
   "The sweep cutoff for `store-id`, given the collection's own `started-at`.
 
@@ -125,15 +164,48 @@
   (let [sp (safe-point store-id)]
     (if (< (ms sp) (ms started-at)) sp started-at)))
 
+(defn close-when-delivered
+  "Close the sequence when `ch` delivers, and hand back a channel carrying the
+   same value. Implementation detail of `with-unreferenced-writes`.
+
+   Public because the macro expands into it, and because a caller building its
+   own async sequence needs the same thing."
+  [store-id token ch]
+  (let [out (async/chan 1)]
+    (async/take! ch (fn [v]
+                      (done! store-id token)
+                      (when (some? v) (async/put! out v))
+                      (async/close! out)))
+    out))
+
 #?(:clj
    (defmacro with-unreferenced-writes
      "Run `body` as one unreferenced-write sequence against `store-id`: no
       concurrent collection in this process will sweep what it writes, until it
       completes. Use it whenever you write values into the store that only a
       LATER write (a transaction, a branch head, an index manifest) makes
-      reachable."
+      reachable.
+
+      WORKS FOR ASYNC BODIES TOO, which a plain `try`/`finally` does not — and
+      that mattered, because konserve's default is `{:sync? false}`, so the most
+      idiomatic body here returns a CHANNEL. `finally` then fires when the go
+      block is CONSTRUCTED, releasing the guard before a single write has
+      happened and making the whole form a no-op. So: if `body` yields a
+      channel, this returns a channel that delivers the same value and closes
+      the sequence when it does; otherwise it closes immediately, as before.
+
+      One consequence worth knowing: an async body's guard is released when its
+      channel DELIVERS. A body that returns a channel nobody ever puts to holds
+      the sequence open forever, and an open sequence stops collection — see
+      `stale` and `sweep-stale!`."
      [store-id & body]
      `(let [sid# ~store-id
             t#   (writing! sid#)]
-        (try ~@body
-             (finally (done! sid# t#))))))
+        (try
+          (let [res# (do ~@body)]
+            (if (satisfies? async-protocols/ReadPort res#)
+              (close-when-delivered sid# t# res#)
+              (do (done! sid# t#) res#)))
+          (catch ~(if (:ns &env) :default 'Throwable) e#
+            (done! sid# t#)
+            (throw e#))))))

@@ -1,9 +1,49 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
-            [konserve.utils :as utils]
+            #?(:clj [konserve.utils :as utils :refer [async+sync *default-sync-translation*]]
+               :cljs [konserve.utils :as utils :refer [*default-sync-translation*]
+                      :refer-macros [async+sync]])
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
+
+(def sweep-sync-translation
+  "`*default-sync-translation*` plus `reduce<?-`, which it does not name.
+
+   The default map rewrites `go-try-` to `try` and `<?-` to `do`, so in sync
+   mode the batch fn returns a VALUE — and `reduce<?-` would then try to take
+   from something that is not a channel. `reduce` is what it degrades to."
+  (merge *default-sync-translation* '{reduce<?- reduce}))
+
+(defn- delete-batch!
+  "Delete one batch of keys, concurrently where the platform allows it.
+
+   `:ignore-existence?` because GC never uses `dissoc`'s `existed?` return, and
+   it lets miss-safe backings skip the per-key HEAD probe — a delete here is
+   idempotent by construction.
+
+   The concurrency is worth keeping rather than simplifying away: the stores
+   that most need it are exactly the ones that take this path. A backing with
+   multi-key support batches into one round trip above; everything else — the
+   FILESTORE included, which is what scriptum and proximum run on — deletes key
+   by key, and doing that serially against a remote store costs one round trip
+   per key.
+
+   Async mode merges the per-key channels. Sync mode has no channels to merge,
+   so the JVM uses `pmap` for the same effect; ClojureScript runs serially,
+   which costs it nothing it could have had — sync mode there is single-threaded
+   by definition."
+  [store batch sync?]
+  (if sync?
+    #?(:clj (dorun (pmap (fn [{:keys [key]}]
+                           (k/dissoc store key {:sync? true :ignore-existence? true}))
+                         batch))
+       :cljs (doseq [{:keys [key]} batch]
+               (k/dissoc store key {:sync? true :ignore-existence? true})))
+    (let [pending (mapv (fn [{:keys [key]}]
+                          (k/dissoc store key {:ignore-existence? true}))
+                        batch)]
+      (async/into [] (async/merge pending)))))
 
 (defn sweep!
   "Delete every key that is neither in `whitelist` nor written at/after `cutoff`.
@@ -34,35 +74,32 @@
    (sweep! store whitelist cutoff 1000 {}))
   ([store whitelist cutoff batch-size]
    (sweep! store whitelist cutoff batch-size {}))
-  ([store whitelist cutoff batch-size _opts]
-   (go-try-
-    (let [ts cutoff
-          to-delete (->> (<?- (k/keys store))
-                         (filter (fn [{:keys [key last-write] :as meta}]
-                                   (not
-                                    (or (contains? whitelist key)
-                                        (<= (.getTime ^Date ts)
-                                            (.getTime (if last-write
-                                                        ^Date last-write
-                                                        ;; old name
-                                                        ^Date (:konserve.core/timestamp meta))))))))
-                         (partition-all batch-size))]
-      (<?-
-       (reduce<?-
-        (fn [deleted-files batch]
-          (go-try-
-           (if (utils/multi-key-capable? store)
-             ;; Use multi-dissoc for batch deletion if supported
-             (let [keys-to-delete (mapv :key batch)]
-               (<?- (k/multi-dissoc store keys-to-delete))
-               (into deleted-files keys-to-delete))
-             ;; Fallback to single operations for stores without multi-key support.
-             ;; GC does not use dissoc's existed? return, so :ignore-existence? lets
-             ;; miss-safe backings skip the per-key HEAD probe (idempotent delete).
-             (let [pending-deletes (mapv (fn [{:keys [key]}]
-                                           (k/dissoc store key {:ignore-existence? true}))
-                                         batch)]
-               (<?- (async/into [] (async/merge pending-deletes)))
-               (into deleted-files (map :key batch))))))
-        #{}
-        to-delete))))))
+  ([store whitelist cutoff batch-size opts]
+   (async+sync
+    (:sync? opts)
+    sweep-sync-translation
+    (go-try-
+     (let [sync? (:sync? opts)
+           to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
+                          (filter (fn [{:keys [key last-write] :as meta}]
+                                    (not
+                                     (or (contains? whitelist key)
+                                         (<= (.getTime ^Date cutoff)
+                                             (.getTime (if last-write
+                                                         ^Date last-write
+                                                         ;; old name
+                                                         ^Date (:konserve.core/timestamp meta))))))))
+                          (partition-all batch-size))]
+       (<?-
+        (reduce<?-
+         (fn [deleted-files batch]
+           (go-try-
+            (if (utils/multi-key-capable? store)
+              ;; one round trip for the whole batch where the backing allows it
+              (let [keys-to-delete (mapv :key batch)]
+                (<?- (k/multi-dissoc store keys-to-delete (select-keys opts [:sync?])))
+                (into deleted-files keys-to-delete))
+              (do (<?- (delete-batch! store batch sync?))
+                  (into deleted-files (map :key batch))))))
+         #{}
+         to-delete)))))))

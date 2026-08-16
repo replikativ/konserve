@@ -15,7 +15,7 @@
             [clojure.string]
             [konserve.gc-guard :as guard]
             [konserve.utils :as utils]
-            #?@(:clj [[clojure.core.async :refer [<!!]]
+            #?@(:clj [[clojure.core.async :as async :refer [<! <!!]]
                       [konserve.core :as k]
                       [konserve.gc :as gc]
                       [konserve.store :as ks]
@@ -209,6 +209,62 @@
                          "the open sequence pinned the cutoff before its own writes")
                      (is (some? (<!! (k/get store :v1 nil {:sync? false})))
                          "so :root's target survives"))))))
+           (finally (reset! stamp-atom saved)))))))
+
+#?(:clj
+   (deftest the-guard-survives-an-async-body
+     (testing "REGRESSION: konserve's default is {:sync? false}, so the most
+               idiomatic body here returns a CHANNEL — and a plain try/finally
+               releases the guard when the go block is CONSTRUCTED, before a
+               single write has happened. The form was a no-op for exactly the
+               usage it most needs to cover."
+       (let [sid (random-uuid)
+             seen-inside (promise)
+             release (async/chan)
+             result (guard/with-unreferenced-writes sid
+                      (async/go
+                        (<! release)
+                        (deliver seen-inside (guard/in-flight? sid))
+                        :done))]
+         (is (guard/in-flight? sid)
+             "the sequence must still be open while the body runs")
+         (async/close! release)
+         (is (= :done (<!! result)) "the body's value must reach the caller")
+         (is (true? @seen-inside)
+             "and the guard must have been held for the body's whole extent")
+         (is (not (guard/in-flight? sid))
+             "closing once the channel delivers")))))
+
+#?(:clj
+   (deftest a-sync-body-still-closes-eagerly-and-on-throw
+     (let [sid (random-uuid)]
+       (is (= :v (guard/with-unreferenced-writes sid :v)))
+       (is (not (guard/in-flight? sid)) "a value body closes immediately")
+       (is (thrown? Exception (guard/with-unreferenced-writes sid
+                                (throw (ex-info "boom" {})))))
+       (is (not (guard/in-flight? sid)) "and a throwing body still closes"))))
+
+#?(:clj
+   (deftest a-leaked-sequence-is-visible-and-can-be-forced-shut
+     (testing "a leaked entry stops collection on the store for the life of the
+               process, silently. Nothing expires it automatically — a genuinely
+               long sequence is legitimate — so it has to be observable."
+       (let [sid (random-uuid)
+             stamp-atom @#'utils/last-stamp
+             saved @stamp-atom
+             clock (atom (+ 1000 (utils/monotonic-now-ms)))]
+         (try
+           (binding [utils/*wall-clock-ms* #(deref clock)]
+             (let [_leaked (guard/writing! sid)]      ; token dropped on the floor
+               (is (empty? (guard/stale sid 10000))
+                   "a young sequence is not stale")
+               (swap! clock + 60000)
+               (is (= 1 (count (guard/stale sid 10000)))
+                   "an old one is reported")
+               (is (guard/in-flight? sid))
+               (is (= 1 (count (guard/sweep-stale! sid 10000))))
+               (is (not (guard/in-flight? sid))
+                   "and forcing it shut lets collection resume")))
            (finally (reset! stamp-atom saved)))))))
 
 #?(:clj
