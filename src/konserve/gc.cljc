@@ -1,37 +1,42 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
-            [konserve.gc-guard :as guard]
-            [konserve.protocols :as p]
             [konserve.utils :as utils]
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
 (defn sweep!
-  "Delete every key that is neither in `whitelist` nor written at/after the
-   cutoff. `ts` is the instant the collection started.
+  "Delete every key that is neither in `whitelist` nor written at/after `cutoff`.
 
-   The cutoff is `min(ts, safe-point)`, not `ts`, so a values-then-pointer
-   sequence that has written its objects but not yet made them reachable is
-   spared (see `konserve.gc-guard`). Getting that combination right is fiddly —
-   the guard must be read AFTER `ts`, or a sequence opening in between is
-   missed — so it lives here rather than in every caller.
+   PRECONDITION, and the whole reason `konserve.gc-guard` exists: on a store
+   with guarded writers, `cutoff` must come from `konserve.gc-guard/cutoff`,
+   and it must be read BEFORE the caller computes `whitelist`:
 
-   The store names itself: `store-id` comes from `PStoreIdentity`, which every
-   store connected through `konserve.store` carries. Pass `:store-id`
-   explicitly only for a store built through a backend constructor directly
-   (`connect-fs-store` and friends), which never took an id. When neither is
-   available the guard cannot be consulted and `ts` is used verbatim — safe
-   only if no writer on this store takes the guard, or the caller computed `ts`
-   via `konserve.gc-guard/cutoff` itself."
-  ([store whitelist ts]
-   (sweep! store whitelist ts 1000 {}))
-  ([store whitelist ts batch-size]
-   (sweep! store whitelist ts batch-size {}))
-  ([store whitelist ts batch-size {:keys [store-id]}]
+       (let [cutoff    (guard/cutoff store-id (utils/now))   ; 1. guard
+             whitelist (mark-reachable! store)]              ; 2. mark
+         (sweep! store whitelist cutoff))                    ; 3. sweep
+
+   That order is not a style preference. A values-then-pointer sequence that is
+   open at step 1 pins the cutoff at or before its own writes, so they survive
+   however step 2 turns out. Mark first and the same sequence can land its
+   pointer in between: step 2 walked roots that did not name its values yet, and
+   by step 3 the guard is closed again, so nothing spares them — they are older
+   than the cutoff and unreachable from the whitelist, and the sweep deletes
+   objects a live pointer names.
+
+   `sweep!` DELIBERATELY DOES NOT CONSULT THE GUARD ITSELF. It cannot: it
+   receives `whitelist` already computed, so any reading it does is necessarily
+   after the caller's mark — the broken order above, wearing the appearance of
+   safety. Only the caller is in a position to interleave the two correctly.
+
+   Passing a raw `(utils/now)` is correct only on a store no writer guards."
+  ([store whitelist cutoff]
+   (sweep! store whitelist cutoff 1000 {}))
+  ([store whitelist cutoff batch-size]
+   (sweep! store whitelist cutoff batch-size {}))
+  ([store whitelist cutoff batch-size _opts]
    (go-try-
-    (let [store-id (or store-id (p/store-id store))
-          ts (if store-id (guard/cutoff store-id ts) ts)
+    (let [ts cutoff
           to-delete (->> (<?- (k/keys store))
                          (filter (fn [{:keys [key last-write] :as meta}]
                                    (not

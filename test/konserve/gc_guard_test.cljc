@@ -131,20 +131,85 @@
 
 #?(:clj
    (deftest sweep-with-the-guard-spares-the-unrooted-write
-     (testing "same sequence, guard held: sweep! derives min(ts, safe-point) from
-               :store-id and leaves the in-flight values alone"
+     (testing "same sequence, but the CALLER derives the cutoff from the guard
+               before marking: min(ts, safe-point) sits at or before the open
+               sequence, so its values are never older than the cutoff"
        (let [store (fresh-store)
              sid (random-uuid)
              token (guard/writing! sid)]
          (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
          (<!! (k/assoc store :value-2 {:node :data} {:sync? false}))
-         (let [started (cutoff-after-writes)
-               deleted (<!! (gc/sweep! store #{:root} started 1000 {:store-id sid}))]
+         (let [cutoff (guard/cutoff sid (cutoff-after-writes))
+               deleted (<!! (gc/sweep! store #{:root} cutoff))]
            (is (empty? deleted) "nothing may be collected while the sequence is open")
            (is (some? (<!! (k/get store :value-1 nil {:sync? false}))))
            (is (some? (<!! (k/get store :value-2 nil {:sync? false})))))
          (guard/done! sid token)
          (is (not (guard/in-flight? sid)))))))
+
+#?(:clj
+   (deftest the-guard-must-be-read-before-the-mark
+     (testing "THE ordering property, and why `sweep!` refuses to read the guard
+               itself: it is handed an already-computed whitelist, so any reading
+               it did would necessarily be AFTER the caller's mark.
+
+               A sequence open at the start, whose pointer lands between the mark
+               and the sweep, is invisible to a cutoff taken after the mark — by
+               then the guard is closed, so the cutoff snaps back to the
+               collection start, while the mark walked roots that did not name
+               the values yet.
+
+               The clock is driven rather than waited on: stamps are pinned to
+               wall time at millisecond granularity and the sweep spares ties, so
+               a real-time version of this test spares the values by accident
+               about as often as it proves anything. The high-water mark is
+               process-global and `max`-based, so it is restored afterwards."
+       (let [stamp-atom @#'utils/last-stamp
+             saved @stamp-atom]
+         (try
+           ;; WRONG ORDER: mark, then read the guard.
+           (let [store (fresh-store)
+                 sid (random-uuid)
+                 clock (atom (+ 1000 (utils/monotonic-now-ms)))]
+             (binding [utils/*wall-clock-ms* #(deref clock)]
+               (let [token (guard/writing! sid)]
+                 (swap! clock + 1000)
+                 (<!! (k/assoc store :root {:points-to []} {:sync? false}))
+                 (<!! (k/assoc store :v1 {:node :data} {:sync? false}))
+                 (swap! clock + 1000)
+                 (let [ts (utils/now)
+                       whitelist #{:root}]      ; mark: :root does not name :v1 yet
+                   (swap! clock + 1000)
+                   ;; the pointer lands and the sequence closes, after the mark
+                   (<!! (k/assoc store :root {:points-to [:v1]} {:sync? false}))
+                   (guard/done! sid token)
+                   (let [cutoff (guard/cutoff sid ts)   ; read too late
+                         deleted (<!! (gc/sweep! store whitelist cutoff))]
+                     (is (contains? (set deleted) :v1)
+                         "a guard read after the mark cannot spare :v1")
+                     (is (nil? (<!! (k/get store :v1 nil {:sync? false})))
+                         "so :root is left dangling"))))))
+           ;; RIGHT ORDER: read the guard, then mark.
+           (let [store (fresh-store)
+                 sid (random-uuid)
+                 clock (atom (+ 1000 (utils/monotonic-now-ms)))]
+             (binding [utils/*wall-clock-ms* #(deref clock)]
+               (let [token (guard/writing! sid)]
+                 (swap! clock + 1000)
+                 (<!! (k/assoc store :root {:points-to []} {:sync? false}))
+                 (<!! (k/assoc store :v1 {:node :data} {:sync? false}))
+                 (swap! clock + 1000)
+                 (let [cutoff (guard/cutoff sid (utils/now))  ; guard first, still open
+                       whitelist #{:root}]                    ; then mark
+                   (swap! clock + 1000)
+                   (<!! (k/assoc store :root {:points-to [:v1]} {:sync? false}))
+                   (guard/done! sid token)
+                   (let [deleted (<!! (gc/sweep! store whitelist cutoff))]
+                     (is (empty? deleted)
+                         "the open sequence pinned the cutoff before its own writes")
+                     (is (some? (<!! (k/get store :v1 nil {:sync? false})))
+                         "so :root's target survives"))))))
+           (finally (reset! stamp-atom saved)))))))
 
 #?(:clj
    (deftest guard-is-shared-across-independent-writers-on-one-store
@@ -156,47 +221,64 @@
              ;; writer A (say a datahike commit) opens a sequence
              token-a (guard/writing! sid)]
          (<!! (k/assoc store :a-value {:from :a} {:sync? false}))
-         ;; writer B (say a scriptum manifest sync) triggers a collection
-         (let [started (cutoff-after-writes)
-               deleted (<!! (gc/sweep! store #{} started 1000 {:store-id sid}))]
+         ;; writer B (say a scriptum manifest sync) triggers a collection, and
+         ;; derives its cutoff from the SAME store id
+         (let [cutoff (guard/cutoff sid (cutoff-after-writes))
+               deleted (<!! (gc/sweep! store #{} cutoff))]
            (is (empty? deleted)
                "B's sweep must not collect A's in-flight values")
            (is (some? (<!! (k/get store :a-value nil {:sync? false})))))
          (guard/done! sid token-a)))))
 
 #?(:clj
-   (deftest sweep-consults-the-guard-without-being-told-the-store-id
-     (testing "a store connected through konserve.store names itself, so the
-               guard applies with no :store-id argument at all — the case where
-               a caller and a writer could otherwise disagree about the name"
+   (deftest a-store-names-itself-so-callers-cannot-disagree
+     (testing "the id a caller feeds the guard should come off the store, not be
+               passed alongside it — disagreement there is invisible until a
+               collection deletes something.
+
+               Clock driven, and the high-water mark restored: the second sweep
+               has to actually collect, and against wall time its cutoff ties
+               with the write it is meant to be younger than about half the time."
        (let [id (random-uuid)
-             store (ks/create-store {:backend :memory :id id} {:sync? true})]
+             store (ks/create-store {:backend :memory :id id} {:sync? true})
+             stamp-atom @#'utils/last-stamp
+             saved @stamp-atom
+             clock (atom (+ 1000 (utils/monotonic-now-ms)))]
          (is (= id (ks/store-id store)) "the store must carry its own id")
-         (let [token (guard/writing! id)]
-           (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
-           ;; No :store-id passed. The sweep has to find it on the store.
-           (let [deleted (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000 {}))]
-             (is (empty? deleted)
-                 "the derived id must reach the guard and spare the in-flight write")
-             (is (some? (<!! (k/get store :value-1 nil {:sync? false})))))
-           (guard/done! id token))
-         ;; With the sequence closed the same sweep collects normally, which
-         ;; proves the emptiness above came from the guard and not from a sweep
-         ;; that simply never ran.
-         (let [deleted (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000 {}))]
-           (is (contains? (set deleted) :value-1)))))))
+         (try
+           (binding [utils/*wall-clock-ms* #(deref clock)]
+             (let [sid (ks/store-id store)
+                   token (guard/writing! sid)]
+               (swap! clock + 1000)
+               (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
+               (swap! clock + 1000)
+               (let [cutoff (guard/cutoff sid (utils/now))
+                     deleted (<!! (gc/sweep! store #{} cutoff))]
+                 (is (empty? deleted)
+                     "the id taken off the store must reach the guard")
+                 (is (some? (<!! (k/get store :value-1 nil {:sync? false})))))
+               (guard/done! sid token)
+               ;; Sequence closed: the same sweep now collects, which proves the
+               ;; emptiness above came from the guard and not from a sweep that
+               ;; simply never ran.
+               (swap! clock + 1000)
+               (let [cutoff (guard/cutoff sid (utils/now))
+                     deleted (<!! (gc/sweep! store #{} cutoff))]
+                 (is (contains? (set deleted) :value-1)))))
+           (finally (reset! stamp-atom saved)))))))
 
 #?(:clj
-   (deftest an-explicit-store-id-still-wins
-     (testing "a store built through a backend constructor never took an id, so
-               the caller must still be able to supply one"
+   (deftest a-constructor-built-store-has-no-id-of-its-own
+     (testing "a store built through a backend constructor never took a config,
+               so it cannot name itself and the caller must supply the id it
+               guards with"
        (let [store (fresh-store)
              sid (random-uuid)]
          (is (nil? (ks/store-id store)))
          (let [token (guard/writing! sid)]
            (<!! (k/assoc store :value-1 {:node :data} {:sync? false}))
-           (is (empty? (<!! (gc/sweep! store #{} (cutoff-after-writes) 1000
-                                       {:store-id sid}))))
+           (is (empty? (<!! (gc/sweep! store #{}
+                                       (guard/cutoff sid (cutoff-after-writes))))))
            (guard/done! sid token))))))
 
 #?(:clj
