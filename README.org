@@ -540,6 +540,35 @@ value:
 
 You can read and write custom records according to [[https://github.com/replikativ/incognito][incognito]].
 
+*** Reading and editing without decoding (experimental)
+
+A value written by =:BoringSerializer= is ordinary CBOR at a known offset in its
+file, so =konserve.mmap= can reach into it *without materialising the rest* —
+read one field, or change one field, without decoding (or re-encoding) the whole
+value. On the JVM (JDK 22+) an edit becomes a page write rather than a whole-file
+rewrite; on a large value that is the difference between microseconds and
+milliseconds.
+
+#+BEGIN_SRC clojure
+  (require '[konserve.mmap :as kmm] '[boring.nav :as nav])
+
+  ;; read: reach one key, build nothing else
+  (kmm/with-mmap-value [c store "customers"]
+    (nav/value (get-in c ["customer-137" "name"])))
+
+  ;; write: edit in place / splice only the changed bytes
+  (kmm/assoc-in!  store [:doc :section :field] 42 {:durability :checked})
+  (kmm/update-in! store [:doc :counter] inc)
+#+END_SRC
+
+It works only on a boring, uncompressed, unencrypted, non-stringref blob (write a
+store with the =:archival= profile to make its values editable); anything else
+*falls back* to the ordinary =konserve.core= op, so dispatch is always safe.
+Durability is a choice — =:rename= (default, crash-safe by construction),
+=:checked= (in place, torn-write detectable via =torn?=), =:raw= — and write ops
+take the per-key lock by default. The full API, the durability model, the store
+configuration and the numbers are in [[file:doc/in-place-editing.md][doc/in-place-editing.md]].
+
 *** Error Handling
 
 For synchronous execution, normal exceptions are thrown. For asynchronous
