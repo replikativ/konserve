@@ -455,27 +455,27 @@
      (if-not (edit-eligible? store k)
        (do (k/assoc-in store key-vec v (assoc opts :sync? true)) v)
        (locked-edit store k opts
-        (fn []
-          (let [eopts (edit-eopts store)
-                [fpath voff] (value-location store k)]
-            (if-not (in-place? opts)
+                    (fn []
+                      (let [eopts (edit-eopts store)
+                            [fpath voff] (value-location store k)]
+                        (if-not (in-place? opts)
               ;; :rename -- always the crash-safe rename path, no in-place mutation
-              (rename-assoc! fpath voff path v eopts)
+                          (rename-assoc! fpath voff path v eopts)
               ;; :checked / :raw -- poke (marker-wrapped for :checked), then splice
-              (let [poke! (resolve-mmap 'boring.mmap/poke!)
-                    outcome (when (and poke! (seq path))
-                              (try (with-dirty fpath opts
-                                               #(poke! fpath path v (assoc eopts :offset voff)))
-                                   ::poked
-                                   (catch clojure.lang.ExceptionInfo e
-                                     (case (:type (ex-data e))
-                                       :boring/not-pokeable ::size-change
-                                       :boring/path-absent  ::structural
-                                       (throw e)))))]
-                (cond
-                  (= outcome ::poked) v
-                  (and (= outcome ::size-change) (in-place-splice! fpath voff path v eopts opts)) v
-                  :else (rename-assoc! fpath voff path v eopts)))))))))))
+                          (let [poke! (resolve-mmap 'boring.mmap/poke!)
+                                outcome (when (and poke! (seq path))
+                                          (try (with-dirty fpath opts
+                                                 #(poke! fpath path v (assoc eopts :offset voff)))
+                                               ::poked
+                                               (catch clojure.lang.ExceptionInfo e
+                                                 (case (:type (ex-data e))
+                                                   :boring/not-pokeable ::size-change
+                                                   :boring/path-absent  ::structural
+                                                   (throw e)))))]
+                            (cond
+                              (= outcome ::poked) v
+                              (and (= outcome ::size-change) (in-place-splice! fpath voff path v eopts opts)) v
+                              :else (rename-assoc! fpath voff path v eopts)))))))))))
 
 (defn update-in!
   "Apply `f` to the value at `key-vec` = `[store-key & path]`. Under `:checked`/
@@ -492,18 +492,18 @@
      (if (or (empty? path) (not (edit-eligible? store k)))
        (k/update-in store key-vec f (assoc opts :sync? true))
        (locked-edit store k opts
-        (fn []
-          (let [eopts (edit-eopts store)
-                [fpath voff] (value-location store k)]
-            (if-not (in-place? opts)
-              (rename-update! fpath voff path f eopts)
-              (let [poke-update! (resolve-mmap 'boring.mmap/poke-update!)]
-                (or (when poke-update!
-                      (try (with-dirty fpath opts
-                                       #(poke-update! fpath path f (assoc eopts :offset voff)))
-                           (catch clojure.lang.ExceptionInfo e
-                             (if (recoverable-poke-miss? e) nil (throw e)))))
-                    (rename-update! fpath voff path f eopts)))))))))))
+                    (fn []
+                      (let [eopts (edit-eopts store)
+                            [fpath voff] (value-location store k)]
+                        (if-not (in-place? opts)
+                          (rename-update! fpath voff path f eopts)
+                          (let [poke-update! (resolve-mmap 'boring.mmap/poke-update!)]
+                            (or (when poke-update!
+                                  (try (with-dirty fpath opts
+                                         #(poke-update! fpath path f (assoc eopts :offset voff)))
+                                       (catch clojure.lang.ExceptionInfo e
+                                         (if (recoverable-poke-miss? e) nil (throw e)))))
+                                (rename-update! fpath voff path f eopts)))))))))))
 
 (defn dissoc-in!
   "Remove the nested key at the end of `key-vec` = `[store-key & path]`, splicing
@@ -521,7 +521,7 @@
                         #(dissoc % (last path)) (assoc opts :sync? true))
            true)
        (locked-edit store k opts
-        (fn []
-          (let [eopts (edit-eopts store)
-                [fpath voff] (value-location store k)]
-            (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path (assoc eopts :index :maintain))))))))))
+                    (fn []
+                      (let [eopts (edit-eopts store)
+                            [fpath voff] (value-location store k)]
+                        (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path (assoc eopts :index :maintain))))))))))
