@@ -390,7 +390,7 @@
            ;; a leaf whose length changed: in place when allowed, else rename
            (and (= outcome ::size-change) (in-place? opts)
                 (in-place-splice! fpath voff path v eopts opts)) v
-           :else (do (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path v eopts))
+           :else (do (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path v (assoc eopts :index :maintain)))
                      v)))))))
 
 (defn update-in!
@@ -415,7 +415,7 @@
                    old0  ((edit-fn 'value-at-path) value path eopts)
                    old   (if (= old0 edit-absent) nil old0)
                    nv    (f old)]
-               (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path nv eopts))
+               (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path nv (assoc eopts :index :maintain)))
                [old nv])))))))
 
 (defn dissoc-in!
@@ -435,4 +435,4 @@
            true)
        (let [eopts (edit-eopts store)
              [fpath voff] (value-location store k)]
-         (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path eopts)))))))
+         (splice-write! fpath voff #((edit-fn 'dissoc-in-bytes) % path (assoc eopts :index :maintain))))))))
