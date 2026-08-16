@@ -54,7 +54,7 @@
             [konserve.impl.defaults :refer [key->store-key]]
             [konserve.impl.storage-layout :refer [header-size]]
             [konserve.serializers :as ser])
-  (:import [java.io File FileInputStream FileOutputStream]
+  (:import [java.io File FileInputStream FileOutputStream RandomAccessFile]
            [java.nio.file Files Path StandardCopyOption CopyOption]))
 
 (def ^:private boring-serializer-byte
@@ -298,11 +298,78 @@
 (defn- recoverable-poke-miss? [e]
   (contains? #{:boring/not-pokeable :boring/path-absent} (:type (ex-data e))))
 
+;; ---- durability -----------------------------------------------------------
+;;
+;; :rename (default) -- splice writes a `.new` file and atomic-renames it, the
+;;   crash-safe path konserve already uses.
+;; :checked -- edit the blob IN PLACE (no copy) but wrap it in a dirty flag: set
+;;   it, msync, do the edit, msync, clear it, msync. A crash mid-edit leaves the
+;;   flag set, so `torn?` reports it and the caller reconstructs. O(1) detection,
+;;   no value hashing. For reproducible data.
+;; :raw -- edit in place with no flag. Cheapest; relies on nothing.
+
+(def ^:private dirty-byte
+  "Header byte carrying the in-place-edit dirty flag. Bytes 8-19 of the 20-byte
+  header are spare (zero) and never touched by the value or its metadata."
+  8)
+
+(defn- durability [opts] (get opts :durability :rename))
+
+(defn- in-place? [opts] (contains? #{:checked :raw} (durability opts)))
+
+(defn- write-dirty! [^String fpath ^long v]
+  (with-open [raf (RandomAccessFile. fpath "rw")]
+    (.seek raf dirty-byte)
+    (.write raf (int v))
+    (.force (.getChannel raf) true)))
+
+(defn torn?
+  "Whether `key`'s blob is mid-edit -- an in-place `:checked` edit set the dirty
+  flag and a crash prevented it clearing. A true here means the value may be
+  half-written and should be reconstructed, not trusted. Reads one header byte."
+  [store key]
+  (let [[fpath _] (value-location store key)]
+    (with-open [in (FileInputStream. ^String fpath)]
+      (.skip in dirty-byte)
+      (= 1 (.read in)))))
+
+(defn- with-dirty
+  "Run `thunk` between setting and clearing the dirty flag when durability is
+  `:checked`; otherwise just run it."
+  [fpath opts thunk]
+  (if (= :checked (durability opts))
+    (do (write-dirty! fpath 1)
+        (try (thunk) (finally (write-dirty! fpath 0))))
+    (thunk)))
+
+(defn- in-place-splice!
+  "Size-changing LEAF replace of `path`=`v` IN PLACE via `boring.mmap/splice!`,
+  wrapped in the dirty flag for `:checked`. Returns true, or nil when in-place is
+  not possible here (no FFM, or the framed value's index cannot be maintained) so
+  the caller can fall back to the rename path."
+  [fpath voff path v eopts opts]
+  (when-let [splice! (resolve-mmap 'boring.mmap/splice!)]
+    (try
+      (with-dirty fpath opts #(splice! fpath path v (assoc eopts :offset voff)))
+      true
+      (catch clojure.lang.ExceptionInfo e
+        (when-not (= :boring/unmaintainable-index (:type (ex-data e)))
+          (throw e))
+        nil))))
+
 (defn assoc-in!
-  "Set the value at `key-vec` = `[store-key & path]` to `v`, editing the blob in
-  place (same-length poke via mmap) or by splicing only the changed bytes
-  (crash-safe rename), never decoding the whole value. Falls back to
-  `konserve.core/assoc-in` for an ineligible blob. Synchronous; returns `v`."
+  "Set the value at `key-vec` = `[store-key & path]` to `v`, editing the blob
+  without decoding the whole value. A same-length change is poked in place; a
+  size-changing LEAF change is spliced -- in place (no copy) when `:durability`
+  is `:checked` or `:raw`, else via a crash-safe `.new` + atomic rename; and a
+  structural change (a new key) re-encodes only the parent and renames. Falls
+  back to `konserve.core/assoc-in` for an ineligible blob. Synchronous; returns
+  `v`.
+
+  `:durability` -- `:rename` (default, crash-safe by construction), `:checked`
+  (in-place, torn-write detectable via `torn?`, reconstruct on crash), `:raw`
+  (in-place, no flag). In-place needs FFM (JDK 22+); without it, or for a framed
+  value whose index cannot be maintained, it falls back to `:rename`."
   ([store key-vec v] (assoc-in! store key-vec v {}))
   ([store key-vec v opts]
    (let [k (first key-vec) path (vec (rest key-vec))]
@@ -310,12 +377,21 @@
        (do (k/assoc-in store key-vec v (assoc opts :sync? true)) v)
        (let [eopts (edit-eopts store)
              [fpath voff] (value-location store k)
-             poke! (resolve-mmap 'boring.mmap/poke!)]
-         (or (when (and poke! (seq path))
-               (try (poke! fpath path v (assoc eopts :offset voff)) v
-                    (catch clojure.lang.ExceptionInfo e
-                      (if (recoverable-poke-miss? e) nil (throw e)))))
-             (do (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path v eopts)) v)))))))
+             poke! (resolve-mmap 'boring.mmap/poke!)
+             outcome (when (and poke! (seq path))
+                       (try (poke! fpath path v (assoc eopts :offset voff)) ::poked
+                            (catch clojure.lang.ExceptionInfo e
+                              (case (:type (ex-data e))
+                                :boring/not-pokeable ::size-change
+                                :boring/path-absent  ::structural
+                                (throw e)))))]
+         (cond
+           (= outcome ::poked) v
+           ;; a leaf whose length changed: in place when allowed, else rename
+           (and (= outcome ::size-change) (in-place? opts)
+                (in-place-splice! fpath voff path v eopts opts)) v
+           :else (do (splice-write! fpath voff #((edit-fn 'assoc-in-bytes) % path v eopts))
+                     v)))))))
 
 (defn update-in!
   "Apply `f` to the value at `key-vec` = `[store-key & path]`, poking in place
