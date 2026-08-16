@@ -2,6 +2,17 @@
 
 This document summarizes research into zero-copy serialization options that could potentially improve deserialization performance in konserve, particularly for the tiered store sync use case.
 
+> **Update — what shipped.** This was a design survey (Dec 2024); the schema-based
+> options below were *not* the path taken. konserve now gets zero-copy reads —
+> and in-place edits — from the **boring** serializer (`:BoringSerializer`, RFC
+> 8949 CBOR): a boring blob is self-describing CBOR at a known file offset, so
+> `konserve.mmap` navigates or edits one field without decoding the rest, with no
+> schema and without constraining EDN to known types (the very cost this doc
+> worried about with FlatBuffers). See
+> [in-place-editing.md](in-place-editing.md). The survey below is kept as the
+> rationale for *why* a self-describing, navigable format beat a schema-compiled
+> one here.
+
 ## Problem Statement
 
 When using `multi-get` to retrieve many keys at once (e.g., during tiered store initialization from IndexedDB), the deserialization loop becomes the bottleneck. Even with efficient bulk I/O via single IndexedDB transactions, the CPU-bound deserialization of each blob limits throughput.
