@@ -2,7 +2,8 @@
   (:require [clojure.core.async :as a :refer [go <! take! #?(:clj <!!)]]
             [clojure.test :refer [deftest #?(:cljs async)]]
             [konserve.compliance-test :refer [#?(:clj compliance-test)
-                                              async-compliance-test conditional-write-compliance-test]]
+                                              async-compliance-test conditional-write-compliance-test
+                                              async-conditional-write-compliance-test]]
             [konserve.memory :refer [new-mem-store map->MemoryStore]]
             [konserve.tests.cache :as ct]
             [konserve.tests.gc :as gct]
@@ -33,6 +34,20 @@
      (go
        {:frontend (<! (new-mem-store (atom {})))
         :backend (<! (new-mem-store (atom {})))})))
+
+(deftest memory-async-conditional-write-test
+  ;; The async arm of the same contract, on both platforms. It exists for
+  ;; async-only backends that the sync suite cannot reach (konserve-s3's cljs
+  ;; backing), and running it here keeps it honest: a suite whose only caller
+  ;; lives in another repository drifts, and this one already shipped once with a
+  ;; compliance test nothing called.
+  #?(:clj
+     (<!! (async-conditional-write-compliance-test (<!! (new-mem-store))))
+     :cljs
+     (async done
+            (go
+              (<! (async-conditional-write-compliance-test (<! (new-mem-store))))
+              (done)))))
 
 (deftest tiered-store-memory-compliance-test
   #?(:clj

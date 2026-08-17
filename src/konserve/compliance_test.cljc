@@ -367,6 +367,72 @@
              (<!! (k/dissoc store :hook-bin opts))
              (<!! (k/dissoc store :hook-after-remove opts))))))))
 
+(defn async-conditional-write-compliance-test
+  "The `:expected-revision` contract for ASYNC-ONLY backends. Returns a channel.
+
+   The same contract as [[conditional-write-compliance-test]], and a separate
+   function for the same reason `async-compliance-test` is: resolving a result to
+   a value needs `<!!` in the sync suite, and ClojureScript has no blocking take,
+   so a shared body cannot serve both. That leaves the suite unable to reach a
+   backend that is async-only under cljs — konserve-s3's ClojureScript backing is
+   exactly that, and it claims `:global`. An unenforced claim is what this whole
+   capability exists to prevent, so the suite has to be able to get at it.
+
+   Assertions are kept in step with the sync version by hand; if you add a rule
+   to one, add it to the other."
+  [store]
+  (go
+    (let [rejected? (fn [v] (= :konserve/revision-mismatch (:type (ex-data v))))]
+      (if-not (k/conditional-write? store)
+        (testing "a store without the capability REFUSES, it does not ignore"
+          ;; Async failures arrive as a VALUE on the channel rather than thrown,
+          ;; so this asserts on what was delivered. `(is (thrown? ...))` around a
+          ;; take cannot pass here — the sync suite asserted exactly that once and
+          ;; failed 3 of its own assertions the first time anyone ran it.
+          (is (some? (ex-data (<! (k/assoc store :cas-async {:v 1}
+                                           {:expected-revision :anything}))))
+              "an unsupported :expected-revision must come back as an error"))
+        (testing "conditional writes"
+          (is (not (rejected? (<! (k/assoc store :cas-async {:v 1}
+                                           {:expected-revision konserve.impl.defaults/absent}))))
+              "create-if-absent succeeds on a missing key")
+          (is (= {:v 1} (<! (k/get store :cas-async nil))))
+
+          (is (rejected? (<! (k/assoc store :cas-async {:v :no}
+                                      {:expected-revision konserve.impl.defaults/absent})))
+              "create-if-absent is rejected once the key exists")
+
+          (let [r0 (<! (k/revision store :cas-async))]
+            (is (not (rejected? (<! (k/assoc store :cas-async {:v 2}
+                                             {:expected-revision r0}))))
+                "a write on the revision we read succeeds")
+            (is (= {:v 2} (<! (k/get store :cas-async nil))))
+            (is (not= r0 (<! (k/revision store :cas-async)))
+                "and MOVES the revision")
+
+            (is (rejected? (<! (k/assoc store :cas-async {:v :lost}
+                                        {:expected-revision r0})))
+                "the same revision a second time is rejected")
+            (is (= {:v 2} (<! (k/get store :cas-async nil)))
+                "the loser must not have overwritten the winner")
+
+            (let [ran (atom 0)]
+              (is (rejected? (<! (k/update-in store [:cas-async]
+                                              (fn [v] (swap! ran inc) (assoc v :v :lost))
+                                              {:expected-revision r0})))
+                  "update-in is fenced too")
+              (is (zero? @ran) "a rejected update must not run the caller's function")))
+
+          ;; A rejection must leave no trace on a key that never existed — an
+          ;; empty blob is neither absent nor readable, which bricks the key.
+          (is (rejected? (<! (k/assoc store :cas-async-ghost {:v :no}
+                                      {:expected-revision :a-revision-that-never-existed}))))
+          (is (false? (<! (k/exists? store :cas-async-ghost)))
+              "a rejected write on a missing key leaves the key missing")
+          (is (not (rejected? (<! (k/assoc store :cas-async-ghost {:v 1}
+                                           {:expected-revision konserve.impl.defaults/absent}))))
+              "so create-if-absent still succeeds afterwards"))))))
+
 (defn async-compliance-test [store]
   (go
     (and
