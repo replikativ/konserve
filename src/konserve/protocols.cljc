@@ -141,6 +141,15 @@
    so no backend has to do anything. A backend that would rather hold its config
    in a real field can implement this and be authoritative.
 
+   WORTH DOING FOR IDENTITY, not just for storage: the attached `:id` is konserve's
+   LOGICAL identity, deliberately the same across machines and backends holding
+   one store. The GC safe point needs an id that is never FINER than the bytes a
+   sweep deletes (see `konserve.gc-guard`), and a backend that knows its own
+   physical location can return one derived from it — collapsing two connections
+   to one path onto a single guard key, and separating replicas that would
+   otherwise hold each other's collections back. Nothing else in konserve reads
+   `store-id`, so overriding it costs nothing elsewhere.
+
    Credential keys are stripped — see `credential-keys`. The result identifies a
    store; it is not guaranteed to be enough to reconnect one."
   (-store-config [this]

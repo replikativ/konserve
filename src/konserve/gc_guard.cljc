@@ -29,9 +29,10 @@
        (try (write-values!) (write-pointer!)
             (finally (done! store-id t))))
 
-   or `with-unreferenced-writes`, which does the same. `konserve.gc/sweep!`
-   consults the safe point itself when given `:store-id`, so a correct sweep
-   needs only that the writers take the guard.
+   or `with-unreferenced-writes`, which does the same. The COLLECTOR then has an
+   ordering obligation of its own — read `cutoff` BEFORE marking, and pass it to
+   `konserve.gc/sweep!` — for the reason spelled out there. Writers taking the
+   guard is necessary but not sufficient.
 
    A process that dies mid-sequence simply drops its entry: the objects it wrote
    are unreachable, i.e. garbage, and a later cycle collects them. Correct by
@@ -83,10 +84,22 @@
 ;;                             objects and DELETES LIVE DATA
 ;;
 ;; So the id may be coarser than the physical store, never finer — which a
-;; logical id is. Nothing enforces that two connections to one store agree on
-;; it, and nothing can from here; `validate-store-config` only checks that `:id`
-;; is a UUID. Taking it off the store (`konserve.protocols/store-id`) rather
-;; than passing it alongside is what keeps callers from disagreeing.
+;; logical id is. Taking it off the store (`konserve.protocols/store-id`) rather
+;; than passing it alongside is what keeps two callers from disagreeing.
+;;
+;; THE LOGICAL ID IS THE DEFAULT, NOT THE REQUIREMENT. A backend that knows
+;; where its bytes actually live can implement `PStoreConfig` and return an id
+;; derived from that, which wins over the default and closes BOTH mismatches at
+;; once — two connections to one path collapse to one guard key however their
+;; configs were written, and two replicas stop holding each other's collections
+;; back. Nothing else in konserve reads `store-id`, so a backend is free to do
+;; this without surprising anything.
+;;
+;; Until backends do, the default is sound in practice for the reason the guard
+;; is in-process to begin with: a logical store is normally connected once per
+;; runtime, so within a process one id names one store. The unsafe case needs
+;; the SAME bytes opened TWICE in ONE process under DIFFERENT ids, which takes
+;; deliberate effort and is visible at the call site.
 (defonce ^:private in-flight (atom {}))
 
 ;; Tokens are counter values, not fresh objects: a token is a MAP KEY, and a bare

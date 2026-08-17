@@ -15,6 +15,7 @@
             [clojure.string]
             [konserve.gc-guard :as guard]
             [konserve.utils :as utils]
+            [konserve.protocols :as p]
             #?@(:clj [[clojure.core.async :as async :refer [<! <!!]]
                       [konserve.core :as k]
                       [konserve.gc :as gc]
@@ -336,6 +337,43 @@
            (is (empty? (<!! (gc/sweep! store #{}
                                        (guard/cutoff sid (cutoff-after-writes))))))
            (guard/done! sid token))))))
+
+#?(:clj
+   (defrecord PhysicallyIdentifiedStore [path logical-config]
+     p/PStoreConfig
+     (-store-config [_]
+       (assoc logical-config :id (java.util.UUID/nameUUIDFromBytes (.getBytes ^String path))))))
+
+#?(:clj
+   (deftest a-backend-may-key-the-guard-by-where-its-bytes-are
+     (testing "the escape hatch for the one unsafe direction.
+
+               konserve's `:id` is LOGICAL — the same store on another machine
+               carries it too. The guard needs an id never FINER than the bytes a
+               sweep deletes, and the logical id is coarser, which is the safe
+               side. What it cannot rule out is the same bytes opened twice under
+               different ids, and no amount of validation from konserve's side
+               can: `validate-store-config` only checks that `:id` is a UUID.
+
+               A backend that knows where its bytes live can implement
+               `PStoreConfig` and settle it, which is why this is worth pinning
+               before any backend does."
+       (let [logical (random-uuid)
+             a (->PhysicallyIdentifiedStore "/var/data/store-1" {:backend :file :id logical})
+             ;; same bytes, configs written with different ids — the unsafe case
+             b (->PhysicallyIdentifiedStore "/var/data/store-1" {:backend :file :id (random-uuid)})
+             ;; a replica: different bytes, one logical id — merely conservative
+             c (->PhysicallyIdentifiedStore "/var/data/store-2" {:backend :file :id logical})]
+         (is (not= logical (p/store-id a))
+             "a direct implementation must win over the Object default")
+         (is (= (p/store-id a) (p/store-id b))
+             "same bytes must share a guard key however the configs were written")
+         (is (not= (p/store-id a) (p/store-id c))
+             "and replicas must not hold each other's collections back"))
+       (testing "a store that does NOT override still reports its logical id"
+         (let [id (random-uuid)
+               store (ks/create-store {:backend :memory :id id} {:sync? true})]
+           (is (= id (ks/store-id store))))))))
 
 #?(:clj
    (deftest credentials-are-stripped-at-every-depth
