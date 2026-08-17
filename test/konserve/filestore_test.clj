@@ -25,6 +25,27 @@
     (conditional-write-compliance-test store)
     (delete-store folder)))
 
+(deftest an-unknown-domain-is-refused-rather-than-ranked
+  (testing "`conditional-write?` compares against a REQUIRED domain, and a name
+            that is not a domain is a mistake in the caller. It used to default
+            to rank 0 — `:process`, the weakest — so a typo, a string, or a nil
+            out of a config compared as satisfied by every store. The one
+            function whose job is to stop a caller believing they are fenced
+            answered true for a memory store."
+    (let [m (<!! (memory/new-mem-store))]
+      (is (= :process (k/conditional-write-domain m)))
+      (is (true? (k/conditional-write? m :process)))
+      (is (false? (k/conditional-write? m :machine)) "and does not overstate its reach")
+      (doseq [bad [:machien "machine" nil :planet]]
+        (is (thrown? clojure.lang.ExceptionInfo (k/conditional-write? m bad))
+            (str "must refuse " (pr-str bad)))))))
+
+(deftest filestore-cached-conflict-coherence-test
+  (delete-store "/tmp/cache-conflict-store")
+  (let [store (connect-fs-store "/tmp/cache-conflict-store" :opts {:sync? true})]
+    (ct/test-cached-conflict-coherence-sync store)
+    (delete-store "/tmp/cache-conflict-store")))
+
 (deftest a-domain-survives-lock-blob-only-if-it-rests-on-the-lock
   (testing "`:lock-blob? false` revokes a LOCK-BASED claim: `io-operation`'s
             compare-and-write is one step only while it holds the lock, so

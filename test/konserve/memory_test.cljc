@@ -35,6 +35,11 @@
        {:frontend (<! (new-mem-store (atom {})))
         :backend (<! (new-mem-store (atom {})))})))
 
+#?(:clj
+   (deftest tiered-fenced-write-through-test
+     (let [{:keys [frontend backend]} (create-tiered-mem-stores)]
+       (tiered-tests/test-tiered-fenced-write-through-sync frontend backend))))
+
 (deftest memory-async-conditional-write-test
   ;; The async arm of the same contract, on both platforms. It exists for
   ;; async-only backends that the sync suite cannot reach (konserve-s3's cljs

@@ -54,6 +54,22 @@
 (defn- revision-result [old-val new-val revision opts]
   (if (:with-revision? opts) [[old-val new-val] revision] [old-val new-val]))
 
+(defn- evict-on-conflict!
+  "Drop `key` from the cache when `e` is a revision mismatch, then rethrow.
+
+   A mismatch is PROOF that the key moved under us, so it is the one moment the
+   cached value is known to be wrong — and it was the one moment nothing was
+   evicted, because the eviction sits after the write and a rejection propagates
+   first. A read-then-CAS retry loop over this namespace could never converge: it
+   re-read the same stale value from the cache and rebuilt the same doomed write.
+
+   Takes the throwable rather than a thunk: the write parks on `<?-`, which is
+   what raises, and a parking take cannot live inside a nested fn in a go block."
+  [cache key e]
+  (when (= :konserve/revision-mismatch (:type (ex-data e)))
+    (swap! cache cache/evict key))
+  (throw e))
+
 (defn- read-through [store key opts]
   (async+sync
    (:sync? opts)
@@ -128,7 +144,9 @@
                 (let [cache (:cache store)
                       key (first key-vec)
                       [[old-val new-val] revision] (split-revision
-                                                    (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                                                    (try (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
                                                     opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
@@ -167,7 +185,9 @@
                 (let [cache (:cache store)
                       key (first key-vec)
                       [[old-val new-val] revision] (split-revision
-                                                    (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                                                    (try (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
                                                     opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
@@ -195,7 +215,9 @@
                 ;; consumers see the same op label as the non-cache API.
                 (let [cache (:cache store)
                       [[old-val new-val] revision] (split-revision
-                                                    (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                                                    (try (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
                                                     opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
@@ -212,6 +234,10 @@
    (dissoc store key {:sync? false}))
   ([store key opts]
    (log/trace :konserve/cache-dissoc {:key key})
+   ;; `konserve.core/dissoc` refuses this; the cached twin silently DELETED the
+   ;; key instead — verbatim the failure the capability exists to remove, and
+   ;; reachable by anyone who wraps their store in a cache.
+   (core/refuse-conditional-unsupported! "dissoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked

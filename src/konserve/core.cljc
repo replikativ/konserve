@@ -303,6 +303,26 @@
   (when (satisfies? PConditionalWrite store)
     (-conditional-write? store)))
 
+(defn ^:private rank-domain!
+  "Position of `domain` in `conditional-write-domains`, weakest first.
+
+   RAISES on a domain that is not one of them rather than ranking it. The
+   comparison below used a default of 0, i.e. `:process`, so a typo — `:machien`,
+   a string `\"machine\"`, a nil out of a config — compared as the WEAKEST domain
+   and every store satisfied it. The one function whose job is to stop a caller
+   believing they are fenced answered true for a memory store."
+  [domain]
+  ;; The map is CALLED, not `get`-ed: this namespace shadows `clojure.core/get`
+  ;; with the store read, so `(get m k)` here is a konserve GET that returns a
+  ;; channel — which then failed to cast to a number, for every domain including
+  ;; the valid ones. `clojure.core/get` cannot be written out either, since this
+  ;; is .cljc and there it is `cljs.core/get`.
+  (or ((zipmap conditional-write-domains (range)) domain)
+      (throw (ex-info (str "Not a conditional-write domain: " (pr-str domain))
+                      {:type   :konserve/unknown-conditional-write-domain
+                       :domain domain
+                       :known  (vec conditional-write-domains)}))))
+
 (defn conditional-write?
   "Can this store make a write conditional on the revision the caller read, far
    enough for `required-domain`?
@@ -314,10 +334,13 @@
   ([store]
    (some? (conditional-write-domain store)))
   ([store required-domain]
-   ;; Portable rank: `.indexOf` is a JVM method and this namespace is .cljc.
-   (let [rank (zipmap conditional-write-domains (range))
-         have (conditional-write-domain store)]
-     (boolean (and have (>= (rank have -1) (rank required-domain 0)))))))
+   ;; `required-domain` is RANKED, not defaulted: a name that is not a domain is a
+   ;; mistake in the caller, and answering it is how a typo turns into a false
+   ;; assurance. `have` may legitimately be nil (no capability), which is simply
+   ;; below every domain.
+   (let [required (rank-domain! required-domain)
+         have     (conditional-write-domain store)]
+     (boolean (and have (>= (rank-domain! have) required))))))
 
 (defn revision
   "The store's current revision token for `key`, or `konserve.impl.defaults/absent`
@@ -340,6 +363,21 @@
    through this namespace, so it would otherwise bypass the check and silently
    ignore the option — the failure mode the capability exists to remove."
   [store opts]
+  ;; A NIL TOKEN IS NOT A REQUEST FOR AN UNCONDITIONAL WRITE. Every gate below
+  ;; this is a truthiness test, so a nil would sail past `check-revision!` and
+  ;; write unconditionally — while the caller believes they fenced. That is
+  ;; reachable through the front door: `revision` answers nil for a key whose
+  ;; metadata predates `:revision` (an upgraded store, or a migrated key), so the
+  ;; documented read-then-hand-it-back pattern would silently overwrite exactly
+  ;; the keys someone tries it on first. `absent` is the way to say "no value
+  ;; here"; nil is a mistake.
+  (when (and (contains? opts :expected-revision)
+             (nil? (:expected-revision opts)))
+    (throw (ex-info (str ":expected-revision was nil, which is not a revision. Pass a token from "
+                         "konserve.core/revision, or konserve.impl.defaults/absent to require that "
+                         "the key does not exist. Writing unconditionally here would silently withhold "
+                         "the guarantee that was asked for.")
+                    {:type :konserve/invalid-expected-revision})))
   (when (and (contains? opts :expected-revision)
              (not (conditional-write? store)))
     (throw (ex-info (str "This store cannot honour :expected-revision, so the conditional write was refused. "
@@ -347,8 +385,13 @@
                     {:type  :konserve/conditional-write-unsupported
                      :store (type store)}))))
 
-(defn- refuse-conditional-unsupported!
+(defn refuse-conditional-unsupported!
   "Reject `:expected-revision` on an operation that does not implement it.
+
+   Public for the same reason as [[check-conditional-supported!]]: `konserve.cache`
+   reimplements these entry points rather than delegating, so a check kept private
+   here is simply absent there — which is how `konserve.cache/dissoc` came to
+   DELETE a key whose conditional write `konserve.core/dissoc` refuses.
 
    Ignoring it is the one outcome that must never happen: the caller asked for a
    guarantee, and a silent unconditional write is the exact failure the whole
@@ -356,7 +399,13 @@
   [op opts]
   (when (contains? opts :expected-revision)
     (throw (ex-info (str op " cannot be made conditional; :expected-revision was refused rather than ignored.")
-                    {:type :konserve/conditional-write-unsupported :op op}))))
+                    {:type :konserve/conditional-write-unsupported :op op})))
+  ;; Same rule for `:with-revision?`. Dropping it is quieter but no safer: the
+  ;; caller destructures the revision-bearing shape, binds the value where the
+  ;; revision should be, and fences the NEXT write on garbage.
+  (when (contains? opts :with-revision?)
+    (throw (ex-info (str op " cannot report a revision; :with-revision? was refused rather than ignored.")
+                    {:type :konserve/with-revision-unsupported :op op}))))
 
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
@@ -396,7 +445,15 @@
                 store (first key-vec)
                 (let [base (partial meta-update (first key-vec) :edn)
                       mfn  (if meta-up-fn (fn [old] (meta-up-fn (base old))) base)
-                      [old-val new-val :as result] (<?- (-update-in store key-vec mfn up-fn opts))]
+                      result (<?- (-update-in store key-vec mfn up-fn opts))
+                      ;; `:with-revision?` makes the result `[[old new] revision]`
+                      ;; rather than `[old new]`, so destructuring it as the plain
+                      ;; shape put the REVISION TOKEN in the hook's `:value` — and
+                      ;; a hook consumer that replicates on `:value` (konserve-sync)
+                      ;; would replicate the token as the key's data. The hook
+                      ;; reports the value either way; the revision is the caller's
+                      ;; business, not the replica's.
+                      [old-val new-val] (if (:with-revision? opts) (first result) result)]
                   (invoke-write-hooks! store {:api-op :update-in
                                               :key (first key-vec)
                                               :key-vec key-vec

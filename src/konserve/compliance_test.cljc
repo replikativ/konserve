@@ -88,6 +88,20 @@
               (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision konserve.impl.defaults/absent)))
               (is (= {:v 1} (<!! (k/get store ghost nil opts)))))))
 
+        ;; ENUMERATION MUST SURVIVE A FENCED WRITE. A backing may leave
+        ;; bookkeeping of its own behind — the default one takes its lock on a
+        ;; `.cas` sidecar that persists — and anything not recognised as
+        ;; bookkeeping is read as a value from an older layout and MIGRATED. That
+        ;; broke `k/keys`, and `konserve.gc/sweep!` through it, from the first
+        ;; fenced write onwards, permanently, on every default-backing store.
+        ;; Checked here rather than in one backend's suite because every backend
+        ;; that filters its own enumeration has to get this right.
+        (testing "keys still enumerate after a fenced write"
+          (let [ks (<!! (k/keys store opts))]
+            (is (every? map? ks) "no artifact leaked in as a key")
+            (is (contains? (set (map :key ks)) k*)
+                "and the key that was written is there")))
+
         (testing "an unconditional write still works"
           (<!! (k/assoc store k* {:v 3} opts))
           (is (= {:v 3} (<!! (k/get store k* nil opts)))))
@@ -422,6 +436,13 @@
                                               {:expected-revision r0})))
                   "update-in is fenced too")
               (is (zero? @ran) "a rejected update must not run the caller's function")))
+
+          ;; See the sync arm: a backing's own bookkeeping must not be read back
+          ;; as a value, or `k/keys` and the GC that walks it break permanently.
+          (let [ks (<! (k/keys store))]
+            (is (every? map? ks) "keys still enumerate after a fenced write")
+            (is (contains? (set (map :key ks)) :cas-async)
+                "and the key that was written is there"))
 
           ;; A rejection must leave no trace on a key that never existed — an
           ;; empty blob is neither absent nor readable, which bricks the key.

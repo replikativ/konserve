@@ -280,6 +280,36 @@
    remove."
   ::absent)
 
+(def ^:const cas-lock-suffix
+  "Suffix of the sidecar blob a FENCED write takes its lock on.
+
+   Its own blob rather than the value's because a lock lives on an INODE, and the
+   write replaces the value blob by rename — which orphans a lock taken on it, so
+   two writers could each hold a lock on a different inode and both believe they
+   were serialized. The sidecar is never renamed, so it is a stable thing to lock.
+
+   It therefore PERSISTS after the write, and must be recognised as konserve's own
+   bookkeeping wherever store keys are enumerated. See `internal-artifact?`."
+  ".cas")
+
+(defn internal-artifact?
+  "Is `store-key` konserve's own bookkeeping rather than a stored value?
+
+   `.new` and `.backup` are transient write artifacts; `.cas` is the fenced-write
+   lock sidecar, which is permanent.
+
+   This matters more than it looks. An unrecognised name falls through to
+   `-handle-foreign-key`, whose job is to migrate a value written in an older
+   layout — so the sidecar was read as if it were a value, and `k/keys` (and
+   `konserve.gc/sweep!` through it) THREW from the first fenced write onwards, on
+   every default-backing store, permanently: the file is not transient and
+   `dissoc`ing the key does not remove it. Backends that filter enumeration
+   themselves must include this suffix too."
+  [store-key]
+  (or (ends-with? store-key ".new")
+      (ends-with? store-key ".backup")
+      (ends-with? store-key cas-lock-suffix)))
+
 (defn check-revision!
   "Throw unless the stored revision is the one the caller derived its value from.
 
@@ -435,7 +465,7 @@
                         ;; a handful, not for the content-addressed values that make
                         ;; up the bulk of a store.
                         cas-blob (when (and expected-revision (:lock-blob? config))
-                                   (<?- (-create-blob backing (str store-key ".cas") env)))
+                                   (<?- (-create-blob backing (str store-key cas-lock-suffix) env)))
                         cas-lock (when cas-blob
                                    (log/trace :konserve/acquiring-cas-lock {:key key})
                                    (<?- (get-lock cas-blob (first key-vec) env)))
@@ -567,8 +597,7 @@
              [store-key & store-keys] store-keys]
         (if store-key
           (cond
-            (or (ends-with? store-key ".new")
-                (ends-with? store-key ".backup"))
+            (internal-artifact? store-key)
             (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
@@ -869,7 +898,28 @@
   (-revision [this key opts]
     (async+sync (:sync? opts) *default-sync-translation*
                 (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
-                           (if (nil? m) absent (:revision m))))))
+                           (cond
+                             (nil? m) absent
+                             ;; A KEY WITH NO REVISION MUST NOT ANSWER nil. Every
+                             ;; value written by this version has one, but a store
+                             ;; upgraded from an earlier konserve does not, and
+                             ;; neither does a key rebuilt by `migrate-file-v1`.
+                             ;; Handing back nil looked like a token and was then
+                             ;; accepted as one — nil is falsy, so it sailed past
+                             ;; every conditional gate and wrote UNCONDITIONALLY,
+                             ;; while the caller believed they had fenced. That is
+                             ;; the documented read-then-hand-it-back pattern
+                             ;; silently overwriting exactly the keys someone would
+                             ;; try it on first. Refuse instead: rewrite the key
+                             ;; once (an ordinary write mints a revision) and fence
+                             ;; from there.
+                             (nil? (:revision m))
+                             (throw (ex-info (str "This key has no revision: it was written before konserve "
+                                                  "recorded them, so there is nothing to fence against. Write "
+                                                  "it once unconditionally to mint one.")
+                                             {:type :konserve/revision-unavailable
+                                              :key  key}))
+                             :else (:revision m))))))
 
   PMultiKeySupport
   (-supports-multi-key? [_]

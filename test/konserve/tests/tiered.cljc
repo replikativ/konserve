@@ -11,6 +11,37 @@
      (let [store (clojure.core.async/<!! (tiered/connect-tiered-store frontend-store backend-store))]
        (ct/compliance-test store))))
 
+#?(:clj
+   (defn test-tiered-fenced-write-through-sync
+     "A fenced write through a `:write-through` tiered store must leave the tiers
+      AGREEING.
+
+      Revisions belong to the store that minted them, and the two tiers mint their
+      own — so forwarding the caller's `:expected-revision` to the frontend made it
+      reject a write the backend had just accepted. The rejection was caught and
+      logged, the caller was told the fenced write succeeded, and every later
+      `:frontend-first` read returned the PRE-WRITE value indefinitely. Using the
+      fence created the incoherence it exists to prevent, in the one configuration
+      `-conditional-write?` explicitly advertises as supported."
+     [frontend-store backend-store]
+     (let [store (clojure.core.async/<!! (tiered/connect-tiered-store
+                                          frontend-store backend-store
+                                          {:write-policy :write-through
+                                           :read-policy  :frontend-first
+                                           :sync? false}))
+           opts  {:sync? true}]
+       (k/assoc store :fenced {:v 1} opts)
+       (is (= {:v 1} (k/get store :fenced nil opts)))
+       (let [r (k/revision store :fenced opts)]
+         (k/assoc store :fenced {:v 2} (assoc opts :expected-revision r))
+         (is (= {:v 2} (k/get store :fenced nil opts))
+             "the tiered read must not serve the pre-write value")
+         (is (= {:v 2} (k/get backend-store :fenced nil opts)) "backend")
+         (is (= {:v 2} (k/get frontend-store :fenced nil opts)) "frontend"))
+       (let [r (k/revision store :fenced opts)]
+         (k/update-in store [:fenced] (fn [v] (assoc v :v 3)) (assoc opts :expected-revision r))
+         (is (= {:v 3} (k/get store :fenced nil opts)) "same for update-in")))))
+
 (defn test-tiered-deep-async
   "Tests the deep read miss scenario in a tiered store, ensuring that a value
    read from the deepest backend propagates to the frontend and intermediate tiers,

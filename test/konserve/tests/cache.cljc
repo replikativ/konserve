@@ -68,6 +68,34 @@
       (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                    (kc/get store :rev-k nil (assoc opts :with-revision? true)))))))
 
+(defn test-cached-conflict-coherence-sync
+  "What the cache must do when a conditional write is REJECTED.
+
+   A rejection is proof the key moved under us, so it is the one moment the
+   cached value is known to be wrong — and it was the one moment nothing was
+   evicted, because the eviction sits after the write and the rejection
+   propagates first. A read-then-CAS retry loop over this namespace could never
+   converge: it re-read the same stale value and rebuilt the same doomed write."
+  [store]
+  (let [store (kc/ensure-cache store)
+        opts  {:sync? true}]
+    (when (k/conditional-write? store)
+      (kc/assoc store :conflict-k {:v 1} opts)
+      (is (= {:v 1} (kc/get store :conflict-k nil opts)) "cache is warm")
+      (let [stale (k/revision store :conflict-k opts)]
+        ;; move the key behind the cache's back, as another writer would
+        (k/assoc store :conflict-k {:v :moved} opts)
+        (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                     (kc/assoc store :conflict-k {:v :lost} (assoc opts :expected-revision stale))))
+        (is (= {:v :moved} (kc/get store :conflict-k nil opts))
+            "the rejected write must have dropped the stale entry"))
+      ;; `konserve.core/dissoc` refuses this; the cached twin used to DELETE.
+      (kc/assoc store :refuse-k 1 opts)
+      (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                   (kc/dissoc store :refuse-k (assoc opts :expected-revision :anything))))
+      (is (= 1 (kc/get store :refuse-k nil opts))
+          "and must not have removed the key on the way out"))))
+
 (defn test-cached-PKeyIterable-async [store]
   (go
     (let [store (kc/ensure-cache store)
