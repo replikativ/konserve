@@ -29,13 +29,22 @@
                    <! do}
                   (go  (if (get @state key false) true false)))))
   (-get-in [_ key-vec not-found opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? with-revision?]} opts]
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (if-let [a (second (get @state (first key-vec)))]
-                        (get-in a (rest key-vec) not-found)
-                        not-found)))))
+                  (go (let [entry (get @state (first key-vec))
+                            v     (if-let [a (second entry)]
+                                    (get-in a (rest key-vec) not-found)
+                                    not-found)]
+                        ;; `:with-revision?` is part of the contract, not an
+                        ;; optimisation: a caller written against it destructures
+                        ;; `[value revision]`, and returning a bare value here
+                        ;; makes portable code throw on `nth` — or, worse, silently
+                        ;; fence on nil when this store is a tiered frontend.
+                        (if with-revision?
+                          [v (if entry (:revision (first entry)) kd/absent)]
+                          v))))))
   (-get-meta [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -46,9 +55,16 @@
       (async+sync sync?
                   {go do}
                   (go
-                    (let [[fkey & rkey] key-vec
-                          update-atom
-                          (fn [store]
+                    ;; The rejection must arrive AS A VALUE on this channel. This
+                    ;; store uses a plain `go`, not `go-try-`, so a throw from
+                    ;; `check-revision!` would escape to the async thread's uncaught
+                    ;; handler and close the channel EMPTY — an async caller could
+                    ;; not tell a rejected fence from a successful write, and the
+                    ;; error would surface only as noise in the log.
+                    (try
+                      (let [[fkey & rkey] key-vec
+                            update-atom
+                            (fn [store]
                             ;; The compare and the write are one `swap!`, so they
                             ;; are atomic against other threads in this JVM —
                             ;; which is the whole of a memory store's world. The
@@ -56,22 +72,30 @@
                             ;; it before would let another writer land between the
                             ;; comparison and the update, which is the very race
                             ;; this exists to prevent.
-                            (swap! store
-                                   (fn [old]
-                                     (when expected-revision
-                                       (kd/check-revision! fkey expected-revision
-                                                           (first (get old fkey))))
-                                     (update old fkey
-                                             (fn [[meta data]]
-                                               [(meta-up-fn meta)
-                                                (if rkey
-                                                  (update-in data rkey up-fn)
-                                                  (up-fn data))])))))
-                          [_ old-val] (get @state fkey)
-                          {[_ new-val] fkey} (update-atom state)]
-                      (if overwrite?
-                        [nil new-val]
-                        [old-val new-val]))))))
+                              (swap! store
+                                     (fn [old]
+                                       (when expected-revision
+                                         (kd/check-revision! fkey expected-revision
+                                                             (first (get old fkey))))
+                                       (update old fkey
+                                               (fn [[meta data]]
+                                                 [(meta-up-fn meta)
+                                                  (if rkey
+                                                    (update-in data rkey up-fn)
+                                                    (up-fn data))])))))
+                            [_ old-val] (get @state fkey)
+                            {[_ new-val] fkey} (update-atom state)]
+                        (if overwrite?
+                          [nil new-val]
+                          [old-val new-val]))
+                      ;; The two arms report differently, and both must be honoured:
+                      ;; a SYNC caller expects a throw, an ASYNC caller expects the
+                      ;; error as a value on the channel (throwing there escapes to
+                      ;; the async thread and closes the channel empty). `async+sync`
+                      ;; collapses the `go` to a `do` for the sync arm, so one catch
+                      ;; serves both only if it rethrows there.
+                      (catch #?(:clj Exception :cljs js/Error) e
+                        (if sync? (throw e) e)))))))
   (-assoc-in [this key-vec meta val opts]
     (-update-in this key-vec meta (fn [_] val) (assoc opts :overwrite? true)))
 

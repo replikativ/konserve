@@ -5,6 +5,28 @@ All notable, user-visible changes to konserve are documented here.
 ## Unreleased
 
 ### Added
+- **Conditional writes (`:expected-revision`), with an explicit capability.** A
+  write can now be made conditional on the revision the caller read: it lands
+  only if the stored revision is still that one, and otherwise raises
+  `{:type :konserve/revision-mismatch}` having written nothing and — for
+  `update-in` — WITHOUT running `up-fn`. Pass
+  `konserve.impl.defaults/absent` to mean "only if this key does not exist".
+  `:with-revision? true` reports the revision a read saw or a write produced, so
+  a fencing caller can chain writes without a re-read; on a read it returns
+  `[value revision]`, on a write `[[old new] revision]`.
+
+  The capability is EXPLICIT and a store that lacks it REFUSES rather than
+  ignoring the option — silently degrading to an unconditional write is worse
+  than having no fencing, because the caller asked for a guarantee and got a knob
+  that reads as handled. `conditional-write-domain` reports how far a store's
+  guarantee reaches (`:process`, `:machine`, `:global`) rather than a boolean,
+  since the API is uniform and the guarantee is not: `true` would let someone
+  running two processes against a memory store, or two machines against a
+  filestore, believe they were fenced when they were only serialized against a
+  narrower set of writers. `conditional-write?` compares against a domain you
+  need. Backed by `konserve.compliance-test/conditional-write-compliance-test`,
+  which any backend can call — a store without the capability passes it by
+  refusing.
 - **Simulation testing harness** (`konserve.simulation.backing`, `.crash`,
   `.memory`). A fault-injecting wrapper around any `PBackingStore` (19
   per-operation error and corruption rates, seeded from a `SplittableRandom` so
@@ -141,6 +163,14 @@ All notable, user-visible changes to konserve are documented here.
   (previously `memory-store-delete` *asserted* the broken behaviour).
 
 ### Changed
+- **Every value's metadata now carries a `:revision`.** It is what
+  `:expected-revision` compares and what `konserve.core/revision` returns — an
+  OPAQUE token, minted per write, to be passed back rather than interpreted. It
+  is deliberately not `:last-write`: that clock is non-decreasing and admits
+  same-millisecond ties, so two writes could share one value and a fence built on
+  it would pass when it should fail. The visible consequence is that metadata
+  maps have one more key, so a test or tool comparing them whole (`k/keys`,
+  `get-meta`) should strip `:revision` alongside `:last-write`.
 - **Probe-elision now covers non-overwrite writes, not only reads.** On a
   `PReadMissSafe` backing, `update-in` / `update` / nested `assoc-in` / `bassoc`
   read the old value *read-first* (an absent key → a fresh write) instead of a

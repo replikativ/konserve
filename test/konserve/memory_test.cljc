@@ -2,7 +2,7 @@
   (:require [clojure.core.async :as a :refer [go <! take! #?(:clj <!!)]]
             [clojure.test :refer [deftest #?(:cljs async)]]
             [konserve.compliance-test :refer [#?(:clj compliance-test)
-                                              async-compliance-test]]
+                                              async-compliance-test conditional-write-compliance-test]]
             [konserve.memory :refer [new-mem-store map->MemoryStore]]
             [konserve.tests.cache :as ct]
             [konserve.tests.gc :as gct]
@@ -147,3 +147,9 @@
     #?(:clj  (<!! (gct/test-gc-async store))
        :cljs (async done (take! (gct/test-gc-async store) done)))))
 
+(deftest memory-conditional-write-test
+  ;; Runs on BOTH platforms: the memory store declares a `:process` domain under
+  ;; ClojureScript too, and an unenforced claim there would be the same silent
+  ;; failure the capability exists to prevent. The test itself runs only its sync
+  ;; arm under cljs — see `conditional-write-compliance-test`.
+  (conditional-write-compliance-test (new-mem-store (atom {}) {:sync? true})))

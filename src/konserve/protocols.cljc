@@ -88,7 +88,20 @@
      the capability exists to prevent, one level finer: appearing fenced without
      being fenced.
 
-     Ordered weakest-first, so a caller can state the domain it needs and compare.")
+     Ordered weakest-first, so a caller can state the domain it needs and compare.
+
+     WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
+     backing enforces the comparison in `konserve.impl.defaults/io-operation`:
+     read the stored revision and write the new value while holding a local lock.
+     That is genuinely atomic against threads (`:process`) and, with an OS
+     advisory lock on the blob, against processes on the host (`:machine`) — and
+     it cannot reach further, because nothing in it is visible to another
+     machine. A store that answers `:global` therefore does NOT get there through
+     `io-operation`; it must implement the comparison in its own storage layer,
+     where the guarantee actually lives — konserve-s3 does it with a conditional
+     PUT (`If-Match` on the object's ETag), which S3 evaluates. Answering
+     `:global` while relying on the default compare would be the exact failure
+     this protocol exists to prevent, written one layer down.")
   (-revision [this key opts]
     "The token to hand back as `:expected-revision`, or the absent sentinel.
 

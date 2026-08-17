@@ -227,28 +227,38 @@
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
-                 (case read-policy
-                   :frontend-first
-                   (let [frontend-result (<?- (-get-in frontend-store key-vec ::missing opts))]
-                     (if (not= frontend-result ::missing)
-                       frontend-result  ;; Cache hit
-                       (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
-                         (when (not= backend-result ::missing)
+                 (if (:with-revision? opts)
+                   ;; STRAIGHT TO THE BACKEND, whatever the read-policy says. The
+                   ;; revision must come from the tier that will EVALUATE the
+                   ;; conditional write, and that is always the backend. Serving it
+                   ;; from the frontend returns a token the backend has never seen —
+                   ;; and because the frontend is usually a memory store, the value
+                   ;; came back bare, so the caller fenced on nil and got an
+                   ;; UNCONDITIONAL write from a store advertising :machine. A cache
+                   ;; hit must not decide the identity of a durable value.
+                   (<?- (-get-in backend-store key-vec not-found opts))
+                   (case read-policy
+                     :frontend-first
+                     (let [frontend-result (<?- (-get-in frontend-store key-vec ::missing opts))]
+                       (if (not= frontend-result ::missing)
+                         frontend-result  ;; Cache hit
+                         (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
+                           (when (not= backend-result ::missing)
                            ;; Populate frontend asynchronously (fire-and-forget)
-                           (go (try
-                                 (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result opts))
-                                 (invoke-write-hooks! frontend-store {:api-op :assoc-in
-                                                                      :key (first key-vec)
-                                                                      :key-vec key-vec
-                                                                      :value backend-result})
-                                 (catch #?(:clj Exception :cljs js/Error) e
-                                   (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
-                         (if (not= backend-result ::missing)
-                           backend-result
-                           not-found))))
+                             (go (try
+                                   (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result opts))
+                                   (invoke-write-hooks! frontend-store {:api-op :assoc-in
+                                                                        :key (first key-vec)
+                                                                        :key-vec key-vec
+                                                                        :value backend-result})
+                                   (catch #?(:clj Exception :cljs js/Error) e
+                                     (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
+                           (if (not= backend-result ::missing)
+                             backend-result
+                             not-found))))
 
-                   :frontend-only
-                   (<?- (-get-in frontend-store key-vec not-found opts))))))
+                     :frontend-only
+                     (<?- (-get-in frontend-store key-vec not-found opts)))))))
 
   (-update-in [_this key-vec meta-up-fn up-fn opts]
     (log/trace :konserve/tiered-update-in {:key-vec key-vec})

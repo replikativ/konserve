@@ -3,7 +3,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!! go chan put! close! <!] :as async]
             [konserve.core :refer [bassoc bget keys]]
-            [konserve.compliance-test :refer [compliance-test]]
+            [konserve.compliance-test :refer [compliance-test conditional-write-compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
@@ -12,6 +12,17 @@
             [konserve.tests.tiered :as tiered-tests]
             [konserve.memory :as memory]
             [konserve.tiered :as tiered]))
+
+(deftest filestore-conditional-write-test
+  ;; WIRED IN deliberately. The conditional-write contract shipped once with a
+  ;; compliance test that nothing called — and when it was finally run by hand it
+  ;; failed three of its own assertions. A contract test that is never invoked is
+  ;; worth less than no test, because it reads as coverage.
+  (let [folder "/tmp/konserve-fs-cas-test"
+        _      (delete-store folder)
+        store  (<!! (connect-fs-store folder))]
+    (conditional-write-compliance-test store)
+    (delete-store folder)))
 
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"
@@ -182,6 +193,11 @@
   (delete-store "/tmp/cache-store")
   (let [store (connect-fs-store "/tmp/cache-store" :opts {:sync? true})]
     (<!! (ct/test-cached-PEDNKeyValueStore-async store))))
+
+(deftest filestore-cached-revision-test
+  (delete-store "/tmp/cache-revision-store")
+  (let [store (connect-fs-store "/tmp/cache-revision-store" :opts {:sync? true})]
+    (ct/test-cached-revision-sync store)))
 
 (deftest cache-PKeyIterable-test
   (delete-store "/tmp/cache-store")

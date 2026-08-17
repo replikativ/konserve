@@ -235,7 +235,15 @@
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   `opts` may carry **`:with-revision? true`**, which returns `[value revision]`
+   instead of `value`. That is one call rather than two for a fencing caller, and
+   not merely a convenience: reading the value and its revision separately can
+   straddle another writer's commit, leaving you fencing on a revision that never
+   belonged to the value you read. Pass the revision back as
+   `:expected-revision`. Refused by stores that cannot compare-and-set, and by
+   `konserve.cache` — a cached value carries no revision."
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
@@ -250,7 +258,15 @@
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   `opts` may carry **`:with-revision? true`**, which returns `[value revision]`
+   instead of `value`. That is one call rather than two for a fencing caller, and
+   not merely a convenience: reading the value and its revision separately can
+   straddle another writer's commit, leaving you fencing on a revision that never
+   belonged to the value you read. Pass the revision back as
+   `:expected-revision`. Refused by stores that cannot compare-and-set, and by
+   `konserve.cache` — a cached value carries no revision."
   ([store key]
    (get store key nil))
   ([store key not-found]
@@ -331,6 +347,17 @@
                     {:type  :konserve/conditional-write-unsupported
                      :store (type store)}))))
 
+(defn- refuse-conditional-unsupported!
+  "Reject `:expected-revision` on an operation that does not implement it.
+
+   Ignoring it is the one outcome that must never happen: the caller asked for a
+   guarantee, and a silent unconditional write is the exact failure the whole
+   mechanism exists to remove. Refusing is recoverable; a lost update is not."
+  [op opts]
+  (when (contains? opts :expected-revision)
+    (throw (ex-info (str op " cannot be made conditional; :expected-revision was refused rather than ignored.")
+                    {:type :konserve/conditional-write-unsupported :op op}))))
+
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
@@ -347,6 +374,11 @@
   `up-fn`. Use it when the decision to update was made from an earlier read and
   must not silently drift; plain `update-in` remains the tool for \"recompute from
   whatever is current\", since `up-fn` already sees the current value.
+
+  **`:with-revision? true`** additionally reports the revision the update
+  PRODUCED, changing the result shape from `[old new]` to `[[old new] revision]`.
+  Hand that back as the next `:expected-revision` to chain fenced updates without
+  a re-read.
 
   THE REVISION IS PER KEY, NOT PER PATH. `[:k :a :b]` fences the whole `:k` blob,
   not the `[:a :b]` position inside it — the blob is the unit of storage and of the
@@ -393,7 +425,17 @@
   `(fn [built-meta] -> meta)` — it TRANSFORMS the value's default metadata (the built
   `{:key :type :last-write}`). This is the general form of `assoc`'s `meta` map (a map
   is just the merge-transform), exposed here because nested writes may derive metadata
-  from the built fields. `opts` stays last and purely runtime."
+  from the built fields. `opts` stays last and purely runtime.
+
+   FENCING (`opts`). `:expected-revision` makes the write CONDITIONAL: it lands
+   only if the stored revision is still the one you pass, and otherwise raises
+   `{:type :konserve/revision-mismatch}` having written nothing. Pass
+   `konserve.impl.defaults/absent` to mean: only if this key does not exist.
+   `:with-revision? true` additionally reports the revision the write PRODUCED,
+   which changes the result shape from `[old new]` to `[[old new] revision]`;
+   hand that back as the next `:expected-revision` to chain fenced writes without
+   a re-read. Both are REFUSED, not ignored, by a store that cannot
+   compare-and-set — see [[conditional-write?]] and [[conditional-write-domain]]."
   ([store key-vec val]
    (assoc-in store key-vec val nil {:sync? false}))
   ([store key-vec val opts]
@@ -423,7 +465,17 @@
    conflict, so `meta` is additive. Use `{:immutable? true}` to mark a content-
    addressed (write-once) value: it is recorded durably AND forwarded on the write-
    hook event, so a consumer (konserve-sync) can skip re-storing a value it already
-   has. `opts` stays last and purely runtime."
+   has. `opts` stays last and purely runtime.
+
+   FENCING (`opts`). `:expected-revision` makes the write CONDITIONAL: it lands
+   only if the stored revision is still the one you pass, and otherwise raises
+   `{:type :konserve/revision-mismatch}` having written nothing. Pass
+   `konserve.impl.defaults/absent` to mean: only if this key does not exist.
+   `:with-revision? true` additionally reports the revision the write PRODUCED,
+   which changes the result shape from `[old new]` to `[[old new] revision]`;
+   hand that back as the next `:expected-revision` to chain fenced writes without
+   a re-read. Both are REFUSED, not ignored, by a store that cannot
+   compare-and-set — see [[conditional-write?]] and [[conditional-write-domain]]."
   ([store key val]
    (assoc store key val nil {:sync? false}))
   ([store key val opts]
@@ -663,6 +715,7 @@
    (dissoc store key {:sync? false}))
   ([store key opts]
    (log/trace :konserve/dissoc {:key key})
+   (refuse-conditional-unsupported! "dissoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -719,6 +772,7 @@
    (append store key elem {:sync? false}))
   ([store key elem opts]
    (log/trace :konserve/append {:key key})
+   (refuse-conditional-unsupported! "append" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -829,6 +883,7 @@
    (bassoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/bassoc {:key key})
+   (refuse-conditional-unsupported! "bassoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked

@@ -24,6 +24,36 @@
   ([store cache]
    (clojure.core/assoc store :cache cache)))
 
+(defn- refuse-revision-read!
+  "A cached read cannot report a revision, so it says so instead of guessing.
+
+   A cache HIT has no revision — only the value was stored — so the only answers
+   available are to invent one or to silently miss the cache, and a revision that
+   is sometimes real and sometimes invented is worse than no revision at all: it
+   is the token a caller fences on. `konserve.core/get` takes the same store and
+   does not consult the cache, which is the right call for a fencing read."
+  [opts]
+  (when (:with-revision? opts)
+    (throw (ex-info (str ":with-revision? is not supported on a cached read — a cached value carries "
+                         "no revision. Use konserve.core/get on the same store, which does not read "
+                         "through the cache.")
+                    {:type :konserve/with-revision-unsupported-on-cache}))))
+
+(defn- split-revision
+  "konserve answers a write with `[old new]`, or with `[[old new] revision]` when
+   the caller asked `:with-revision? true`. Normalise to `[[old new] revision]`.
+
+   Without this the cache destructured the revision-bearing shape as if it were
+   the plain one, so `old-val` became `[old new]` and `new-val` became the
+   REVISION — which was then written into the cache as the key's value. Every
+   later cached read of that key returned a revision token where the caller
+   expected their data."
+  [res opts]
+  (if (:with-revision? opts) res [res nil]))
+
+(defn- revision-result [old-val new-val revision opts]
+  (if (:with-revision? opts) [[old-val new-val] revision] [old-val new-val]))
+
 (defn- read-through [store key opts]
   (async+sync
    (:sync? opts)
@@ -60,6 +90,7 @@
    (get-in store key-vec not-found {:sync? false}))
   ([store key-vec not-found opts]
    (log/trace :konserve/cache-get-in {:key-vec key-vec})
+   (refuse-revision-read! opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -96,7 +127,9 @@
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old-val new-val] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -106,7 +139,7 @@
                                               :key-vec key-vec
                                               :old-value old-val
                                               :value new-val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
@@ -133,7 +166,9 @@
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -142,7 +177,7 @@
                                               :key key
                                               :key-vec key-vec
                                               :value val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 (defn assoc
   "Associates the key to the value. This is a simple top-level overwrite."
@@ -159,7 +194,9 @@
                 ;; :assoc-in we'd inherit by delegating to assoc-in — so hook
                 ;; consumers see the same op label as the non-cache API.
                 (let [cache (:cache store)
-                      [old-val new-val] (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -167,7 +204,7 @@
                   (invoke-write-hooks! store {:api-op :assoc
                                               :key key
                                               :value val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 (defn dissoc
   "Removes an entry from the store. "

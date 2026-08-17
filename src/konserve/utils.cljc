@@ -52,6 +52,25 @@
   #?(:clj (java.util.Date. ^long (monotonic-now-ms))
      :cljs (js/Date. (monotonic-now-ms))))
 
+(def ^:private revision-prefix
+  "Random once per runtime, so tokens minted by different processes can never
+   collide even though each counts locally."
+  (str #?(:clj (java.util.UUID/randomUUID) :cljs (random-uuid))))
+
+(def ^:private revision-counter (atom 0))
+
+(defn- next-revision
+  "A token unique across processes, minted without a random draw per write.
+
+   `random-uuid` per write is correct but does not scale: it draws from a shared
+   secure RNG, and under an 8-way pipelined burst that contention costs ~2.5-3x
+   per operation — measured as a throughput regression on datahike's node-heavy
+   writes, which produce thousands of blobs per commit. A per-runtime random
+   PREFIX plus a local counter keeps global uniqueness and costs one atom
+   increment."
+  []
+  (str revision-prefix "-" (swap! revision-counter inc)))
+
 (defn meta-update
   "Metadata has following 'edn' format
   {:key 'The stored key'
@@ -60,17 +79,32 @@
   Returns the meta value of the stored key-value tuple. Returns metadata if the key
   value not exist, if it does it will update the last-write to date now. "
   [key type old]
-  (if (empty? old)
-    {:key key :type type :last-write (now) :revision 0}
-    (-> old
-        (clojure.core/assoc :last-write (now))
-        ;; The token a conditional write compares against. NOT `:last-write`:
-        ;; that clock is deliberately non-decreasing rather than strictly
-        ;; increasing (see `monotonic-now-ms`), so two writes in one millisecond
-        ;; share a stamp — fail-safe for GC, useless as a revision. A counter
-        ;; bumped under the same lock that serializes the write is exact, and
-        ;; correct across processes because the lock is.
-        (clojure.core/update :revision (fnil inc -1)))))
+  ;; `:revision` is a fresh OPAQUE TOKEN on every write, not a counter derived
+  ;; from `old`.
+  ;;
+  ;; A counter cannot work here, and the reason is the shape of this function's
+  ;; callers rather than anything about counting: the fast path for `assoc` sets
+  ;; `:overwrite? true` and therefore never reads the old metadata, so `old` is
+  ;; nil and a derived counter re-emits its initial value forever. Five ordinary
+  ;; writes in a row would all leave the key at revision 0, and a reader holding
+  ;; that 0 would fence successfully against content that had entirely changed —
+  ;; the lost update this exists to prevent. `prepare-multi-assoc` hardcodes
+  ;; `old-meta nil` for the same reason and would reset it likewise.
+  ;;
+  ;; Making it correct as a counter would mean reading the old metadata on EVERY
+  ;; write — a GET before every PUT on a remote store. A minted token costs
+  ;; nothing, needs no read, and every write path produces one whether or not it
+  ;; saw `old`.
+  ;;
+  ;; NOT `:last-write`: that clock is deliberately non-decreasing rather than
+  ;; strictly increasing (see `monotonic-now-ms`), so two writes in one
+  ;; millisecond share a stamp — fail-safe for GC, useless as an identity.
+  (let [revision (next-revision)]
+    (if (empty? old)
+      {:key key :type type :last-write (now) :revision revision}
+      (-> old
+          (clojure.core/assoc :last-write (now))
+          (clojure.core/assoc :revision revision)))))
 
 (defn kv-keys
   "The keys of a `multi-assoc` kvs argument, which may be a map OR an ORDERED

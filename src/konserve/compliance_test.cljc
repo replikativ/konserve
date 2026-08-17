@@ -3,7 +3,7 @@
             [konserve.core :as k]
             [konserve.impl.defaults]
             [konserve.utils :as utils]
-            #?(:cljs [cljs.test :refer [is]])
+            #?(:cljs [cljs.test :refer [is testing]])
             #?(:clj [clojure.test :refer [are is testing]])))
 
 #_(deftype UnknownType [])
@@ -11,9 +11,8 @@
 #_(:clj (defn exception? [thing]
           (instance? Throwable thing)))
 
-#?(:clj
-   (defn conditional-write-compliance-test
-     "The `:expected-revision` contract, for any backend that claims to support it.
+(defn conditional-write-compliance-test
+  "The `:expected-revision` contract, for any backend that claims to support it.
 
       A backend that does NOT implement `PConditionalWrite` passes trivially — that
       is the point of the capability: not supporting fencing is a legitimate state,
@@ -21,13 +20,30 @@
       store is that it refuses rather than writes.
 
       Call this from your backend's test suite with a connected, empty store."
-     [store]
-     (doseq [opts [{:sync? false} {:sync? true}]
-             :let [<!! (if (:sync? opts) identity <!!)
-                   k*  (keyword (str "cas-" (if (:sync? opts) "sync" "async")))]]
+  [store]
+  ;; The ASYNC arm is JVM-only: resolving a channel to a value needs `<!!`, which
+  ;; ClojureScript has no equivalent of. The sync arm covers cljs, where konserve
+  ;; does have synchronous IO (node-filestore, memory) — which is the arm that
+  ;; matters there anyway. Written as one function rather than two so the contract
+  ;; cannot drift between platforms; it was previously wrapped whole in
+  ;; `#?(:clj ...)` while `memory_test` referred it unconditionally, so the cljs
+  ;; build simply did not compile.
+  (doseq [opts #?(:clj [{:sync? false} {:sync? true}] :cljs [{:sync? true}])
+             :let [<!! (if (:sync? opts) identity #?(:clj <!! :cljs identity))
+                   k*  (keyword (str "cas-" (if (:sync? opts) "sync" "async")))
+                   ;; A rejection arrives DIFFERENTLY in the two arms: synchronously
+                   ;; it is thrown, asynchronously konserve delivers the exception
+                   ;; as a VALUE on the channel. `(is (thrown? ...))` around `<!!`
+                   ;; therefore cannot pass in the async arm — the first version of
+                   ;; this test asserted exactly that and failed 3/18 the first time
+                   ;; anyone ran it. Normalise, then assert on the type.
+                   rejected? (fn [f]
+                               (let [r (try (<!! (f)) (catch #?(:clj Exception :cljs js/Error) e e))]
+                                 (= :konserve/revision-mismatch
+                                    (:type (ex-data r)))))]]
        (if-not (k/conditional-write? store)
          (testing "a store without the capability REFUSES, it does not ignore"
-           (is (thrown? clojure.lang.ExceptionInfo
+           (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                         (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision :anything))))))
          (testing "conditional writes"
            (testing "create-if-absent succeeds on a missing key"
@@ -35,8 +51,7 @@
              (is (= {:v 1} (<!! (k/get store k* nil opts)))))
 
            (testing "create-if-absent is rejected once the key exists"
-             (is (thrown? clojure.lang.ExceptionInfo
-                          (<!! (k/assoc store k* {:v :no} (assoc opts :expected-revision konserve.impl.defaults/absent))))))
+             (is (rejected? #(k/assoc store k* {:v :no} (assoc opts :expected-revision konserve.impl.defaults/absent)))))
 
            (let [r0 (<!! (k/revision store k* opts))]
              (testing "a write on the revision we read succeeds and MOVES the revision"
@@ -45,17 +60,33 @@
                (is (not= r0 (<!! (k/revision store k* opts)))))
 
              (testing "the same revision a second time is rejected, and writes nothing"
-               (is (thrown? clojure.lang.ExceptionInfo
-                            (<!! (k/assoc store k* {:v :lost} (assoc opts :expected-revision r0)))))
+               (is (rejected? #(k/assoc store k* {:v :lost} (assoc opts :expected-revision r0))))
                (is (= {:v 2} (<!! (k/get store k* nil opts)))
                    "the loser must not have overwritten the winner"))
 
              (testing "update-in is fenced too, and up-fn does not run when rejected"
                (let [ran (atom 0)]
-                 (is (thrown? clojure.lang.ExceptionInfo
-                              (<!! (k/update-in store [k*] (fn [v] (swap! ran inc) (assoc v :v :lost))
-                                                (assoc opts :expected-revision r0)))))
+                 (is (rejected? #(k/update-in store [k*] (fn [v] (swap! ran inc) (assoc v :v :lost))
+                                              (assoc opts :expected-revision r0))))
                  (is (zero? @ran) "a rejected update must not run the caller's function"))))
+
+           ;; The rejection must leave NO trace. A backing that creates its blob
+           ;; before it can compare revisions leaves an empty one behind when the
+           ;; comparison fails, and an empty blob is worse than a missing key: it
+           ;; is not absent (so `create-if-absent` can never succeed again) and it
+           ;; is not readable (a header-size error, not not-found). One ordinary
+           ;; conflict on a key that never existed would brick that key forever.
+           (testing "a REJECTED write on a missing key leaves the key missing"
+             (let [ghost (keyword (str "cas-ghost-" (if (:sync? opts) "sync" "async")))]
+               (is (rejected? #(k/assoc store ghost {:v :no}
+                                        (assoc opts :expected-revision :a-revision-that-never-existed))))
+               (is (false? (<!! (k/exists? store ghost opts)))
+                   "the key must not have come into existence")
+               (is (= :missing (<!! (k/get store ghost :missing opts)))
+                   "and reading it reports not-found rather than raising")
+               (testing "so create-if-absent still succeeds afterwards"
+                 (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision konserve.impl.defaults/absent)))
+                 (is (= {:v 1} (<!! (k/get store ghost nil opts)))))))
 
            (testing "an unconditional write still works"
              (<!! (k/assoc store k* {:v 3} opts))
@@ -63,10 +94,8 @@
 
            (testing "multi-assoc refuses to be made conditional"
              (when (utils/multi-key-capable? store)
-               (is (thrown? clojure.lang.ExceptionInfo
+               (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                             (<!! (k/multi-assoc store {:cas-m1 1} (assoc opts :expected-revision :x)))))))))))
-
-   )
 
 #?(:clj
    (defn compliance-test [store]
