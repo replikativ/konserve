@@ -6,7 +6,8 @@
    [konserve.impl.defaults :refer [update-blob connect-default-store key->store-key store-key->uuid-key normalize-store-config]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          PBackingBlob -close
-                                         PBackingLock header-size]]
+                                         PBackingLock header-size
+                                         PStreamingBinaryWrite]]
    [konserve.nio-helpers :refer [blob->channel]]
    [konserve.protocols :as kp]
    [konserve.utils :refer [async+sync *default-sync-translation*]]
@@ -466,6 +467,17 @@
                                      (.read this buffer payload-start)
                                      (.array buffer))))
                   :size         (- total-size payload-start)}))))
+
+
+;; The filestore drains `-write-binary` input through a fixed buffer, so it takes
+;; the caller's blob untouched rather than a materialized byte array. That is what
+;; lets it store a value larger than the heap — and it has to, because Lucene's
+;; default merge policy produces segments up to 5 GB while a byte array stops at 2.
+(extend-protocol PStreamingBinaryWrite
+  AsynchronousFileChannel
+  (-streaming-binary-write? [_] true)
+  FileChannel
+  (-streaming-binary-write? [_] true))
 
 (extend-type FileLock
   PBackingLock

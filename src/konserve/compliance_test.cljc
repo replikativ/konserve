@@ -64,6 +64,45 @@
                                                (range 10)))
                                         true))
                       opts))
+         ;; EVERY DOCUMENTED INPUT SHAPE, not just the byte array. `bassoc`
+         ;; promises an InputStream, a File, a String and a byte array, and
+         ;; before this only the filestore handled any but the last — every
+         ;; other backing mishandled four of them, undetected, because this
+         ;; suite only ever passed bytes. konserve-s3 stashes the blob and
+         ;; later calls `(.write baos value)`, which needs an array.
+         #?(:clj
+            (let [expected (map byte (range 10))]
+              (<!! (k/bassoc store :bin-stream
+                             (java.io.ByteArrayInputStream. (byte-array (range 10))) opts))
+              (<!! (k/bget store :bin-stream
+                           (fn [{:keys [input-stream]}]
+                             (go (is (= expected (map byte (slurp input-stream)))
+                                     "bassoc must accept an InputStream")
+                                 true))
+                           opts))
+              (let [f (java.io.File/createTempFile "konserve-compliance" ".bin")]
+                (try
+                  (with-open [o (java.io.FileOutputStream. f)]
+                    (.write o (byte-array (range 10))))
+                  (<!! (k/bassoc store :bin-file f opts))
+                  (<!! (k/bget store :bin-file
+                               (fn [{:keys [input-stream]}]
+                                 (go (is (= expected (map byte (slurp input-stream)))
+                                         "bassoc must accept a File")
+                                     true))
+                               opts))
+                  (finally (.delete f))))
+              (<!! (k/bassoc store :bin-string "hello konserve" opts))
+              (<!! (k/bget store :bin-string
+                           (fn [{:keys [input-stream]}]
+                             (go (is (= "hello konserve" (slurp input-stream))
+                                     "bassoc must accept a String")
+                                 true))
+                           opts))
+              ;; cleaned up so the key-listing assertion below still describes
+              ;; the same store it always did
+              (doseq [kk [:bin-stream :bin-file :bin-string]]
+                (<!! (k/dissoc store kk opts)))))
          (let  [list-keys (<!! (k/keys store opts))]
            (are [x y] (= x y)
              #{{:key :baz

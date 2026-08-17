@@ -15,7 +15,8 @@
                                PMultiKeySupport
                                PMultiKeyEDNValueStore
                                PWriteHookStore]]
-   [konserve.impl.storage-layout :refer [-atomic-move -create-store
+   #?(:clj [konserve.nio-helpers :as nio])
+   [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store
                                          -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
                                          -migratable -migrate -handle-foreign-key
@@ -98,7 +99,19 @@
         (<?- (-write-header new-blob header env))
         (<?- (-write-meta new-blob meta-arr env))
         (if (= operation :write-binary)
-          (<?- (-write-binary new-blob meta-size input env))
+          ;; Normalize here so no backing has to. `bassoc` documents five input
+          ;; shapes; before this, only the filestore handled any but bytes, and
+          ;; every other backing silently mishandled the rest — konserve-s3
+          ;; stashes the blob and later calls `(.write baos value)`, which needs
+          ;; a byte array. A backing that can drain a stream says so and gets
+          ;; the caller's input untouched, which is what lets a value larger
+          ;; than the heap be written at all: Lucene's DEFAULT merge policy
+          ;; tops out at 5 GB per segment, and a byte array at 2 GB.
+          (<?- (-write-binary new-blob meta-size
+                              (if (-streaming-binary-write? new-blob)
+                                input
+                                #?(:clj (nio/blob->bytes input) :cljs input))
+                              env))
           (let [value-arr (to-array value)]
             (<?- (-write-value new-blob value-arr meta-size env))))
 

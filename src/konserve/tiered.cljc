@@ -2,6 +2,7 @@
   "Tiered store implementation with frontend and backend storage layers."
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [go] :as async]
+            #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
             [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
@@ -326,7 +327,13 @@
 
   (-bassoc [_this key meta-up-fn val opts]
     (log/trace :konserve/tiered-bassoc {:key key})
-    (async+sync (:sync? opts)
+    ;; Materialize ONCE, before fanning out. Both tiers receive the same `val`,
+    ;; and an InputStream is exhausted by whichever writes first — the second
+    ;; tier would then store nothing, silently. `bassoc` documents streams as
+    ;; input, so this is the only place that can honour that for a two-tier
+    ;; write.
+    (let [val #?(:clj (nio/blob->bytes val) :cljs val)]
+      (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
                  (case write-policy
@@ -356,7 +363,7 @@
                      result)
 
                    :frontend-only
-                   (<?- (-bassoc frontend-store key meta-up-fn val opts))))))
+                   (<?- (-bassoc frontend-store key meta-up-fn val opts)))))))
 
   PAssocSerializers
   (-assoc-serializers [this serializers]

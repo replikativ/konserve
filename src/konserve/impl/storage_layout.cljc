@@ -226,7 +226,31 @@
   (-write-header [this header-arr env] "Write header array.")
   (-write-meta [this meta-arr env] "Write metadata array.")
   (-write-value [this value-arr meta-size env] "Write value array.")
-  (-write-binary [this meta-size blob env] "Write binary blob."))
+  (-write-binary [this meta-size blob env]
+    "Write binary blob.
+
+     `blob` IS A byte ARRAY unless this blob type declares otherwise via
+     `PStreamingBinaryWrite`. `konserve.core/bassoc` accepts an InputStream, a
+     File, a String, a Reader or a byte array, and normalizing that variety
+     once — in `konserve.impl.defaults` — is what keeps every backing from
+     having to. Before that, only the filestore handled anything but bytes, and
+     every other backing silently mishandled the documented input types."))
+
+(defprotocol PStreamingBinaryWrite
+  "Can this blob consume `-write-binary` input without it being materialized first?
+
+   Defaults to FALSE, which is the safe direction: a backing that has not
+   thought about it receives a byte array, which is what every implementation
+   already assumed. A backing that can consume a stream — the filestore drains
+   one through a fixed buffer — implements this and gets the caller's blob
+   untouched, so a value larger than the heap still writes."
+  (-streaming-binary-write? [this]))
+
+(extend-protocol PStreamingBinaryWrite
+  #?(:clj Object :cljs default)
+  (-streaming-binary-write? [_] false)
+  nil
+  (-streaming-binary-write? [_] false))
 
 (defprotocol PBackingLock
   (-release [this env] "Release this lock."))
