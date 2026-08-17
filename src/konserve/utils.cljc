@@ -61,8 +61,16 @@
   value not exist, if it does it will update the last-write to date now. "
   [key type old]
   (if (empty? old)
-    {:key key :type type :last-write (now)}
-    (clojure.core/assoc old :last-write (now))))
+    {:key key :type type :last-write (now) :revision 0}
+    (-> old
+        (clojure.core/assoc :last-write (now))
+        ;; The token a conditional write compares against. NOT `:last-write`:
+        ;; that clock is deliberately non-decreasing rather than strictly
+        ;; increasing (see `monotonic-now-ms`), so two writes in one millisecond
+        ;; share a stamp — fail-safe for GC, useless as a revision. A counter
+        ;; bumped under the same lock that serializes the write is exact, and
+        ;; correct across processes because the lock is.
+        (clojure.core/update :revision (fnil inc -1)))))
 
 (defn kv-keys
   "The keys of a `multi-assoc` kvs argument, which may be a map OR an ORDERED

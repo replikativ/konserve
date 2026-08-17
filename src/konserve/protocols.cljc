@@ -64,6 +64,41 @@
   (-set-write-hooks! [this hooks-atom]
     "Set the write-hooks atom. Returns the modified store."))
 
+(defprotocol PConditionalWrite
+  "Stores that can make a write conditional on the revision the caller read.
+
+   The point of the capability being explicit is that a store which CANNOT do
+   this must REFUSE `:expected-revision`, not ignore it. Silently degrading to an
+   unconditional write is worse than having no fencing at all: the caller has
+   asked for a guarantee, and would get a knob that reads as handled."
+  (-conditional-write? [this]
+    "How far this store's conditional writes actually reach, or nil for not at all:
+
+       nil       cannot compare-and-write; `:expected-revision` is REFUSED
+       :process  atomic against other threads in this runtime  (memory: one `swap!`)
+       :machine  atomic against other processes on this host   (filestore: an OS
+                 advisory lock — and NOT across NFS or any network filesystem,
+                 where advisory locks are unreliable)
+       :global   atomic against every writer anywhere          (S3: If-Match)
+
+     A DOMAIN rather than a boolean because the API is uniform and the guarantee is
+     not. `true` would let a caller planning to run two processes against a memory
+     store — or two machines against a filestore — believe they are fenced when they
+     are only serialized against a narrower set of writers. That is the same failure
+     the capability exists to prevent, one level finer: appearing fenced without
+     being fenced.
+
+     Ordered weakest-first, so a caller can state the domain it needs and compare.")
+  (-revision [this key opts]
+    "The token to hand back as `:expected-revision`, or the absent sentinel.
+
+     Its OWN function rather than a field of `-get-meta`, because the two can
+     disagree: a tiered store answers metadata from whichever tier its read-policy
+     names, while the conditional write is evaluated by the tier that owns the
+     durable value. Reading the revision from the frontend and comparing it
+     against the backend's compares two independent counters, which is worse than
+     not comparing at all. This function always resolves to the tier that decides."))
+
 (defprotocol PLockFreeStore
   "Protocol for stores that handle concurrency internally (e.g., MVCC backends like LMDB).
    These stores don't need application-level locking for read/write operations."

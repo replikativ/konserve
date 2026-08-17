@@ -89,6 +89,7 @@
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
    (log/trace :konserve/cache-update-in {:key-vec key-vec})
+   (core/check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -125,6 +126,7 @@
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
    (log/trace :konserve/cache-assoc-in {:key-vec key-vec})
+   (core/check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -148,6 +150,7 @@
    (assoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/cache-assoc {:key key})
+   (core/check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked

@@ -7,12 +7,12 @@
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor null-compressor]]
    [konserve.encryptor :refer [get-encryptor null-encryptor]]
-   [konserve.protocols :refer [PEDNKeyValueStore
+   [konserve.protocols :as protocols :refer [PEDNKeyValueStore
                                PBinaryKeyValueStore
                                -serialize -deserialize
                                PAssocSerializers
                                PKeyIterable
-                               PMultiKeySupport
+                               PMultiKeySupport PConditionalWrite -conditional-write? -revision
                                PMultiKeyEDNValueStore
                                PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
@@ -211,6 +211,27 @@
                             value     (fn-read bais-value)
                             _          (.close bais-value)]
                         [meta value]))
+        ;; Both segments, from the one pass the blob is already open for. The
+        ;; write path has always done this (`:write-edn` below); a READ needs it
+        ;; so a caller can obtain a value AND the revision it is at without a
+        ;; second round-trip — which on a remote store is an extra GET, and worse,
+        ;; is RACY: between reading the value and reading its revision another
+        ;; writer can move both, and the caller would fence against a revision
+        ;; that never belonged to the value it computed from.
+        :read-edn-meta #?(:cljs
+                          (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
+                                value (fn-read (<?- (-read-value blob meta-size env)))]
+                            [meta value])
+                          :clj
+                          (let [bais-meta  (ByteArrayInputStream.
+                                            (<?- (-read-meta blob meta-size env)))
+                                meta       (fn-read bais-meta)
+                                _          (.close bais-meta)
+                                bais-value (ByteArrayInputStream.
+                                            (<?- (-read-value blob meta-size env)))
+                                value      (fn-read bais-value)
+                                _          (.close bais-value)]
+                            [meta value]))
         :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (defn delete-blob
@@ -251,6 +272,33 @@
   remote backends such as S3)."
   #?(:clj (Object.) :cljs (js-obj)))
 
+(def absent
+  "The `:expected-revision` that means THE KEY MUST NOT EXIST — the create half of
+   a conditional write. Distinct from `nil`, which means \"unconditional\": a
+   caller that passed nil for \"I read nothing there\" would silently get an
+   unconditional overwrite, which is the failure this whole mechanism exists to
+   remove."
+  ::absent)
+
+(defn check-revision!
+  "Throw unless the stored revision is the one the caller derived its value from.
+
+   `old-meta` is nil when the key does not exist. The comparison is `=` on an
+   OPAQUE token: for this backing it is an integer counter kept in the metadata,
+   for others it can be whatever their storage gives (an S3 ETag, a row version).
+   Callers must treat it as opaque and pass back what they read.
+
+   A key never written since revisions were introduced has no `:revision`, so it
+   reads as nil and a caller that read nil and passes nil back still matches."
+  [key expected old-meta]
+  (let [actual (if (nil? old-meta) absent (:revision old-meta))]
+    (when-not (= expected actual)
+      (throw (ex-info "Conditional write rejected: the stored revision is not the one this value was derived from."
+                      {:type     :konserve/revision-mismatch
+                       :key      key
+                       :expected expected
+                       :actual   actual})))))
+
 (defn get-lock [this store-key env]
   (async+sync
    (:sync? env)
@@ -284,16 +332,24 @@
 (defn io-operation
   "Read/Write blob. For better understanding use the flow-chart of konserve."
   [{:keys [backing]} serializers read-handlers write-handlers
-   {:keys [key-vec operation default-serializer sync? overwrite? config] :as env}]
+   {:keys [key-vec operation default-serializer sync? config expected-revision] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [key           (first  key-vec)
+          ;; A CONDITIONAL write has to see the old value to compare against it,
+          ;; so it cannot take the full-overwrite shortcut that skips the read.
+          ;; Cleared here rather than at every call site: `assoc` sets
+          ;; `:overwrite? true` for any top-level key, which is exactly the shape
+          ;; a fenced pointer write has.
+          overwrite?    (and (:overwrite? env) (nil? expected-revision))
+          env           (assoc env :overwrite? overwrite?)
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           migration-key (<?- (-migratable backing key store-key env))
-          read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation))
+          read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation)
+                            (= :read-edn-meta operation))
           write-op?     (or (= :write-edn operation) (= :write-binary operation))
           ;; A PReadMissSafe backing reports an absent key cleanly from the read
           ;; itself (an absent key throws store-key-not-found-ex), so the
@@ -365,7 +421,9 @@
                                   (or store-key-exists? (pos? attempt))
                                   (<?- (read-blob blob read-handlers serializers env))
                                   :else [nil nil])]
-                        (if write-op?
+                        (when expected-revision
+                        (check-revision! key expected-revision (first old)))
+                      (if write-op?
                           (<?- (update-blob backing store-key serializer write-handlers env old))
                           old))
                       (finally
@@ -374,6 +432,11 @@
                           (<?- (-release lock env)))
                         (<?- (-close blob env)))))
                   (catch #?(:clj Exception :cljs js/Error) e
+                    ;; DELIBERATELY not retried: `:konserve/revision-mismatch`.
+                    ;; That conflict belongs to the CALLER — retrying would re-run
+                    ;; `up-fn` against a value they never agreed to, which is the
+                    ;; silent drift `:expected-revision` exists to prevent. Only a
+                    ;; backend's own internal lock contention is retried here.
                     (if (and (pos? max-retries)
                              (= :optimistic-lock-conflict (:type (ex-data e)))
                              (< attempt max-retries))
@@ -508,7 +571,7 @@
             (<?- (-migratable backing key store-key env))
             false)))))
   (-get-in [this key-vec not-found opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? with-revision?]} opts]
       (async+sync
        sync?
        *default-sync-translation*
@@ -520,7 +583,7 @@
         (let [a (<?-
                  (io-operation this serializers read-handlers write-handlers
                                {:key-vec key-vec
-                                :operation :read-edn
+                                :operation (if with-revision? :read-edn-meta :read-edn)
                                 :compressor compressor
                                 :encryptor encryptor
                                 :format    :data
@@ -532,9 +595,16 @@
                                 :not-found not-found-sentinel
                                 :msg       {:type :read-edn-error
                                             :key  key}}))]
-          (if (identical? a not-found-sentinel)
-            not-found
-            (clojure.core/get-in a (rest key-vec))))))))
+          (if with-revision?
+            ;; [value revision] — the absent key reports the absent sentinel as its
+            ;; revision, which is exactly what a create-if-absent write expects.
+            (if (identical? a not-found-sentinel)
+              [not-found absent]
+              (let [[meta value] a]
+                [(clojure.core/get-in value (rest key-vec)) (:revision meta)]))
+            (if (identical? a not-found-sentinel)
+              not-found
+              (clojure.core/get-in a (rest key-vec)))))))))
   (-get-meta [this key opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
@@ -551,7 +621,7 @@
                                  :key  key}})))
 
   (-assoc-in [this key-vec meta-up val opts]
-    (let [{:keys [sync?]} opts
+    (let [{:keys [sync? expected-revision]} opts
           key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
@@ -566,11 +636,12 @@
                      :sync? sync?
                      :buffer-size buffer-size
                      :overwrite? (empty? (rest key-vec))
+                     :expected-revision expected-revision
                      :msg        {:type :write-edn-error
                                   :key  key}})))
 
   (-update-in [this key-vec meta-up up-fn opts]
-    (let [{:keys [sync?]} opts
+    (let [{:keys [sync? expected-revision]} opts
           key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
@@ -584,6 +655,7 @@
                      :config     config
                      :sync? sync?
                      :buffer-size buffer-size
+                     :expected-revision expected-revision
                      :msg        {:type :write-edn-error
                                   :key  key}})))
   (-dissoc [_ key opts]
@@ -653,6 +725,23 @@
                   :sync? sync?
                   :buffer-size buffer-size
                   :msg {:type :read-all-keys-error}})))
+
+  PConditionalWrite
+  ;; The blob lock spans read-old and write (see `io-operation`), and it is an OS
+  ;; advisory lock on the filestore, so the compare-and-write is atomic across
+  ;; processes on one filesystem. NOT across machines: the lock file is local.
+  ;; A backing without `:lock-blob?` serializes nothing, so it cannot honour the
+  ;; contract and must say so.
+  (-conditional-write? [_]
+    ;; :machine, never further. The lock is an OS advisory lock on a file in this
+    ;; store's own directory, so it serializes processes that can see that file and
+    ;; nothing beyond. Without :lock-blob? nothing serializes read-old against
+    ;; write, so there is no domain at all.
+    (when (:lock-blob? config) :machine))
+  (-revision [this key opts]
+    (async+sync (:sync? opts) *default-sync-translation*
+                (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
+                           (if (nil? m) absent (:revision m))))))
 
   PMultiKeySupport
   (-supports-multi-key? [_]

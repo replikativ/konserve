@@ -43,7 +43,7 @@
          (and
           (is (every? inst? (map :last-write store-keys)))
           (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
-                 (set (map #(dissoc % :last-write) store-keys))))))))))
+                 (set (map #(dissoc % :last-write :revision) store-keys))))))))))
 
 (defn test-cached-PBin-async [store locked-cb]
   (let [store (kc/ensure-cache store)

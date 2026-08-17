@@ -5,7 +5,8 @@
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
-            [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
+            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write? -revision
+                                                      -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc -assoc-serializers
                                                       PEDNKeyValueStore PBinaryKeyValueStore
@@ -166,6 +167,30 @@
                   :reachable-keys (count reachable-keys)}))))
 
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
+  PConditionalWrite
+  ;; Only `:write-through` can honour this, and only if the backend can.
+  ;;
+  ;; `:write-behind` cannot, for a reason no implementation effort would fix: it
+  ;; returns to the caller once the FRONTEND has the value and writes the backend
+  ;; in a `go` afterwards, so a rejected conditional write would be discovered
+  ;; after the caller was told it succeeded. There is nobody left to report it to.
+  ;;
+  ;; `:frontend-only` is a read-through cache over a backend another peer owns; it
+  ;; must not mutate it at all, let alone fence it.
+  (-conditional-write? [_]
+    ;; The BACKEND's domain, because the backend is what decides the write. A
+    ;; memory frontend over an S3 backend is :global; reporting the frontend's
+    ;; :process would be exactly backwards.
+    (when (= :write-through write-policy)
+      (when (satisfies? PConditionalWrite backend-store)
+        (-conditional-write? backend-store))))
+  ;; ALWAYS the backend, never the read-policy's choice. The two tiers keep
+  ;; INDEPENDENT revision counters — they are separate stores — so a revision read
+  ;; from the frontend and compared against the backend compares two unrelated
+  ;; numbers. That would fail open or closed at random, which is worse than having
+  ;; no fencing, because it looks like fencing.
+  (-revision [_ key opts] (-revision backend-store key opts))
+
   PEDNKeyValueStore
   (-exists? [_this key opts]
     (log/trace :konserve/tiered-exists? {:key key})

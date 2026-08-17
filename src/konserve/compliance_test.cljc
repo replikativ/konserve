@@ -1,6 +1,7 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :refer [#?(:clj <!!) <! go]]
             [konserve.core :as k]
+            [konserve.impl.defaults]
             [konserve.utils :as utils]
             #?(:cljs [cljs.test :refer [is]])
             #?(:clj [clojure.test :refer [are is testing]])))
@@ -9,6 +10,63 @@
 
 #_(:clj (defn exception? [thing]
           (instance? Throwable thing)))
+
+#?(:clj
+   (defn conditional-write-compliance-test
+     "The `:expected-revision` contract, for any backend that claims to support it.
+
+      A backend that does NOT implement `PConditionalWrite` passes trivially — that
+      is the point of the capability: not supporting fencing is a legitimate state,
+      SILENTLY IGNORING a request for it is not. So the one thing checked for such a
+      store is that it refuses rather than writes.
+
+      Call this from your backend's test suite with a connected, empty store."
+     [store]
+     (doseq [opts [{:sync? false} {:sync? true}]
+             :let [<!! (if (:sync? opts) identity <!!)
+                   k*  (keyword (str "cas-" (if (:sync? opts) "sync" "async")))]]
+       (if-not (k/conditional-write? store)
+         (testing "a store without the capability REFUSES, it does not ignore"
+           (is (thrown? clojure.lang.ExceptionInfo
+                        (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision :anything))))))
+         (testing "conditional writes"
+           (testing "create-if-absent succeeds on a missing key"
+             (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision konserve.impl.defaults/absent)))
+             (is (= {:v 1} (<!! (k/get store k* nil opts)))))
+
+           (testing "create-if-absent is rejected once the key exists"
+             (is (thrown? clojure.lang.ExceptionInfo
+                          (<!! (k/assoc store k* {:v :no} (assoc opts :expected-revision konserve.impl.defaults/absent))))))
+
+           (let [r0 (<!! (k/revision store k* opts))]
+             (testing "a write on the revision we read succeeds and MOVES the revision"
+               (<!! (k/assoc store k* {:v 2} (assoc opts :expected-revision r0)))
+               (is (= {:v 2} (<!! (k/get store k* nil opts))))
+               (is (not= r0 (<!! (k/revision store k* opts)))))
+
+             (testing "the same revision a second time is rejected, and writes nothing"
+               (is (thrown? clojure.lang.ExceptionInfo
+                            (<!! (k/assoc store k* {:v :lost} (assoc opts :expected-revision r0)))))
+               (is (= {:v 2} (<!! (k/get store k* nil opts)))
+                   "the loser must not have overwritten the winner"))
+
+             (testing "update-in is fenced too, and up-fn does not run when rejected"
+               (let [ran (atom 0)]
+                 (is (thrown? clojure.lang.ExceptionInfo
+                              (<!! (k/update-in store [k*] (fn [v] (swap! ran inc) (assoc v :v :lost))
+                                                (assoc opts :expected-revision r0)))))
+                 (is (zero? @ran) "a rejected update must not run the caller's function"))))
+
+           (testing "an unconditional write still works"
+             (<!! (k/assoc store k* {:v 3} opts))
+             (is (= {:v 3} (<!! (k/get store k* nil opts)))))
+
+           (testing "multi-assoc refuses to be made conditional"
+             (when (utils/multi-key-capable? store)
+               (is (thrown? clojure.lang.ExceptionInfo
+                            (<!! (k/multi-assoc store {:cas-m1 1} (assoc opts :expected-revision :x)))))))))))
+
+   )
 
 #?(:clj
    (defn compliance-test [store]
@@ -111,7 +169,10 @@
                 :type :binary}
                {:key :foolog
                 :type :append-log}}
-             (->> list-keys (map #(clojure.core/dissoc % :last-write)) set)
+             ;; `:revision` is dropped for the same reason as `:last-write`: both
+             ;; are bookkeeping the store maintains, not part of what the caller
+             ;; stored, and neither is stable across the writes this test makes.
+             (->> list-keys (map #(clojure.core/dissoc % :last-write :revision)) set)
              true
              (every?
               (fn [{:keys [:last-write]}]

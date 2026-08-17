@@ -2,7 +2,9 @@
   "Address globally aggregated immutable key-value store(s).
    Does not support serialization."
   (:require [clojure.core.async :as async :refer [go <!]]
-            [konserve.protocols :refer [PEDNKeyValueStore -update-in
+            [konserve.impl.defaults :as kd]
+            [konserve.protocols :refer [PConditionalWrite -conditional-write? -revision
+                                        PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
                                         PAssocSerializers PWriteHookStore]]
@@ -40,15 +42,25 @@
                   {go do}
                   (go (first (get @state key))))))
   (-update-in [_ key-vec meta-up-fn up-fn opts]
-    (let [{:keys [sync? overwrite?]} opts]
+    (let [{:keys [sync? overwrite? expected-revision]} opts]
       (async+sync sync?
                   {go do}
                   (go
                     (let [[fkey & rkey] key-vec
                           update-atom
                           (fn [store]
+                            ;; The compare and the write are one `swap!`, so they
+                            ;; are atomic against other threads in this JVM —
+                            ;; which is the whole of a memory store's world. The
+                            ;; check lives INSIDE the swap fn deliberately: doing
+                            ;; it before would let another writer land between the
+                            ;; comparison and the update, which is the very race
+                            ;; this exists to prevent.
                             (swap! store
                                    (fn [old]
+                                     (when expected-revision
+                                       (kd/check-revision! fkey expected-revision
+                                                           (first (get old fkey))))
                                      (update old fkey
                                              (fn [[meta data]]
                                                [(meta-up-fn meta)
@@ -62,6 +74,22 @@
                         [old-val new-val]))))))
   (-assoc-in [this key-vec meta val opts]
     (-update-in this key-vec meta (fn [_] val) (assoc opts :overwrite? true)))
+
+  PConditionalWrite
+  ;; A single `swap!` carries both the comparison and the write, so this holds
+  ;; for every thread sharing the atom. It says nothing across processes, but a
+  ;; memory store has no across-processes to speak of.
+  (-conditional-write? [_]
+    ;; :process. The compare and the write are one `swap!`, which covers every
+    ;; thread sharing this atom and says nothing about anyone else — a memory
+    ;; store has no anyone else.
+    :process)
+  (-revision [_ key opts]
+    (async+sync (:sync? opts)
+                {go do}
+                (go (if-let [[meta _] (get @state key)]
+                      (:revision meta)
+                      kd/absent))))
   (-dissoc [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?

@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
-            [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
+            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write? -revision
+                                                      -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks -lock-free?]]
@@ -275,6 +276,60 @@
                     a
                     not-found))))))
 
+(def conditional-write-domains
+  "Conditional-write reach, weakest first. See `PConditionalWrite`."
+  [:process :machine :global])
+
+(defn conditional-write-domain
+  "How far this store's conditional writes reach — `:process`, `:machine`,
+   `:global` — or nil if it has none."
+  [store]
+  (when (satisfies? PConditionalWrite store)
+    (-conditional-write? store)))
+
+(defn conditional-write?
+  "Can this store make a write conditional on the revision the caller read, far
+   enough for `required-domain`?
+
+   Called WITHOUT a domain this asks only \"at all?\", which is the right question
+   for a caller that already knows its deployment. Pass the domain you actually
+   need — `:machine` for several processes on one host, `:global` for several
+   hosts — and let the store answer, rather than assuming a `true` covers you."
+  ([store]
+   (some? (conditional-write-domain store)))
+  ([store required-domain]
+   (let [have (conditional-write-domain store)
+         rank #(.indexOf ^java.util.List conditional-write-domains %)]
+     (boolean (and have (>= (rank have) (rank required-domain)))))))
+
+(defn revision
+  "The store's current revision token for `key`, or `konserve.impl.defaults/absent`
+   when the key does not exist.
+
+   OPAQUE. Read it, hold it, hand it back as `:expected-revision` — do not order
+   it, derive from it, or persist it as if it meant anything. Backends are free to
+   use whatever their storage gives them (a counter here, an ETag on S3)."
+  ([store key] (revision store key {:sync? false}))
+  ([store key opts]
+   (when-not (conditional-write? store)
+     (throw (ex-info "This store has no revisions to read: it cannot make a write conditional on one."
+                     {:type :konserve/conditional-write-unsupported :store (type store)})))
+   (-revision store key opts)))
+
+(defn check-conditional-supported!*
+  "Throw unless `store` can honour an `:expected-revision` in `opts`.
+
+   Public because `konserve.cache` calls the write protocols DIRECTLY rather than
+   through this namespace, so it would otherwise bypass the check and silently
+   ignore the option — the failure mode the capability exists to remove."
+  [store opts]
+  (when (and (contains? opts :expected-revision)
+             (not (conditional-write? store)))
+    (throw (ex-info (str "This store cannot honour :expected-revision, so the conditional write was refused. "
+                         "Writing it unconditionally would give back the very guarantee that was asked for.")
+                    {:type  :konserve/conditional-write-unsupported
+                     :store (type store)}))))
+
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
@@ -282,13 +337,26 @@
 
   The optional `meta-up-fn` (5-arity, before the trailing `opts`) is
   `(fn [built-meta] -> meta)`, transforming the value's default metadata — the general
-  metadata form (cf. `assoc`'s `meta` map). `opts` stays last."
+  metadata form (cf. `assoc`'s `meta` map). `opts` stays last.
+
+  `opts` may carry **`:expected-revision`** — a token from [[revision]], or
+  `konserve.impl.defaults/absent` for \"the key must not exist\". The update then
+  happens only if the stored revision is still that one, and otherwise throws
+  `:konserve/revision-mismatch` having written nothing and WITHOUT running
+  `up-fn`. Use it when the decision to update was made from an earlier read and
+  must not silently drift; plain `update-in` remains the tool for \"recompute from
+  whatever is current\", since `up-fn` already sees the current value.
+
+  THE REVISION IS PER KEY, NOT PER PATH. `[:k :a :b]` fences the whole `:k` blob,
+  not the `[:a :b]` position inside it — the blob is the unit of storage and of the
+  lock, so it cannot be otherwise."
   ([store key-vec up-fn]
    (update-in store key-vec up-fn nil {:sync? false}))
   ([store key-vec up-fn opts]
    (update-in store key-vec up-fn nil opts))
   ([store key-vec up-fn meta-up-fn opts]
    (log/trace :konserve/update-in {:key-vec key-vec})
+   (check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -331,6 +399,7 @@
    (assoc-in store key-vec val nil opts))
   ([store key-vec val meta-up-fn opts]
    (log/trace :konserve/assoc-in {:key-vec key-vec})
+   (check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -360,6 +429,7 @@
    (assoc store key val nil opts))
   ([store key val meta opts]
    (log/trace :konserve/assoc {:key key})
+   (check-conditional-supported!* store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -446,6 +516,16 @@
              :else                            kvs)]
     (zipmap ks (clojure.core/repeat meta))))
 
+(defn- refuse-conditional-multi! [opts]
+  (when (or (contains? opts :expected-revision) (contains? opts :expected-revisions))
+    (throw (ex-info (str "multi-assoc cannot be made conditional. Verifying every key and then writing "
+                         "every key is not one atomic step on a store whose locks are per blob: another "
+                         "writer can change a key after it was checked and before it was written. Fencing "
+                         "it here would promise an atomicity the backend does not have. Content-addressed "
+                         "values — the usual reason to batch — cannot conflict anyway, since the same key "
+                         "means the same bytes.")
+                    {:type :konserve/conditional-multi-write-unsupported}))))
+
 (defn multi-assoc
   "Associates multiple key-value pairs with flat keys, as one batch. Atomically where the
   backend can (IndexedDB); ordered everywhere (see below), which is the weaker guarantee
@@ -493,6 +573,7 @@
    (multi-assoc store kvs nil opts))
   ([store kvs meta opts]
    (log/trace :konserve/multi-assoc {:key-count (count kvs)})
+   (refuse-conditional-multi! opts)
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
