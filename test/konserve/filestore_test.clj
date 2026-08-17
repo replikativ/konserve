@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!! go chan put! close! <!] :as async]
-            [konserve.core :refer [bassoc bget keys]]
+            [konserve.core :refer [bassoc bget keys] :as k]
+            [konserve.protocols]
             [konserve.compliance-test :refer [compliance-test conditional-write-compliance-test]]
             [konserve.filestore :refer [connect-fs-store delete-store]]
             [konserve.tests.cache :as ct]
@@ -23,6 +24,40 @@
         store  (<!! (connect-fs-store folder))]
     (conditional-write-compliance-test store)
     (delete-store folder)))
+
+(deftest a-domain-survives-lock-blob-only-if-it-rests-on-the-lock
+  (testing "`:lock-blob? false` revokes a LOCK-BASED claim: `io-operation`'s
+            compare-and-write is one step only while it holds the lock, so
+            without one the filestore's :machine claim is void however sincerely
+            it is made"
+    (let [folder "/tmp/konserve-fs-nolock-test"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder :config {:lock-blob? false}))]
+      (is (nil? (k/conditional-write-domain store))
+          "no lock, no lock-based domain")
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (<!! (k/assoc store :k 1 {:expected-revision :anything})))
+          "and the option is refused rather than silently ignored")
+      (delete-store folder)))
+
+  (testing "but a :global claim does NOT rest on that lock — it is the storage
+            layer's own compare (konserve-s3: If-Match, evaluated by S3), and
+            konserve-s3's `-get-lock` is a no-op that passes today only because it
+            happens to set `:lock-blob?`. A flag about a lock nobody uses must not
+            silently turn the guarantee off.
+
+            Stubbed rather than run against S3 so the RULE is tested here; the
+            behaviour it enables is covered by konserve-s3's own suite."
+    (let [folder "/tmp/konserve-fs-global-test"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder :config {:lock-blob? false}))
+          ;; Same store, with a backing that fences in its own storage layer.
+          global (clojure.core/assoc store :backing
+                                     (reify konserve.protocols/PConditionalWrite
+                                       (-conditional-write? [_] :global)))]
+      (is (= :global (k/conditional-write-domain global))
+          "a storage-layer fencer keeps its domain without konserve's lock")
+      (delete-store folder))))
 
 (deftest filestore-compliance-test
   (let [folder "/tmp/konserve-fs-comp-test"

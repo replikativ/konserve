@@ -847,9 +847,25 @@
     ;; browser tabs they are fenced when nothing serializes them at all — precisely
     ;; the lie this capability exists to prevent. A backing that does not declare a
     ;; domain gets none, and `:expected-revision` is refused.
-    (when (:lock-blob? config)
-      (when (satisfies? protocols/PConditionalWrite backing)
-        (protocols/-conditional-write? backing))))
+    (let [declared (when (satisfies? protocols/PConditionalWrite backing)
+                     (protocols/-conditional-write? backing))]
+      ;; WHICH MECHANISM the domain rests on decides whether `:lock-blob?` can
+      ;; revoke it, and the domain itself says which:
+      ;;
+      ;; `:process`/`:machine` are produced HERE, by `io-operation` holding a lock
+      ;; across read-old and write. Without `:lock-blob?` there is no lock, the
+      ;; compare and the write stop being one step, and the claim is void however
+      ;; sincerely the backing makes it. So the flag revokes it.
+      ;;
+      ;; `:global` cannot be produced by a lock local to this machine, so a
+      ;; backing claiming it is fencing in its own storage layer (konserve-s3:
+      ;; If-Match, evaluated by S3) where konserve's lock is irrelevant. Revoking
+      ;; that on `:lock-blob?` would mean a flag about a lock nobody uses silently
+      ;; turning off the guarantee — konserve-s3's `-get-lock` IS a no-op, and it
+      ;; passes today only because it happens to set the flag anyway.
+      (if (= :global declared)
+        declared
+        (when (:lock-blob? config) declared))))
   (-revision [this key opts]
     (async+sync (:sync? opts) *default-sync-translation*
                 (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
