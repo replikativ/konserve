@@ -39,9 +39,15 @@
 
    SCOPE: this is IN-PROCESS state, and it matches konserve's concurrency
    contract — a store has a single writer per runtime, or callers coordinate
-   above konserve. Writers in another process are outside that contract already,
-   for reasons more basic than GC (they lose each other's writes). Readers are
-   unconstrained."
+   above konserve. A writer in another process is not protected: it takes its
+   own guard, in its own heap, and a sweep here cannot see it. Multi-process
+   GC therefore needs coordination this does not provide.
+
+   That is narrower than saying cross-process writers are broken outright.
+   konserve's `:lock-blob?` (default true) is a per-blob file lock, so
+   individual writes do not corrupt one another. What is unguarded is the
+   SEQUENCE — the window between values and pointer — which no per-blob lock
+   spans. Readers are unconstrained."
   (:require [clojure.core.async :as async]
             [clojure.core.async.impl.protocols :as async-protocols]
             [konserve.utils :as ku])
@@ -60,10 +66,27 @@
 
 (defn- ms [d] #?(:clj (.getTime ^Date d) :cljs (.getTime d)))
 
-;; store-id -> {token start-instant}. Keyed by an identifier of the PHYSICAL
-;; store rather than by the store object: separate connections to one store are
-;; different store instances, and a collection running on one must see a
-;; sequence in flight on another.
+;; store-id -> {token start-instant}. Keyed by the store's id rather than by the
+;; store object, because separate connections to one store are different objects
+;; and a collection running on one must see a sequence in flight on another.
+;;
+;; THAT ID IS LOGICAL, NOT PHYSICAL — konserve's `:id` identifies a store across
+;; machines and backends (`konserve.store/validate-store-config`), so a replica
+;; elsewhere carries the same one. The guard's requirement is about the bytes a
+;; sweep is about to delete, and only one direction of the mismatch is unsafe:
+;;
+;;   same bytes, same id       the intended case
+;;   two stores, one id        each sweep held back by the other's writers:
+;;                             conservative, nothing lost, though a busy replica
+;;                             can hold a collection off
+;;   same bytes, two ids       the sweep cannot see the other writer's in-flight
+;;                             objects and DELETES LIVE DATA
+;;
+;; So the id may be coarser than the physical store, never finer — which a
+;; logical id is. Nothing enforces that two connections to one store agree on
+;; it, and nothing can from here; `validate-store-config` only checks that `:id`
+;; is a UUID. Taking it off the store (`konserve.protocols/store-id`) rather
+;; than passing it alongside is what keeps callers from disagreeing.
 (defonce ^:private in-flight (atom {}))
 
 ;; Tokens are counter values, not fresh objects: a token is a MAP KEY, and a bare
@@ -107,7 +130,14 @@
    oldest one: everything it writes lands at or after that instant, so sparing
    from there spares exactly its objects and nothing else.
 
-   Prefer `cutoff`, which handles the ordering requirement described there."
+   Prefer `cutoff`, which handles the ordering requirement described there.
+
+   NOT A PURE READ: the idle branch calls `konserve.utils/now`, which advances
+   the process-global high-water mark. That is deliberate — the cutoff has to
+   come from the same clock that stamps `:last-write`, or the comparison the
+   sweep makes is meaningless — and it is harmless, since `now` is
+   `max(wall, previous)` and so cannot push the stamp ahead of wall time. Worth
+   knowing before polling this from a monitoring path."
   [store-id]
   (let [starts (vals (get @in-flight store-id))]
     (if (seq starts)

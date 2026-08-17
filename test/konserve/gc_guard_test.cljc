@@ -338,6 +338,39 @@
            (guard/done! sid token))))))
 
 #?(:clj
+   (deftest credentials-are-stripped-at-every-depth
+     (testing "REGRESSION: konserve configs NEST — a :tiered store's config holds
+               a whole :frontend-config and :backend-config, each a complete
+               store config with its own secrets (konserve.store's :tiered
+               methods). A top-level dissoc walked straight past those and parked
+               them on the store, which is worse than never attaching a config:
+               before, they were only in a map the caller held.
+
+               The AES key is checked too. It lives at :encryptor {:type :aes
+               :key ...}, and `:key` is far too common a word to put in
+               `credential-keys`, so it is stripped by name instead."
+       (let [id (random-uuid)
+             store (ks/create-store
+                    {:backend :tiered :id id
+                     :frontend-config {:backend :memory :id id}
+                     :backend-config {:backend :file :id id
+                                      :path (str "/tmp/konserve-cred-test-" (random-uuid))
+                                      :access-key "AKIAEXAMPLE"
+                                      :secret "shhh-nested"
+                                      :password "hunter2"
+                                      :jdbcUrl "jdbc://user:pw@host/db"}
+                     :config {:encryptor {:type :aes :key "s3cr3t-aes-key"}}}
+                    {:sync? true})
+             cfg (ks/store-config store)
+             printed (pr-str store)]
+         (is (= id (:id cfg)) "identity survives")
+         (is (= :file (get-in cfg [:backend-config :backend]))
+             "and so does the shape — this strips secrets, not structure")
+         (doseq [leak ["AKIAEXAMPLE" "shhh-nested" "hunter2" "user:pw" "s3cr3t-aes-key"]]
+           (is (not (clojure.string/includes? printed leak))
+               (str "printing the store must not reveal " (pr-str leak))))))))
+
+#?(:clj
    (deftest attached-config-identifies-without-carrying-secrets
      (testing "the store reports the config it was connected with"
        (let [id (random-uuid)

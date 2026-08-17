@@ -1,4 +1,5 @@
 (ns konserve.protocols
+  (:require [clojure.walk])
   #?(:cljs (:refer-clojure :exclude [-dissoc])))
 
 (defprotocol PEDNKeyValueStore
@@ -93,7 +94,35 @@
 
    A backend with its own secret-bearing keys should add them here rather than
    hope nobody prints a store."
-  #{:access-key :secret :secret-key :password :token :credentials :jdbcUrl})
+  #{:access-key :secret-access-key :aws-secret-access-key
+    :secret :secret-key :private-key
+    :password :passphrase
+    :token :session-token :credentials
+    :api-key
+    :jdbcUrl :jdbc-url :connection-uri})
+
+(defn strip-credentials
+  "`config` with every credential key removed, AT EVERY DEPTH.
+
+   Depth is the point. Konserve configs NEST: a `:tiered` store's config holds a
+   whole `:frontend-config` and `:backend-config`, each a complete store config
+   with its own `:access-key` or `:password` (see `konserve.store`'s `:tiered`
+   methods). A top-level `dissoc` walks straight past those and attaches them to
+   the store, which is worse than not attaching a config at all — before, they
+   were only in a map the caller held.
+
+   The encryptor is handled by name rather than by key set: konserve's own AES
+   key lives at `:encryptor {:type :aes :key ...}`, and `:key` is far too common
+   a word to put in `credential-keys` — stripping it everywhere would gut
+   ordinary configs."
+  [config]
+  (clojure.walk/postwalk
+   (fn [x]
+     (if (map? x)
+       (cond-> (apply dissoc x credential-keys)
+         (map? (:encryptor x)) (update :encryptor dissoc :key))
+       x))
+   config))
 
 (defprotocol PStoreConfig
   "What config is this store connected with?

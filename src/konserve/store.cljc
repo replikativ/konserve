@@ -92,20 +92,27 @@
   "Give a freshly connected store its own identity.
 
    Done here because this is the only place every backend passes through with
-   the full config in hand — including backends that bypass `DefaultStore`
-   entirely, like LMDB. The default `PStoreConfig` implementation reads this
-   back, so no backend has to change; one that prefers a real field can
-   implement the protocol and take over.
+   the full config in hand, including backends that bypass `DefaultStore`
+   entirely. The default `PStoreConfig` implementation reads this back, so no
+   backend has to change; one that prefers a real field can implement the
+   protocol and take over.
 
-   Credentials are stripped first: a config a caller passes once may hold an S3
-   secret or a JDBC password, and attaching it verbatim would park those on a
-   long-lived object that any log line or `ex-info` payload could carry off.
+   Credentials are stripped first, AT EVERY DEPTH — see
+   `konserve.protocols/strip-credentials`, and note that a `:tiered` config
+   nests two whole store configs inside itself.
+
+   LIMIT WORTH KNOWING: this attaches by `assoc`, so it only reaches a store
+   that is a map or a record. A backend whose store is a `deftype` silently
+   gets nothing, and `store-id` then returns nil for it — which is the one
+   direction that matters, since a caller who guards under a nil id shares a
+   bucket with every other such store. Such a backend should implement
+   `PStoreConfig` itself rather than rely on this.
 
    Anything not associable — an exception delivered on the async path, say —
-   passes through untouched."
+   passes through untouched, which is also what makes the guard above safe."
   [store config]
   (if (and config (or (map? store) (record? store)))
-    (assoc store p/store-config-key (apply dissoc config p/credential-keys))
+    (assoc store p/store-config-key (p/strip-credentials config))
     store))
 
 (defn- with-store-config

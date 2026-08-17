@@ -7,14 +7,6 @@
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
-(def sweep-sync-translation
-  "`*default-sync-translation*` plus `reduce<?-`, which it does not name.
-
-   The default map rewrites `go-try-` to `try` and `<?-` to `do`, so in sync
-   mode the batch fn returns a VALUE — and `reduce<?-` would then try to take
-   from something that is not a channel. `reduce` is what it degrades to."
-  (merge *default-sync-translation* '{reduce<?- reduce}))
-
 (defn- delete-batch!
   "Delete one batch of keys, concurrently where the platform allows it.
 
@@ -32,7 +24,18 @@
    Async mode merges the per-key channels. Sync mode has no channels to merge,
    so the JVM uses `pmap` for the same effect; ClojureScript runs serially,
    which costs it nothing it could have had — sync mode there is single-threaded
-   by definition."
+   by definition.
+
+   `pmap`'s thread cost here is bounded at `cpus + 2`, measured at 11 on an
+   8-core machine, drawn from the cached pool `future` uses. THAT BOUND DEPENDS
+   ON `batch` NOT BEING CHUNKED: `pmap` realizes a chunk at a time, so a chunked
+   seq jumps to 32 + lookahead (35, measured, for a `range`). `sweep!` passes
+   `partition-all` output, which is not chunked — keep it that way, or bound the
+   parallelism explicitly.
+
+   A bounded virtual-thread executor would be the better instrument and a
+   simpler one, but Loom is new enough that konserve should not require it of
+   its users yet."
   [store batch sync?]
   (if sync?
     #?(:clj (dorun (pmap (fn [{:keys [key]}]
@@ -77,7 +80,7 @@
   ([store whitelist cutoff batch-size opts]
    (async+sync
     (:sync? opts)
-    sweep-sync-translation
+    *default-sync-translation*
     (go-try-
      (let [sync? (:sync? opts)
            to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
