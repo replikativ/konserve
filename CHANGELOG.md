@@ -163,6 +163,15 @@ All notable, user-visible changes to konserve are documented here.
   (previously `memory-store-delete` *asserted* the broken behaviour).
 
 ### Changed
+- **A fenced key carries a sidecar lock file (`<key>.cas`).** It exists because
+  konserve replaces a value by renaming a new file over it, which orphans a lock
+  taken on the old one; the sidecar is never renamed, so it is a stable thing to
+  lock. Every write to a key that has one takes it, so the fence excludes
+  unconditional writers too — without that it would grant a false pass and lose
+  their write. A key gets a sidecar the first time a conditional write or a
+  revision-bearing read touches it, so keys that are never fenced cost one
+  existence probe and no extra file. Backends that filter their own key
+  enumeration must skip this suffix (see `konserve.impl.defaults/internal-artifact?`).
 - **Every value's metadata now carries a `:revision`.** It is what
   `:expected-revision` compares and what `konserve.core/revision` returns — an
   OPAQUE token, minted per write, to be passed back rather than interpreted. It

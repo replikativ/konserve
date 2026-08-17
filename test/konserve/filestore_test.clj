@@ -1,6 +1,7 @@
 (ns konserve.filestore-test
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in dissoc exists? keys])
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [clojure.core.async :refer [<!! go chan put! close! <!] :as async]
             [konserve.core :refer [bassoc bget keys] :as k]
             [konserve.protocols]
@@ -12,7 +13,9 @@
             [konserve.tests.serializers :as st]
             [konserve.tests.tiered :as tiered-tests]
             [konserve.memory :as memory]
-            [konserve.tiered :as tiered]))
+            [konserve.tiered :as tiered])
+  (:import [java.nio.channels FileChannel]
+           [java.nio.file Paths StandardOpenOption]))
 
 (deftest filestore-conditional-write-test
   ;; WIRED IN deliberately. The conditional-write contract shipped once with a
@@ -24,6 +27,57 @@
         store  (<!! (connect-fs-store folder))]
     (conditional-write-compliance-test store)
     (delete-store folder)))
+
+(deftest every-writer-to-a-fenceable-key-takes-the-sidecar
+  (testing "the fence must exclude UNCONDITIONAL writers too, or it is not a
+            fence. A plain write renames a new inode over the key; a fenced write
+            that opened the old inode before locking it then reads the pre-write
+            value through a DETACHED file, compares the revision against that,
+            passes, and renames its own result over the top. Not merely a failure
+            to exclude — a false pass that loses a committed write. (S3 has no
+            such hole: If-Match is evaluated at write time, so an intervening
+            unconditional PUT correctly rejects.)
+
+            A key becomes fenceable when a conditional write or a
+            revision-bearing read creates its sidecar; from then on every writer
+            takes it. Keys that are never fenced pay one `exists?` probe and get
+            no extra file, which is what keeps the cost on mutable pointers
+            rather than on the content-addressed bulk of a store."
+    (let [folder "/tmp/konserve-fs-sidecar-scope"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder))
+          cas-of (fn [] (filter #(str/ends-with? % ".cas") (map str (.list (java.io.File. folder)))))]
+      (k/assoc store :head {:v 1} {:sync? true})
+      (k/assoc store :plain {:v 1} {:sync? true})
+      (is (empty? (cas-of)) "no key is fenceable until something asks for a revision")
+
+      (k/get store :head nil {:sync? true :with-revision? true})
+      (is (= 1 (count (cas-of)))
+          "a revision-bearing read makes exactly the key it read fenceable")
+
+      (dotimes [i 20] (k/assoc store (keyword (str "bulk" i)) {:v i} {:sync? true}))
+      (is (= 1 (count (cas-of)))
+          "and ordinary writes to other keys still cost no extra file")
+
+      ;; Hold the sidecar and watch who contends for it. Within one JVM the
+      ;; overlap raises rather than blocking, which is enough to tell whether the
+      ;; lock was taken at all; across processes it blocks, which is the point.
+      (let [cas (first (cas-of))
+            ch  (FileChannel/open (Paths/get (str folder "/" cas) (into-array String []))
+                                  (into-array StandardOpenOption
+                                              [StandardOpenOption/CREATE StandardOpenOption/WRITE]))
+            l   (.lock ch)]
+        (try
+          (is (= :wrote (deref (future (try (k/assoc store :plain {:v 2} {:sync? true}) :wrote
+                                            (catch Throwable _ :contended)))
+                               10000 :timed-out))
+              "a write to a key that is not fenceable must not take the sidecar")
+          (is (= :contended (deref (future (try (k/assoc store :head {:v 2} {:sync? true}) :wrote
+                                                (catch Throwable _ :contended)))
+                                   10000 :timed-out))
+              "but an UNCONDITIONAL write to the fenceable key must")
+          (finally (.release l) (.close ch))))
+      (delete-store folder))))
 
 (deftest an-unknown-domain-is-refused-rather-than-ranked
   (testing "`conditional-write?` compares against a REQUIRED domain, and a name

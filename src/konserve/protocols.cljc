@@ -76,9 +76,11 @@
 
        nil       cannot compare-and-write; `:expected-revision` is REFUSED
        :process  atomic against other threads in this runtime  (memory: one `swap!`)
-       :machine  atomic against other processes on this host   (filestore: an OS
-                 advisory lock — and NOT across NFS or any network filesystem,
-                 where advisory locks are unreliable)
+       :machine  atomic against other processes on this host   (JVM filestore: an
+                 OS advisory lock; node filestore: an O_EXCL lockfile, which a
+                 crashed writer leaves behind where the kernel would have
+                 released an advisory one. NOT across NFS or any network
+                 filesystem, where advisory locks are unreliable)
        :global   atomic against every writer anywhere          (S3: If-Match)
 
      A DOMAIN rather than a boolean because the API is uniform and the guarantee is
@@ -89,6 +91,23 @@
      being fenced.
 
      Ordered weakest-first, so a caller can state the domain it needs and compare.
+
+     WHAT `:machine` EXCLUDES, precisely, because it is easy to assume too much:
+     every writer to that KEY, not merely the ones that also fence. That has to
+     hold — konserve replaces a value by renaming a new file over it, so a fenced
+     write whose lock was taken on the old file would compare its revision
+     against a detached one, pass, and overwrite the value that replaced it. So
+     the lock lives on a sidecar that is never renamed, and every write to a key
+     that HAS one takes it. A key gets one the first time a conditional write or
+     a revision-bearing read touches it; keys that are never fenced pay only an
+     existence probe.
+
+     The residual, stated because a fence with an unstated hole is worse than no
+     fence: the FIRST such write or read on a key can still race an unconditional
+     write, since there is nothing to lock until the sidecar exists. It is
+     self-healing — once created the key is covered for good — and a caller that
+     re-reads a pointer before writing it (which is what fencing implies) creates
+     it on that read, before its first conditional write.
 
      WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
      backing enforces the comparison in `konserve.impl.defaults/io-operation`:

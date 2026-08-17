@@ -419,7 +419,30 @@
         ;; genuinely stored nil still comes back as nil (the read succeeds),
         ;; distinct from the not-found sentinel.
         skip-read-probe?
-        (let [blob (<?- (-create-blob backing store-key env))
+        ;; A REVISION-BEARING READ takes the sidecar too, for two reasons.
+        ;;
+        ;; It makes the read ATOMIC against writers: the caller is reading a
+        ;; value and the token they will fence its successor on, and those two
+        ;; must come from the same state — reading them across another writer's
+        ;; rename would hand back a revision that never belonged to the value.
+        ;;
+        ;; And it makes the key FENCEABLE from the first read rather than the
+        ;; first write, which is what closes the residual window in the scheme
+        ;; described at `cas-blob` below: a caller that re-reads a pointer before
+        ;; each commit (datahike re-reads the branch head) has the sidecar in
+        ;; place before it ever issues a conditional write, so unconditional
+        ;; writers are excluded from that point on.
+        (let [cas-store-key (str store-key cas-lock-suffix)
+              ;; `:read-edn-meta` IS the revision-bearing read — `-get-in` selects
+              ;; that operation for `:with-revision? true` and does not forward the
+              ;; flag itself, so testing the operation is both correct and the only
+              ;; thing available here.
+              cas-blob (when (and (= :read-edn-meta operation) (:lock-blob? config))
+                         (<?- (-create-blob backing cas-store-key env)))
+              cas-lock (when cas-blob
+                         (log/trace :konserve/acquiring-cas-lock {:key key})
+                         (<?- (get-lock cas-blob (first key-vec) env)))
+              blob (<?- (-create-blob backing store-key env))
               lock (when (:lock-blob? config)
                      (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
                      (<?- (get-lock blob (first key-vec) env)))]
@@ -431,7 +454,10 @@
               (when (:lock-blob? config)
                 (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
                 (<?- (-release lock env)))
-              (<?- (-close blob env)))))
+              (<?- (-close blob env))
+              (when cas-lock
+                (<?- (-release cas-lock env))
+                (<?- (-close cas-blob env))))))
 
         (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
@@ -464,8 +490,46 @@
                         ;; for mutable pointers (a branch head), of which there are
                         ;; a handful, not for the content-addressed values that make
                         ;; up the bulk of a store.
-                        cas-blob (when (and expected-revision (:lock-blob? config))
-                                   (<?- (-create-blob backing (str store-key cas-lock-suffix) env)))
+                        cas-store-key (str store-key cas-lock-suffix)
+                        ;; WHO TAKES THE SIDECAR. Every write to a FENCEABLE key,
+                        ;; not merely every fenced write — otherwise the lock
+                        ;; excludes the wrong set of writers and the guarantee is
+                        ;; not what `:machine` says.
+                        ;;
+                        ;; An unconditional write renames a NEW inode over this
+                        ;; key. A fenced write that opened the old inode before
+                        ;; taking its lock then holds a lock on a DETACHED file,
+                        ;; reads the pre-write value through it, compares the
+                        ;; revision against that, PASSES, and renames its own
+                        ;; result over the top. The fence does not merely fail to
+                        ;; exclude the other writer: it grants a false pass and
+                        ;; loses their committed value. (S3 does not have this
+                        ;; problem — If-Match is evaluated by S3 at write time, so
+                        ;; an intervening unconditional PUT correctly REJECTS the
+                        ;; fenced write. Without this the filestore would be
+                        ;; strictly weaker than S3 under the same API.)
+                        ;;
+                        ;; A key is fenceable once a sidecar exists for it, and
+                        ;; only fenced writes and revision-bearing reads create
+                        ;; one. So the cost stays where the original design put
+                        ;; it: mutable pointers, of which a store has a handful,
+                        ;; pay an extra file; the content-addressed values that
+                        ;; make up the bulk of a store pay one `exists?` probe
+                        ;; (~1us against a ~200us write) and no extra file at all.
+                        ;;
+                        ;; RESIDUAL, and it is worth stating: the FIRST fenced
+                        ;; write to a key can still race an unconditional one,
+                        ;; because that probe misses until the sidecar exists. It
+                        ;; is self-healing — once created, the hole is closed for
+                        ;; that key forever — and revision-bearing reads create it
+                        ;; too, so a reader that fences (datahike re-reads the
+                        ;; branch head before every commit) closes it before its
+                        ;; first write.
+                        cas-blob (when (and (:lock-blob? config)
+                                            (or (some? expected-revision)
+                                                (= :read-edn-meta operation)
+                                                (<?- (-blob-exists? backing cas-store-key env))))
+                                   (<?- (-create-blob backing cas-store-key env)))
                         cas-lock (when cas-blob
                                    (log/trace :konserve/acquiring-cas-lock {:key key})
                                    (<?- (get-lock cas-blob (first key-vec) env)))
@@ -536,9 +600,6 @@
                         (when (:lock-blob? config)
                           (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
                           (<?- (-release lock env)))
-                        (when cas-lock
-                          (<?- (-release cas-lock env))
-                          (<?- (-close cas-blob env)))
                         (<?- (-close blob env))
                         ;; A REJECTED fenced write must leave no trace. `-create-blob`
                         ;; creates the file before we can know whether the revision
@@ -551,16 +612,38 @@
                         ;; can never succeed on it again. The key is BRICKED by a
                         ;; conflict that was supposed to be harmless.
                         ;;
-                        ;; Deleted here, after the close, rather than in the catch:
-                        ;; unlinking an open file is fine on POSIX and fails on
-                        ;; Windows.
+                        ;; Deleted after the close but STILL UNDER THE SIDECAR
+                        ;; LOCK, which is the whole reason the release moved below
+                        ;; it. The delete is by PATH, so with the lock already
+                        ;; dropped it unlinked whatever happened to be at that
+                        ;; path — including a value another writer had just
+                        ;; renamed into place. A rejected write destroying a
+                        ;; committed one is far worse than the bricked blob this
+                        ;; cleanup exists to prevent; it showed up as 9 lost
+                        ;; writes in 4000 iterations of a natural race. Holding
+                        ;; the sidecar means no other write to this key can be
+                        ;; between our probe and this delete, because a fenceable
+                        ;; key's writers all take it (see above).
+                        ;;
+                        ;; Closing before deleting: unlinking an open file is fine
+                        ;; on POSIX and fails on Windows.
                         ;;
                         ;; Scoped to fenced writes because it is the only path that
                         ;; creates a blob it may then refuse to write; the
                         ;; unconditional paths write whatever they created.
                         (when @ghost?
                           (log/trace :konserve/removing-rejected-blob {:key key})
-                          (<?- (-delete-blob backing store-key env))))))
+                          ;; Never let cleanup REPLACE the outcome: the caller is
+                          ;; being handed a `:konserve/revision-mismatch` they can
+                          ;; retry on, and a NoSuchFileException thrown from here
+                          ;; would arrive in its place as an unrecognised IO error.
+                          (try (<?- (-delete-blob backing store-key env))
+                               (catch #?(:clj Exception :cljs js/Error) e
+                                 (log/warn :konserve/rejected-blob-cleanup-failed
+                                           {:key key :error e}))))
+                        (when cas-lock
+                          (<?- (-release cas-lock env))
+                          (<?- (-close cas-blob env))))))
                   (catch #?(:clj Exception :cljs js/Error) e
                     ;; DELIBERATELY not retried: `:konserve/revision-mismatch`.
                     ;; That conflict belongs to the CALLER — retrying would re-run
