@@ -468,7 +468,6 @@
                                      (.array buffer))))
                   :size         (- total-size payload-start)}))))
 
-
 ;; The filestore drains `-write-binary` input through a fixed buffer, so it takes
 ;; the caller's blob untouched rather than a materialized byte array. That is what
 ;; lets it store a value larger than the heap — and it has to, because Lucene's

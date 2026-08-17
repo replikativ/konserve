@@ -65,7 +65,6 @@
                     [(Channels/newChannel (ByteArrayInputStream. (.getBytes (String. ^chars input))))
                      (fn [bis buffer] (.read ^ReadableByteChannel bis buffer))])})
 
-
 (def ^:private normalize-buffer-size (* 64 1024))
 
 (defn blob->bytes

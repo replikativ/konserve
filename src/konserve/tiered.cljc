@@ -334,36 +334,36 @@
     ;; write.
     (let [val #?(:clj (nio/blob->bytes val) :cljs val)]
       (async+sync (:sync? opts)
-                *default-sync-translation*
-                (go-try-
-                 (case write-policy
-                   :write-through
-                   (let [backend-result (<?- (-bassoc backend-store key meta-up-fn val opts))]
-                     (try
-                       (<?- (-bassoc frontend-store key meta-up-fn val opts))
-                       (catch #?(:clj Exception :cljs js/Error) e
-                         (log/warn :konserve/tiered-frontend-bassoc-failed {:key key :error e})))
-                     backend-result)
+                  *default-sync-translation*
+                  (go-try-
+                   (case write-policy
+                     :write-through
+                     (let [backend-result (<?- (-bassoc backend-store key meta-up-fn val opts))]
+                       (try
+                         (<?- (-bassoc frontend-store key meta-up-fn val opts))
+                         (catch #?(:clj Exception :cljs js/Error) e
+                           (log/warn :konserve/tiered-frontend-bassoc-failed {:key key :error e})))
+                       backend-result)
 
-                   :write-behind
+                     :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                   (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-bassoc backend-store key meta-up-fn val opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-backend-bassoc-failed {:key key :error e}))))
-                     frontend-result)
+                     (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val opts))]
+                       (go (try
+                             (<?- (-bassoc backend-store key meta-up-fn val opts))
+                             (catch #?(:clj Exception :cljs js/Error) e
+                               (log/warn :konserve/tiered-backend-bassoc-failed {:key key :error e}))))
+                       frontend-result)
 
-                   :write-around
-                   (let [result (<?- (-bassoc backend-store key meta-up-fn val opts))]
-                     (go (try
-                           (<?- (-dissoc frontend-store key opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-frontend-invalidation-failed {:key key :error e}))))
-                     result)
+                     :write-around
+                     (let [result (<?- (-bassoc backend-store key meta-up-fn val opts))]
+                       (go (try
+                             (<?- (-dissoc frontend-store key opts))
+                             (catch #?(:clj Exception :cljs js/Error) e
+                               (log/warn :konserve/tiered-frontend-invalidation-failed {:key key :error e}))))
+                       result)
 
-                   :frontend-only
-                   (<?- (-bassoc frontend-store key meta-up-fn val opts)))))))
+                     :frontend-only
+                     (<?- (-bassoc frontend-store key meta-up-fn val opts)))))))
 
   PAssocSerializers
   (-assoc-serializers [this serializers]
