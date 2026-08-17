@@ -411,7 +411,23 @@
                             skip-write-probe?)
           store-key-exists? (when-not skip-exists?
                               (<?- (-blob-exists? backing store-key env)))
-          max-retries (get-in config [:optimistic-locking-retries] 0)]
+          max-retries (get-in config [:optimistic-locking-retries] 0)
+          ;; WHO NEEDS THE SIDECAR AT ALL. Only a backing whose fence IS konserve's
+          ;; lock — the compare-and-write in this function, which reaches
+          ;; `:process` or `:machine`. A backing that declares `:global` fences in
+          ;; its own storage layer (konserve-s3: If-Match, evaluated by S3) and its
+          ;; `-get-lock` is a no-op, so a sidecar would buy nothing; a backing that
+          ;; declares no domain refuses `:expected-revision` outright, so there is
+          ;; nothing to protect.
+          ;;
+          ;; This is not only tidiness. The probe below is an existence check, and
+          ;; on a `PReadMissSafe` backing that is exactly the round trip the whole
+          ;; read-miss-safe design exists to remove — a billed HEAD on every write
+          ;; to S3, and a `.getKey` transaction on every write to IndexedDB.
+          lock-based-fencing?
+          (and (:lock-blob? config)
+               (satisfies? protocols/PConditionalWrite backing)
+               (contains? #{:process :machine} (protocols/-conditional-write? backing)))]
       (cond
         ;; Read-first (PReadMissSafe): no existence probe — read the blob and
         ;; treat an absent key (store-key-not-found-ex) as the caller's
@@ -437,7 +453,7 @@
               ;; that operation for `:with-revision? true` and does not forward the
               ;; flag itself, so testing the operation is both correct and the only
               ;; thing available here.
-              cas-blob (when (and (= :read-edn-meta operation) (:lock-blob? config))
+              cas-blob (when (and (= :read-edn-meta operation) lock-based-fencing?)
                          (<?- (-create-blob backing cas-store-key env)))
               cas-lock (when cas-blob
                          (log/trace :konserve/acquiring-cas-lock {:key key})
@@ -525,7 +541,7 @@
                         ;; too, so a reader that fences (datahike re-reads the
                         ;; branch head before every commit) closes it before its
                         ;; first write.
-                        cas-blob (when (and (:lock-blob? config)
+                        cas-blob (when (and lock-based-fencing?
                                             (or (some? expected-revision)
                                                 (= :read-edn-meta operation)
                                                 (<?- (-blob-exists? backing cas-store-key env))))
