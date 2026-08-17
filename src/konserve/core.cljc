@@ -298,9 +298,10 @@
   ([store]
    (some? (conditional-write-domain store)))
   ([store required-domain]
-   (let [have (conditional-write-domain store)
-         rank #(.indexOf ^java.util.List conditional-write-domains %)]
-     (boolean (and have (>= (rank have) (rank required-domain)))))))
+   ;; Portable rank: `.indexOf` is a JVM method and this namespace is .cljc.
+   (let [rank (zipmap conditional-write-domains (range))
+         have (conditional-write-domain store)]
+     (boolean (and have (>= (rank have -1) (rank required-domain 0)))))))
 
 (defn revision
   "The store's current revision token for `key`, or `konserve.impl.defaults/absent`

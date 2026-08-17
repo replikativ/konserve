@@ -9,6 +9,7 @@
             [konserve.encryptor]
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout]
+            [konserve.protocols :as protocols]
             [konserve.serializers]
             [konserve.store :as store]
             [konserve.utils :refer-macros [with-promise]]
@@ -514,6 +515,12 @@
 
 (defrecord NodejsBackingFilestore
            [base detected-old-blobs ephemeral?]
+  protocols/PConditionalWrite
+  ;; :machine. `_lock` opens an exclusive `.lock` FILE, so a second process
+  ;; attempting the same path fails and the compare-and-write is one step for
+  ;; processes on this filesystem. Not beyond it.
+  (-conditional-write? [_] :machine)
+
   storage-layout/PBackingStore
   (-create-blob [_this store-key env]
     (let [store-path (path.join base store-key)]

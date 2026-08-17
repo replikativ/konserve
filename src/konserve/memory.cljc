@@ -75,21 +75,6 @@
   (-assoc-in [this key-vec meta val opts]
     (-update-in this key-vec meta (fn [_] val) (assoc opts :overwrite? true)))
 
-  PConditionalWrite
-  ;; A single `swap!` carries both the comparison and the write, so this holds
-  ;; for every thread sharing the atom. It says nothing across processes, but a
-  ;; memory store has no across-processes to speak of.
-  (-conditional-write? [_]
-    ;; :process. The compare and the write are one `swap!`, which covers every
-    ;; thread sharing this atom and says nothing about anyone else — a memory
-    ;; store has no anyone else.
-    :process)
-  (-revision [_ key opts]
-    (async+sync (:sync? opts)
-                {go do}
-                (go (if-let [[meta _] (get @state key)]
-                      (:revision meta)
-                      kd/absent))))
   (-dissoc [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -102,6 +87,20 @@
                           (swap! state dissoc key)
                           true)
                         false))))))
+
+  PConditionalWrite
+  ;; :process. The compare and the write are one `swap!`, which covers every
+  ;; thread sharing this atom and says nothing about anyone else — a memory store
+  ;; has no anyone else. Placed AFTER PEDNKeyValueStore's methods on purpose:
+  ;; splitting a protocol's methods around another marker is silently tolerated on
+  ;; the JVM and is a compile warning in ClojureScript, which is how this was found.
+  (-conditional-write? [_] :process)
+  (-revision [_ key opts]
+    (async+sync (:sync? opts)
+                {go do}
+                (go (if-let [[meta _] (get @state key)]
+                      (:revision meta)
+                      kd/absent))))
   PBinaryKeyValueStore
   (-bget [_ key locked-cb opts]
     (let [{:keys [sync?]} opts]

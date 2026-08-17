@@ -175,6 +175,13 @@
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
 (defrecord BackingFilestore [base detected-old-blobs ephemeral? filesystem]
+  konserve.protocols/PConditionalWrite
+  ;; :machine. `-get-lock` takes a java.nio FileLock, which the OS holds on behalf
+  ;; of the whole JVM against every other process that opens the same file — so
+  ;; the compare and the write are one step for processes sharing this filesystem.
+  ;; NOT further: the lock file is local, so nothing coordinates two machines, and
+  ;; advisory locks over NFS are not dependable.
+  (-conditional-write? [_] :machine)
   PBackingStore
   (-create-blob [_this store-key env]
     (let [{:keys [sync?]} env

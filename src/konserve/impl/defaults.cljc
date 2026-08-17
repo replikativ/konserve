@@ -424,8 +424,16 @@
                         (when expected-revision
                         (check-revision! key expected-revision (first old)))
                       (if write-op?
-                          (<?- (update-blob backing store-key serializer write-handlers env old))
-                          old))
+                        (let [res (<?- (update-blob backing store-key serializer write-handlers env old))]
+                          (if (:with-revision? env)
+                            ;; The revision this write just created. Derived from the
+                            ;; SAME meta-fn the write used, so it is what landed —
+                            ;; and handing it back is what lets a caller chain fenced
+                            ;; writes without a read between them, which on a remote
+                            ;; store is the difference between one round-trip and two.
+                            [res (:revision ((:up-fn-meta env) (first old)))]
+                            res))
+                        old))
                       (finally
                         (when (:lock-blob? config)
                           (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
@@ -621,7 +629,7 @@
                                  :key  key}})))
 
   (-assoc-in [this key-vec meta-up val opts]
-    (let [{:keys [sync? expected-revision]} opts
+    (let [{:keys [sync? expected-revision with-revision?]} opts
           key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
@@ -637,6 +645,7 @@
                      :buffer-size buffer-size
                      :overwrite? (empty? (rest key-vec))
                      :expected-revision expected-revision
+                     :with-revision? with-revision?
                      :msg        {:type :write-edn-error
                                   :key  key}})))
 
@@ -733,11 +742,16 @@
   ;; A backing without `:lock-blob?` serializes nothing, so it cannot honour the
   ;; contract and must say so.
   (-conditional-write? [_]
-    ;; :machine, never further. The lock is an OS advisory lock on a file in this
-    ;; store's own directory, so it serializes processes that can see that file and
-    ;; nothing beyond. Without :lock-blob? nothing serializes read-old against
-    ;; write, so there is no domain at all.
-    (when (:lock-blob? config) :machine))
+    ;; ASK THE BACKING, do not infer from `:lock-blob?`. That flag says a lock is
+    ;; requested, not that one exists: konserve's IndexedDB backing sets it and
+    ;; implements `-get-lock` as a NO-OP ("the alternative is to overwrite
+    ;; defaults/update-blob"), so inferring the domain from the flag would tell two
+    ;; browser tabs they are fenced when nothing serializes them at all — precisely
+    ;; the lie this capability exists to prevent. A backing that does not declare a
+    ;; domain gets none, and `:expected-revision` is refused.
+    (when (:lock-blob? config)
+      (when (satisfies? protocols/PConditionalWrite backing)
+        (protocols/-conditional-write? backing))))
   (-revision [this key opts]
     (async+sync (:sync? opts) *default-sync-translation*
                 (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
