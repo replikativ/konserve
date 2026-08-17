@@ -1,4 +1,5 @@
 (ns konserve.protocols
+  (:require [clojure.walk])
   #?(:cljs (:refer-clojure :exclude [-dissoc])))
 
 (defprotocol PEDNKeyValueStore
@@ -70,7 +71,104 @@
     "Returns true if the store handles concurrency internally and doesn't need
      application-level locking. Default is false for all stores."))
 
+(def store-config-key
+  "Where a connected store carries the config it was connected with, when the
+   backend has no field of its own for it. Namespaced, so attaching it to a
+   record lands in the extension map without disturbing the declared fields.
+
+   NOT `:config` — a `DefaultStore` already has one of those, holding the
+   backend's behaviour options (`:in-place?`, `:lock-blob?`, `:sync-blob?`).
+   Two different maps, and overwriting one with the other would break every
+   backend that reads it."
+  ::store-config)
+
+(def credential-keys
+  "Config keys stripped before a config is attached to a store.
+
+   Store configs carry secrets — `:access-key` and `:secret` for S3,
+   `:password` and `:jdbcUrl` for JDBC. Those are fine in a config a caller
+   holds and passes once; they are not fine sitting on a long-lived object that
+   any `pr-str`, log line or `ex-info` payload might carry off. Identity
+   (`:backend`, `:id`, `:path`, `:bucket`, …) survives, which is what makes the
+   attached config useful.
+
+   A backend with its own secret-bearing keys should add them here rather than
+   hope nobody prints a store."
+  #{:access-key :secret-access-key :aws-secret-access-key
+    :secret :secret-key :private-key
+    :password :passphrase
+    :token :session-token :credentials
+    :api-key
+    :jdbcUrl :jdbc-url :connection-uri})
+
+(defn strip-credentials
+  "`config` with every credential key removed, AT EVERY DEPTH.
+
+   Depth is the point. Konserve configs NEST: a `:tiered` store's config holds a
+   whole `:frontend-config` and `:backend-config`, each a complete store config
+   with its own `:access-key` or `:password` (see `konserve.store`'s `:tiered`
+   methods). A top-level `dissoc` walks straight past those and attaches them to
+   the store, which is worse than not attaching a config at all — before, they
+   were only in a map the caller held.
+
+   The encryptor is handled by name rather than by key set: konserve's own AES
+   key lives at `:encryptor {:type :aes :key ...}`, and `:key` is far too common
+   a word to put in `credential-keys` — stripping it everywhere would gut
+   ordinary configs."
+  [config]
+  (clojure.walk/postwalk
+   (fn [x]
+     (if (map? x)
+       (cond-> (apply dissoc x credential-keys)
+         (map? (:encryptor x)) (update :encryptor dissoc :key))
+       x))
+   config))
+
+(defprotocol PStoreConfig
+  "What config is this store connected with?
+
+   `konserve.store/validate-store-config` REQUIRES a UUID `:id` on every store,
+   and then every backend drops the config — nothing on a connected store
+   carried it. A `DefaultStore`'s `:config` is a different map (behaviour
+   options), and backends that bypass `DefaultStore` (LMDB) keep less still.
+
+   That left components which must AGREE on a store's identity — the GC safe
+   point above all, where datahike, geschichte and a scriptum index share one
+   store and one sweep — passing the id alongside the store by hand.
+   Disagreement there is invisible until a collection deletes something.
+
+   The default implementation reads what `konserve.store` attaches on connect,
+   so no backend has to do anything. A backend that would rather hold its config
+   in a real field can implement this and be authoritative.
+
+   WORTH DOING FOR IDENTITY, not just for storage: the attached `:id` is konserve's
+   LOGICAL identity, deliberately the same across machines and backends holding
+   one store. The GC safe point needs an id that is never FINER than the bytes a
+   sweep deletes (see `konserve.gc-guard`), and a backend that knows its own
+   physical location can return one derived from it — collapsing two connections
+   to one path onto a single guard key, and separating replicas that would
+   otherwise hold each other's collections back. Nothing else in konserve reads
+   `store-id`, so overriding it costs nothing elsewhere.
+
+   Credential keys are stripped — see `credential-keys`. The result identifies a
+   store; it is not guaranteed to be enough to reconnect one."
+  (-store-config [this]
+    "The (credential-stripped) config this store was connected with, or nil for
+     a store built through a backend constructor directly, which never took one."))
+
 ;; Default implementations for Object
+
+(extend-protocol PStoreConfig
+  #?(:clj Object :cljs default)
+  (-store-config [this] (get this store-config-key))
+  nil
+  (-store-config [_] nil))
+
+(defn store-id
+  "The UUID this store was connected with, or nil. Convenience over
+   `-store-config`, since identity is what most callers actually want."
+  [store]
+  (:id (-store-config store)))
 
 (extend-protocol PMultiKeySupport
   #?(:clj Object :cljs default)

@@ -128,11 +128,21 @@
           ~async-code))))
 
 (def ^:dynamic *default-sync-translation*
+  "How `async+sync` rewrites async operators for the synchronous branch.
+
+   `reduce<?-` belongs here with the rest: it is a superv.async operator, and
+   under this rewrite its step fn returns a VALUE rather than a channel, so it
+   degrades to plain `reduce`. Left out, a sync branch containing one would hand
+   it a value where it expects a channel. It cannot live in the caller's
+   namespace either — `async+sync` resolves a symbol translation at macroexpand
+   time, which ClojureScript cannot do for a var in a `.cljc` that is not also a
+   loaded Clojure namespace."
   '{go-try try
     <? do
     go-try- try
     <!- do
     <?- do
+    reduce<?- reduce
     go-locked locked
     maybe-go-locked maybe-locked})
 

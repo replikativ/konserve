@@ -6,6 +6,7 @@
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
                                         PAssocSerializers PWriteHookStore]]
+            #?(:clj [konserve.nio-helpers :as nio])
             [konserve.utils #?(:clj :refer :cljs :refer-macros) [async+sync]]))
 
 ;; =============================================================================
@@ -89,7 +90,14 @@
                   (go (<! (locked-cb (let [v (second (get @state key))]
                                        {:input-stream v :blob v})))))))
   (-bassoc [_ key meta-up-fn input opts]
-    (let [{:keys [sync?]} opts]
+    ;; Normalized like every other backing: `bassoc` documents an InputStream,
+    ;; a File, a String and a byte array, and storing the caller's object
+    ;; verbatim handed all but the last straight back out of `bget` — `slurp`
+    ;; then read a String as a FILENAME. The DefaultStore backings normalize in
+    ;; `konserve.impl.defaults`; this store bypasses that layer, so it does its
+    ;; own.
+    (let [input #?(:clj (nio/blob->bytes input) :cljs input)
+          {:keys [sync?]} opts]
       (async+sync sync?
                   {go do
                    <! do}

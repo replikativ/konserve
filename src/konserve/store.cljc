@@ -31,11 +31,12 @@
      ;; After requiring konserve-s3:
      (store/connect-store {:backend :s3 :bucket \"my-bucket\" :region \"us-east-1\"})"
   (:require [konserve.memory]
+            [konserve.protocols :as p]
             [konserve.tiered :as tiered]
             [konserve.utils :refer [#?(:clj async+sync) *default-sync-translation*]
              #?@(:cljs [:refer-macros [async+sync]])]
             #?(:clj [konserve.filestore])
-            [clojure.core.async :refer [go] :include-macros true]
+            [clojure.core.async :refer [go <!] :include-macros true]
             [superv.async :refer [go-try- <?-] :include-macros true]))
 
 ;; =============================================================================
@@ -73,6 +74,54 @@
               {:config config :id id :error :invalid-id-type}))
 
       :else config)))
+
+;; =============================================================================
+;; Store identity
+;; =============================================================================
+
+(def store-config
+  "The (credential-stripped) config this store was connected with, or nil —
+   see `konserve.protocols/PStoreConfig`."
+  p/-store-config)
+
+(def store-id
+  "The UUID this store was connected with, or nil."
+  p/store-id)
+
+(defn- remember-config
+  "Give a freshly connected store its own identity.
+
+   Done here because this is the only place every backend passes through with
+   the full config in hand, including backends that bypass `DefaultStore`
+   entirely. The default `PStoreConfig` implementation reads this back, so no
+   backend has to change; one that prefers a real field can implement the
+   protocol and take over.
+
+   Credentials are stripped first, AT EVERY DEPTH — see
+   `konserve.protocols/strip-credentials`, and note that a `:tiered` config
+   nests two whole store configs inside itself.
+
+   LIMIT WORTH KNOWING: this attaches by `assoc`, so it only reaches a store
+   that is a map or a record. A backend whose store is a `deftype` silently
+   gets nothing, and `store-id` then returns nil for it — which is the one
+   direction that matters, since a caller who guards under a nil id shares a
+   bucket with every other such store. Such a backend should implement
+   `PStoreConfig` itself rather than rely on this.
+
+   Anything not associable — an exception delivered on the async path, say —
+   passes through untouched, which is also what makes the guard above safe."
+  [store config]
+  (if (and config (or (map? store) (record? store)))
+    (assoc store p/store-config-key (p/strip-credentials config))
+    store))
+
+(defn- with-store-config
+  "Apply `remember-config` across both return contracts: a value under
+   `{:sync? true}`, a channel otherwise."
+  [result config opts]
+  (if (:sync? opts)
+    (remember-config result config)
+    (go (remember-config (<! result) config))))
 
 ;; =============================================================================
 ;; Private Multimethods (fixed arity, both config and opts)
@@ -150,7 +199,11 @@
   ([config]
    (connect-store config {:sync? false}))
   ([config opts]
-   (-connect-store config (or opts {:sync? false}))))
+   (let [opts (or opts {:sync? false})]
+     ;; Every backend dispatches through here with the full config, so this is
+     ;; the one place that can hand the store its own identity — including
+     ;; backends like LMDB that bypass DefaultStore entirely.
+     (with-store-config (-connect-store config opts) config opts))))
 
 (defn create-store
   "Create a new store.
@@ -167,7 +220,8 @@
   ([config]
    (create-store config {:sync? false}))
   ([config opts]
-   (-create-store config (or opts {:sync? false}))))
+   (let [opts (or opts {:sync? false})]
+     (with-store-config (-create-store config opts) config opts))))
 
 (defn store-exists?
   "Check if a store exists at the given configuration.
