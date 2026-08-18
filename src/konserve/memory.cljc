@@ -20,6 +20,28 @@
   memory-store-registry
   (atom {}))
 
+(defn- atomic!
+  "Run `f` with exclusive access to `state`.
+
+   `swap!` is not enough for `-update-in`. It RETRIES its function whenever the
+   atom changed underneath, so a conflict arriving mid-flight ran the caller's
+   `up-fn` and only THEN rejected — while konserve promises that a rejected
+   update does not run it at all, and this store is the reference the compliance
+   suite is pointed at. A monitor makes read, check, apply and write one step, so
+   `up-fn` runs exactly once and never on a rejection.
+
+   EVERY mutation takes it, not only the fenced ones: mixing a monitor with bare
+   `swap!`s elsewhere would let another write land between this one's read and
+   write and be silently overwritten, which is the race the monitor was added to
+   remove.
+
+   `:process` is exactly what this store claims — atomic against other threads in
+   this runtime, which two store objects sharing one state atom are — so this is
+   the honest way to provide it. ClojureScript needs no lock: a synchronous block
+   cannot be interrupted there."
+  [state f]
+  #?(:clj (locking state (f)) :cljs (f)))
+
 (defrecord MemoryStore [state read-handlers write-handlers locks write-hooks]
   PEDNKeyValueStore
   (-exists? [_ key opts]
@@ -63,28 +85,28 @@
                     ;; error would surface only as noise in the log.
                     (try
                       (let [[fkey & rkey] key-vec
-                            update-atom
-                            (fn [store]
-                            ;; The compare and the write are one `swap!`, so they
-                            ;; are atomic against other threads in this JVM —
-                            ;; which is the whole of a memory store's world. The
-                            ;; check lives INSIDE the swap fn deliberately: doing
-                            ;; it before would let another writer land between the
-                            ;; comparison and the update, which is the very race
-                            ;; this exists to prevent.
-                              (swap! store
-                                     (fn [old]
-                                       (when expected-revision
-                                         (kd/check-revision! fkey expected-revision
-                                                             (first (get old fkey))))
-                                       (update old fkey
-                                               (fn [[meta data]]
-                                                 [(meta-up-fn meta)
-                                                  (if rkey
-                                                    (update-in data rkey up-fn)
-                                                    (up-fn data))])))))
-                            [_ old-val] (get @state fkey)
-                            {[new-meta new-val] fkey} (update-atom state)
+                            ;; Read, check, apply and write as ONE step. The old
+                            ;; value is read in here too: taken outside, it could
+                            ;; be from before another writer's update and reported
+                            ;; as this call's `old`.
+                            [old-val new-meta new-val]
+                            (atomic! state
+                                     (fn []
+                                       (let [old @state
+                                             [_ prev-val] (get old fkey)]
+                                         (when expected-revision
+                                           (kd/check-revision! fkey expected-revision
+                                                               (first (get old fkey))))
+                                         (let [next-state
+                                               (update old fkey
+                                                       (fn [[meta data]]
+                                                         [(meta-up-fn meta)
+                                                          (if rkey
+                                                            (update-in data rkey up-fn)
+                                                            (up-fn data))]))
+                                               [nm nv] (get next-state fkey)]
+                                           (reset! state next-state)
+                                           [prev-val nm nv]))))
                             res (if overwrite? [nil new-val] [old-val new-val])]
                         ;; `:with-revision?` reports the revision this write
                         ;; PRODUCED, so a caller can chain a fenced write without a
@@ -120,7 +142,7 @@
                     (let [v (get @state key ::not-found)]
                       (if (not= v ::not-found)
                         (do
-                          (swap! state dissoc key)
+                          (atomic! state (fn [] (swap! state dissoc key)))
                           true)
                         false))))))
 
@@ -165,11 +187,13 @@
                   {go do
                    <! do}
                   (go
-                    (swap! state
-                           (fn [old]
-                             (update old key
-                                     (fn [[meta _data]]
-                                       [(meta-up-fn meta) input]))))
+                    (atomic! state
+                             (fn []
+                               (swap! state
+                                      (fn [old]
+                                        (update old key
+                                                (fn [[meta _data]]
+                                                  [(meta-up-fn meta) input]))))))
                     true))))
   PAssocSerializers ;; no serializers needed for memory
   (-assoc-serializers [this _serializers] this)
@@ -191,14 +215,16 @@
                   {go do}
                   (go
                     ;; Use an atomic update on the state atom to ensure all key-val pairs are updated atomically
-                    (swap! state
-                           (fn [old-state]
-                             (reduce (fn [acc [key val]]
-                                       (update acc key
-                                               (fn [[meta _data]]
-                                                 [(meta-up-fn key :edn meta) val])))
-                                     old-state
-                                     kvs)))
+                    (atomic! state
+                             (fn []
+                               (swap! state
+                                      (fn [old-state]
+                                        (reduce (fn [acc [key val]]
+                                                  (update acc key
+                                                          (fn [[meta _data]]
+                                                            [(meta-up-fn key :edn meta) val])))
+                                                old-state
+                                                kvs)))))
                     ;; Return a map of keys to success status
                     (into {} (map (fn [[k _]] [k true]) kvs))))))
 
@@ -208,9 +234,11 @@
                   {go do}
                   (go
                     ;; Atomically swap state and capture old value to avoid race conditions
-                    (let [[old-state _new-state] (swap-vals! state
-                                                             (fn [s]
-                                                               (apply dissoc s keys)))]
+                    (let [[old-state _new-state] (atomic! state
+                                                          (fn []
+                                                            (swap-vals! state
+                                                                        (fn [s]
+                                                                          (apply dissoc s keys)))))]
                       ;; Check existence against the actual old state we swapped from
                       (into {} (map (fn [k]
                                       [k (contains? old-state k)])

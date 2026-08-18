@@ -110,22 +110,30 @@
      a revision-bearing read touches it; keys that are never fenced pay only an
      existence probe.
 
-     The residual, stated because a fence with an unstated hole is worse than no
-     fence: until a key has a sidecar there is nothing to lock, so its FIRST
-     fenced write can race an unconditional one. Two consequences worth being
-     exact about, because the obvious reading is too kind:
+     WHO IS EXCLUDED, and the limit that is not konserve's to fix. Conditional
+     writes are optimistic concurrency control, so they order writers that
+     PARTICIPATE. A writer that issues an unconditional write overwrites whatever
+     is there, and no scheme prevents that — not S3's If-Match, not a row-version
+     column, not this. Fencing a store means every writer to that key fences.
 
-       - It is CREATE-IF-ABSENT that is exposed, always. A revision-bearing read
-         creates the sidecar only for a key that exists, so a key being created
-         for the first time — every branch head, once — has no sidecar until the
-         write that makes it.
-       - In that window the loser can lose more than the race. Two writers that
-         both believe the key absent can both proceed, and the one that is
-         rejected has already been told nothing about the other's value.
+     Given that, konserve serialises correctly from the very first write: two
+     conditional writers racing a key with no sidecar both open the same
+     `<key>.cas` (created, not created-anew), so they take the same lock and one
+     is rejected.
 
-     After that first write the key is covered for good, and a caller that
-     re-reads an existing pointer before writing it (which is what fencing
-     implies) has the sidecar in place before every later write.
+     Where konserve goes FURTHER than the premise requires: once a key has a
+     sidecar, unconditional writers take it too, so they are ordered against
+     fenced ones rather than merely winning by luck. S3 cannot offer that — a
+     non-participant there is beyond reach entirely.
+
+     The gap between those two, stated because it is the one case that behaves
+     worse than S3 rather than better: a key that has no sidecar YET, being
+     written by a non-participant at the same moment as its first conditional
+     write. S3 would reject the conditional writer (its ETag moved); here the
+     conditional writer can read the value the non-participant just replaced,
+     compare against that, pass, and overwrite it. Both are told they succeeded.
+     It requires a writer that does not fence, which is the premise already
+     broken.
 
      WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
      backing enforces the comparison in `konserve.impl.defaults/io-operation`:

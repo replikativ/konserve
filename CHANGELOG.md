@@ -172,6 +172,13 @@ All notable, user-visible changes to konserve are documented here.
   revision-bearing read touches it, so keys that are never fenced cost one
   existence probe and no extra file. Backends that filter their own key
   enumeration must skip this suffix (see `konserve.impl.defaults/internal-artifact?`).
+- **Fencing orders the writers that participate.** Conditional writes are
+  optimistic concurrency control: a writer that writes unconditionally overwrites
+  whatever is there, here as on S3 or against a row-version column. Fencing a key
+  means every writer to it fences. Konserve does go further than that where it
+  can — once a key has a sidecar, unconditional writers take its lock too — but a
+  deployment that mixes fenced and unfenced writers to one key is not protected
+  by any of this, and should not be read as if it were.
 - **Every value's metadata now carries a `:revision`.** It is what
   `:expected-revision` compares and what `konserve.core/revision` returns — an
   OPAQUE token, minted per write, to be passed back rather than interpreted. It
