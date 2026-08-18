@@ -388,6 +388,17 @@
                          "the key does not exist. Writing unconditionally here would silently withhold "
                          "the guarantee that was asked for.")
                     {:type :konserve/invalid-expected-revision})))
+  ;; `:with-revision?` is refused on the same terms. The read docstrings already
+  ;; said so and the code did not: a store with no domain happily handed back a
+  ;; token that no write of its own would ever accept.
+  (when (and (contains? opts :with-revision?)
+             (:with-revision? opts)
+             (not (conditional-write? store)))
+    (throw (ex-info (str "This store has no revisions to report, so :with-revision? was refused. "
+                         "Handing back a token no write on this store can honour would be worse "
+                         "than not offering one.")
+                    {:type  :konserve/with-revision-unsupported
+                     :store (type store)})))
   (when (and (contains? opts :expected-revision)
              (not (conditional-write? store)))
     (throw (ex-info (str "This store cannot honour :expected-revision, so the conditional write was refused. "

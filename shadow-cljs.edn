@@ -1,4 +1,11 @@
-{:deps {:aliases [:cljs]}
+{
+ ;; The cljs analyzer recurses deeply through `io-operation`'s go-block
+ ;; macroexpansion and overflows the default thread stack. It surfaces as a bare
+ ;; "null" compile error pointing at the `go-try-`, which reads like a syntax
+ ;; problem and is not one — CI has a larger default and compiles fine, so this
+ ;; only ever bites locally.
+ :jvm-opts ["-Xss32m"]
+:deps {:aliases [:cljs]}
  :dev-http {8021 "out/browser-tests"}
  :builds
  {:app

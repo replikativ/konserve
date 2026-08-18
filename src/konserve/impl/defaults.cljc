@@ -545,121 +545,108 @@
                                             (or (some? expected-revision)
                                                 (= :read-edn-meta operation)
                                                 (<?- (-blob-exists? backing cas-store-key env))))
-                                   (<?- (-create-blob backing cas-store-key env)))
-                        cas-lock (when cas-blob
-                                   (log/trace :konserve/acquiring-cas-lock {:key key})
-                                   (<?- (get-lock cas-blob (first key-vec) env)))
-                        ;; Re-probed HERE, under the cas lock and BEFORE the blob
-                        ;; is opened, because `-create-blob` creates the file: after
-                        ;; it, "does this key exist" can no longer be asked. The
-                        ;; pre-lock probe is not evidence either — a competing
-                        ;; create can land between it and the lock, and trusting it
-                        ;; would let a create-if-absent see ::absent and overwrite
-                        ;; the other create.
-                        exists-under-lock? (when expected-revision
-                                             (<?- (-blob-exists? backing store-key env)))
-                        ;; See the `finally` below: set when a FENCED write to a
-                        ;; key that did not exist fails, so the empty blob
-                        ;; `-create-blob` just made can be removed again.
-                        ghost? (volatile! false)
-                        blob (<?- (-create-blob backing store-key env))
-                        lock   (when (:lock-blob? config)
-                                 (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                                 (<?- (get-lock blob (first key-vec) env)))]
+                                   (<?- (-create-blob backing cas-store-key env)))]
+                    ;; THREE NESTED try/finally, one per thing acquired, because a
+                    ;; `let` binding that throws skips every `finally` written
+                    ;; below it. The sidecar used to be taken up here and released
+                    ;; in the innermost `finally`, so anything that threw in
+                    ;; between — an IOException opening the value blob, the
+                    ;; existence probe, `get-lock` giving up after ~1s of
+                    ;; contention — leaked a `FileLock`. That lock is held by the
+                    ;; OS on behalf of the whole JVM, so ONE transient error made
+                    ;; the key unreadable and unwritable for every process on the
+                    ;; machine until this one exited. Reads take the sidecar too,
+                    ;; so a branch head would simply stop responding.
                     (try
-                      (let [old (cond
-                                  ;; A FENCED write decides from the existence
-                                  ;; probe taken UNDER the lock, not from the
-                                  ;; pre-lock one. Reading unconditionally is wrong:
-                                  ;; `-create-blob` has just created an empty file
-                                  ;; for a missing key, and reading THAT raises a
-                                  ;; header-size error rather than not-found.
-                                  expected-revision
-                                  (if exists-under-lock?
-                                    (<?- (read-blob blob read-handlers serializers env))
-                                    [nil nil])
-                                  ;; full overwrite never needs the old value
-                                  overwrite? [nil nil]
-                                  ;; miss-safe non-overwrite write: no probe was done, so
-                                  ;; read-first and treat an absent key as a fresh write.
-                                  skip-write-probe?
-                                  (try (<?- (read-blob blob read-handlers serializers env))
-                                       (catch #?(:clj Exception :cljs js/Error) e
-                                         (if (store-key-not-found? e) [nil nil] (throw e))))
-                                  ;; probe said the key exists (or this is a retry): read old
-                                  (or store-key-exists? (pos? attempt))
-                                  (<?- (read-blob blob read-handlers serializers env))
-                                  :else [nil nil])]
-                        (when expected-revision
-                          (check-revision! key expected-revision (first old)))
-                        (if write-op?
-                          ;; The meta is computed ONCE and the same value is both
-                          ;; written and reported. Calling the meta-fn a second time
-                          ;; to learn the revision was correct only while the
-                          ;; revision was a counter derived from `old`; a minted
-                          ;; token differs on every call, so the caller was handed a
-                          ;; revision that had never been stored — and every chained
-                          ;; fenced write then failed against a head nobody else had
-                          ;; touched. Measured 60/60 wrong before this.
-                          (let [new-meta (when (:with-revision? env)
-                                           ((:up-fn-meta env) (first old)))
-                                env      (cond-> env new-meta (assoc :up-fn-meta (constantly new-meta)))
-                                res      (<?- (update-blob backing store-key serializer write-handlers env old))]
-                            (if new-meta
-                              [res (:revision new-meta)]
-                              res))
-                          old))
-                      (catch #?(:clj Exception :cljs js/Error) e
-                        (vreset! ghost? (and expected-revision (not exists-under-lock?)))
-                        (throw e))
+                      (let [cas-lock (when cas-blob
+                                       (log/trace :konserve/acquiring-cas-lock {:key key})
+                                       (<?- (get-lock cas-blob (first key-vec) env)))]
+                        (try
+                          ;; Probed HERE, under the cas lock, because `-create-blob`
+                          ;; creates the file: after it, "does this key exist" can no
+                          ;; longer be asked. The pre-lock probe is not evidence
+                          ;; either — a competing create can land between it and the
+                          ;; lock, and trusting it would let a create-if-absent see
+                          ;; ::absent and overwrite the other create.
+                          (let [exists-under-lock? (when expected-revision
+                                                     (<?- (-blob-exists? backing store-key env)))
+                                ;; NOTHING TO READ MEANS NOTHING TO CREATE. A fenced
+                                ;; write to a key that does not exist either fails its
+                                ;; check (no revision to match) or is a create, and
+                                ;; `update-blob` makes its own blob either way — so
+                                ;; opening this one would only produce an empty file
+                                ;; we might never write.
+                                ;;
+                                ;; That empty file was the "ghost", and the cleanup
+                                ;; written to remove it deleted BY PATH: on a backing
+                                ;; that takes no sidecar (every `:global` one, where
+                                ;; `lock-based-fencing?` is false) it ran unlocked and
+                                ;; unlinked whatever was at the path — which is the
+                                ;; winner's value in an ordinary create-if-absent
+                                ;; race. Reproduced against MinIO: 10 of 10 keys, one
+                                ;; peer told its fenced write SUCCEEDED and the key
+                                ;; then missing. Worse on S3 than on a filestore,
+                                ;; because there `-create-blob` writes nothing
+                                ;; remotely, so there was never a ghost to collect and
+                                ;; the delete was pure destruction.
+                                ;;
+                                ;; Not creating it retires the ghost, the cleanup, and
+                                ;; the race in the cleanup together.
+                                skip-blob? (and expected-revision (not exists-under-lock?))
+                                blob (when-not skip-blob?
+                                       (<?- (-create-blob backing store-key env)))
+                                lock (when (and blob (:lock-blob? config))
+                                       (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                                       (<?- (get-lock blob (first key-vec) env)))]
+                            (try
+                              (let [old (cond
+                                          ;; A FENCED write decides from the existence
+                                          ;; probe taken UNDER the lock, not from the
+                                          ;; pre-lock one.
+                                          expected-revision
+                                          (if exists-under-lock?
+                                            (<?- (read-blob blob read-handlers serializers env))
+                                            [nil nil])
+                                          ;; full overwrite never needs the old value
+                                          overwrite? [nil nil]
+                                          ;; miss-safe non-overwrite write: no probe was done, so
+                                          ;; read-first and treat an absent key as a fresh write.
+                                          skip-write-probe?
+                                          (try (<?- (read-blob blob read-handlers serializers env))
+                                               (catch #?(:clj Exception :cljs js/Error) e
+                                                 (if (store-key-not-found? e) [nil nil] (throw e))))
+                                          ;; probe said the key exists (or this is a retry): read old
+                                          (or store-key-exists? (pos? attempt))
+                                          (<?- (read-blob blob read-handlers serializers env))
+                                          :else [nil nil])]
+                                (when expected-revision
+                                  (check-revision! key expected-revision (first old)))
+                                (if write-op?
+                                  ;; The meta is computed ONCE and the same value is both
+                                  ;; written and reported. Calling the meta-fn a second time
+                                  ;; to learn the revision was correct only while the
+                                  ;; revision was a counter derived from `old`; a minted
+                                  ;; token differs on every call, so the caller was handed a
+                                  ;; revision that had never been stored — and every chained
+                                  ;; fenced write then failed against a head nobody else had
+                                  ;; touched. Measured 60/60 wrong before this.
+                                  (let [new-meta (when (:with-revision? env)
+                                                   ((:up-fn-meta env) (first old)))
+                                        env      (cond-> env new-meta (assoc :up-fn-meta (constantly new-meta)))
+                                        res      (<?- (update-blob backing store-key serializer write-handlers env old))]
+                                    (if new-meta
+                                      [res (:revision new-meta)]
+                                      res))
+                                  old))
+                              (finally
+                                (when lock
+                                  (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
+                                  (<?- (-release lock env)))
+                                (when blob (<?- (-close blob env))))))
+                          (finally
+                            (when cas-lock (<?- (-release cas-lock env))))))
                       (finally
-                        (when (:lock-blob? config)
-                          (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                          (<?- (-release lock env)))
-                        (<?- (-close blob env))
-                        ;; A REJECTED fenced write must leave no trace. `-create-blob`
-                        ;; creates the file before we can know whether the revision
-                        ;; matches, so a conflict — the most ordinary outcome there
-                        ;; is — would otherwise leave a zero-length blob behind for a
-                        ;; key that never existed. That is worse than the write
-                        ;; failing: `read-blob` on an empty file raises a header-size
-                        ;; error rather than reporting not-found, so the key is not
-                        ;; missing and not readable, and `:expected-revision absent`
-                        ;; can never succeed on it again. The key is BRICKED by a
-                        ;; conflict that was supposed to be harmless.
-                        ;;
-                        ;; Deleted after the close but STILL UNDER THE SIDECAR
-                        ;; LOCK, which is the whole reason the release moved below
-                        ;; it. The delete is by PATH, so with the lock already
-                        ;; dropped it unlinked whatever happened to be at that
-                        ;; path — including a value another writer had just
-                        ;; renamed into place. A rejected write destroying a
-                        ;; committed one is far worse than the bricked blob this
-                        ;; cleanup exists to prevent; it showed up as 9 lost
-                        ;; writes in 4000 iterations of a natural race. Holding
-                        ;; the sidecar means no other write to this key can be
-                        ;; between our probe and this delete, because a fenceable
-                        ;; key's writers all take it (see above).
-                        ;;
-                        ;; Closing before deleting: unlinking an open file is fine
-                        ;; on POSIX and fails on Windows.
-                        ;;
-                        ;; Scoped to fenced writes because it is the only path that
-                        ;; creates a blob it may then refuse to write; the
-                        ;; unconditional paths write whatever they created.
-                        (when @ghost?
-                          (log/trace :konserve/removing-rejected-blob {:key key})
-                          ;; Never let cleanup REPLACE the outcome: the caller is
-                          ;; being handed a `:konserve/revision-mismatch` they can
-                          ;; retry on, and a NoSuchFileException thrown from here
-                          ;; would arrive in its place as an unrecognised IO error.
-                          (try (<?- (-delete-blob backing store-key env))
-                               (catch #?(:clj Exception :cljs js/Error) e
-                                 (log/warn :konserve/rejected-blob-cleanup-failed
-                                           {:key key :error e}))))
-                        (when cas-lock
-                          (<?- (-release cas-lock env))
-                          (<?- (-close cas-blob env))))))
+                        (when cas-blob (<?- (-close cas-blob env))))))
                   (catch #?(:clj Exception :cljs js/Error) e
                     ;; DELIBERATELY not retried: `:konserve/revision-mismatch`.
                     ;; That conflict belongs to the CALLER — retrying would re-run

@@ -51,7 +51,7 @@
                   {go do}
                   (go (first (get @state key))))))
   (-update-in [_ key-vec meta-up-fn up-fn opts]
-    (let [{:keys [sync? overwrite? expected-revision]} opts]
+    (let [{:keys [sync? overwrite? expected-revision with-revision?]} opts]
       (async+sync sync?
                   {go do}
                   (go
@@ -84,10 +84,22 @@
                                                     (update-in data rkey up-fn)
                                                     (up-fn data))])))))
                             [_ old-val] (get @state fkey)
-                            {[_ new-val] fkey} (update-atom state)]
-                        (if overwrite?
-                          [nil new-val]
-                          [old-val new-val]))
+                            {[new-meta new-val] fkey} (update-atom state)
+                            res (if overwrite? [nil new-val] [old-val new-val])]
+                        ;; `:with-revision?` reports the revision this write
+                        ;; PRODUCED, so a caller can chain a fenced write without a
+                        ;; re-read. It was destructured nowhere here, so this store
+                        ;; — konserve's own reference implementation, which declares
+                        ;; `:process` and passes the contract — accepted the option
+                        ;; and returned the plain shape. A caller destructuring
+                        ;; `[[old new] rev]` got the VALUE bound as the token and
+                        ;; fenced the next write on it, and `k/update-in` threw
+                        ;; `nth not supported on this type` outright. Accepted and
+                        ;; silently dropped is the exact failure this whole
+                        ;; mechanism exists to remove.
+                        (if with-revision?
+                          [res (:revision new-meta)]
+                          res))
                       ;; The two arms report differently, and both must be honoured:
                       ;; a SYNC caller expects a throw, an ASYNC caller expects the
                       ;; error as a value on the channel (throwing there escapes to

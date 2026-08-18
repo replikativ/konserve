@@ -111,11 +111,21 @@
      existence probe.
 
      The residual, stated because a fence with an unstated hole is worse than no
-     fence: the FIRST such write or read on a key can still race an unconditional
-     write, since there is nothing to lock until the sidecar exists. It is
-     self-healing — once created the key is covered for good — and a caller that
-     re-reads a pointer before writing it (which is what fencing implies) creates
-     it on that read, before its first conditional write.
+     fence: until a key has a sidecar there is nothing to lock, so its FIRST
+     fenced write can race an unconditional one. Two consequences worth being
+     exact about, because the obvious reading is too kind:
+
+       - It is CREATE-IF-ABSENT that is exposed, always. A revision-bearing read
+         creates the sidecar only for a key that exists, so a key being created
+         for the first time — every branch head, once — has no sidecar until the
+         write that makes it.
+       - In that window the loser can lose more than the race. Two writers that
+         both believe the key absent can both proceed, and the one that is
+         rejected has already been told nothing about the other's value.
+
+     After that first write the key is covered for good, and a caller that
+     re-reads an existing pointer before writing it (which is what fencing
+     implies) has the sidecar in place before every later write.
 
      WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
      backing enforces the comparison in `konserve.impl.defaults/io-operation`:

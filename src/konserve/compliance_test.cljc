@@ -88,6 +88,27 @@
               (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision k/absent)))
               (is (= {:v 1} (<!! (k/get store ghost nil opts)))))))
 
+        ;; `:with-revision?` IS HALF THE PUBLIC SURFACE and had no coverage at
+        ;; all, which is how konserve's own memory store — the honest reference
+        ;; this suite is usually pointed at — came to accept the option and
+        ;; return the plain shape. A caller destructuring `[[old new] rev]` then
+        ;; binds the VALUE as the token and fences the next write on it.
+        (testing "a write reports the revision it produced, and that revision chains"
+          (let [res (<!! (k/assoc store k* {:v 4} (assoc opts :with-revision? true)))
+                [[_ new-val] rev] res]
+            (is (= {:v 4} new-val)
+                (str "the new VALUE belongs in the second slot, not the token: " (pr-str res)))
+            (is (some? rev) "and a revision beside it")
+            (is (= rev (<!! (k/revision store k* opts)))
+                "the reported revision must be the one that was stored")
+            (testing "so it can be handed straight back without a re-read"
+              (let [[[_ newer] rev2] (<!! (k/update-in store [k*] #(assoc % :v 5)
+                                                       (assoc opts :expected-revision rev
+                                                              :with-revision? true)))]
+                (is (= {:v 5} newer) "update-in reports the same shape")
+                (is (some? rev2))
+                (is (not= rev rev2) "and the revision moved")))))
+
         ;; ENUMERATION MUST SURVIVE A FENCED WRITE. A backing may leave
         ;; bookkeeping of its own behind — the default one takes its lock on a
         ;; `.cas` sidecar that persists — and anything not recognised as
@@ -436,6 +457,15 @@
                                               {:expected-revision r0})))
                   "update-in is fenced too")
               (is (zero? @ran) "a rejected update must not run the caller's function")))
+
+          ;; See the sync arm on why `:with-revision?` is part of the contract.
+          (let [res (<! (k/assoc store :cas-async {:v 4} {:with-revision? true}))
+                [[_ new-val] rev] res]
+            (is (= {:v 4} new-val)
+                (str "the new VALUE belongs in the second slot, not the token: " (pr-str res)))
+            (is (some? rev) "and a revision beside it")
+            (is (= rev (<! (k/revision store :cas-async)))
+                "the reported revision must be the one that was stored"))
 
           ;; See the sync arm: a backing's own bookkeeping must not be read back
           ;; as a value, or `k/keys` and the GC that walks it break permanently.

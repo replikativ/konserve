@@ -28,6 +28,79 @@
     (conditional-write-compliance-test store)
     (delete-store folder)))
 
+(deftest a-rejected-fenced-write-creates-nothing-to-clean-up
+  (testing "a fenced write to a key that does not exist must not create the key's
+            blob. There is nothing to read — the check either fails for want of a
+            revision, or it is a create and `update-blob` makes its own blob — so
+            opening it only produces an empty file that may never be written.
+
+            That empty file was the ghost, and the cleanup written to remove it
+            deleted BY PATH. On a backing that takes no sidecar (every `:global`
+            one) the cleanup ran unlocked and unlinked whatever was at the path,
+            which in an ordinary create-if-absent race is the WINNER's value:
+            reproduced against MinIO as 10 of 10 keys, one peer told its fenced
+            write succeeded and the key then missing. No ghost means no cleanup
+            means that whole class is gone, so this asserts the absence of the
+            file rather than the behaviour of a collector."
+    (let [folder "/tmp/konserve-fs-no-ghost"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder))
+          files  #(set (map str (.list (java.io.File. folder))))]
+      (k/assoc store :other {:v 1} {:sync? true})
+      (let [blobs #(set (remove (fn [f] (str/ends-with? f ".cas")) (files)))
+            before (blobs)]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (k/assoc store :missing {:v :no}
+                              {:sync? true :expected-revision "a-revision-that-never-existed"}))
+            "the write is rejected")
+        (is (= before (blobs))
+            "and left no BLOB behind — nothing for a collector to have to remove")
+        ;; The sidecar it does leave is deliberate: the key is fenceable now, so
+        ;; the next attempt on it is protected from the first one's race.
+        (is (= 1 (count (filter #(str/ends-with? % ".cas") (files))))
+            "only the sidecar, which is what makes the key fenceable")
+        (is (false? (k/exists? store :missing {:sync? true})))
+        (is (= 1 (count (k/keys store {:sync? true}))) "enumeration is unaffected"))
+      (delete-store folder))))
+
+(deftest a-transient-failure-must-not-leak-the-sidecar-lock
+  (testing "the sidecar is a JVM-wide `FileLock`, so leaking one locks every
+            process on the machine out of that key until this JVM exits. It used
+            to be acquired in a `let` binding ABOVE the `try` that releases it, so
+            anything throwing in between leaked it — an IOException opening the
+            value blob, the existence probe, or `get-lock` giving up after about a
+            second of contention. Reads take the sidecar too, so a branch head
+            would simply stop responding, for good, after one blip.
+
+            The blip here is real rather than injected: hold the value blob's lock
+            so konserve cannot take it, which is the `:file-lock-acquisition-error`
+            path."
+    (let [folder "/tmp/konserve-fs-lock-leak"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder))]
+      (k/assoc store :head {:v 1} {:sync? true})
+      (k/get store :head nil {:sync? true :with-revision? true})   ;; fenceable
+      (let [ksv (first (filter #(str/ends-with? % ".ksv")
+                               (map str (.list (java.io.File. folder)))))
+            ch  (FileChannel/open (Paths/get (str folder "/" ksv) (into-array String []))
+                                  (into-array StandardOpenOption
+                                              [StandardOpenOption/CREATE StandardOpenOption/WRITE]))
+            l   (.lock ch)]
+        (try
+          (is (thrown? clojure.lang.ExceptionInfo (k/assoc store :head {:v 2} {:sync? true}))
+              "the contended write fails, which is the transient error")
+          (finally (.release l) (.close ch))))
+      ;; The assertions that matter: the sidecar was released on the way out.
+      (is (= :wrote (deref (future (try (k/assoc store :head {:v 3} {:sync? true}) :wrote
+                                        (catch Throwable e (ex-message e))))
+                           20000 :timed-out-holding-the-lock))
+          "the key must still be writable")
+      (is (= {:v 3} (deref (future (try (k/get store :head nil {:sync? true})
+                                        (catch Throwable e (ex-message e))))
+                           20000 :timed-out-holding-the-lock))
+          "and still readable")
+      (delete-store folder))))
+
 (deftest every-writer-to-a-fenceable-key-takes-the-sidecar
   (testing "the fence must exclude UNCONDITIONAL writers too, or it is not a
             fence. A plain write renames a new inode over the key; a fenced write

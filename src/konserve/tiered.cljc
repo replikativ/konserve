@@ -345,7 +345,7 @@
 
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                   (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))]
+                   (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))]
                      (go (try
                            (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
                            (catch #?(:clj Exception :cljs js/Error) e
@@ -361,7 +361,7 @@
                      result)
 
                    :frontend-only
-                   (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))))))
+                   (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))))))
 
   (-dissoc [_this key opts]
     (log/trace :konserve/tiered-dissoc {:key key})
