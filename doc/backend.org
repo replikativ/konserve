@@ -308,6 +308,29 @@
    a key will hand it to =-handle-foreign-key=, i.e. the old-layout migration
    path, and =k/keys= will throw from the first conditional write onwards.
 
+   *Prefer your own storage layer to the sidecar.* The sidecar is the
+   FILESYSTEM's fallback, not the general design: POSIX has no
+   compare-and-rename, so konserve has to build atomicity out of a lock, and the
+   lock cannot live on the value because the write path renames a new blob over
+   it. A remote or transactional store has none of that problem and a native
+   conditional operation that costs NO extra round trips, where inheriting the
+   sidecar would cost two per write — and give a weaker guarantee than the store
+   already offers:
+
+   - SQL — =UPDATE ... WHERE revision = ?=, and check the row count
+   - Redis — =WATCH= / =MULTI=, or a Lua script
+   - DynamoDB — a =ConditionExpression=
+   - Google Cloud Storage — =x-goog-if-generation-match=
+   - S3 — =If-Match= on the ETag (see konserve-s3)
+
+   So implement the comparison where your storage evaluates it, and declare the
+   reach that gives you. Only declare =:process= or =:machine= if konserve's own
+   lock genuinely IS your mechanism — the sidecar work is gated on that, so a
+   backend which declares nothing, or which declares =:global=, pays for none of
+   it. Measured on a backing that declares no domain: a write costs exactly the
+   blob operations it always did, with no sidecar create and no extra existence
+   probe.
+
    *Verify the claim.* =konserve.compliance-test/conditional-write-compliance-test=
    is the contract, and a store without the capability passes it by refusing;
    =async-conditional-write-compliance-test= is the same contract for async-only

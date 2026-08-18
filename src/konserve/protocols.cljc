@@ -135,6 +135,16 @@
      It requires a writer that does not fence, which is the premise already
      broken.
 
+     PREFER YOUR OWN STORAGE LAYER. The sidecar konserve's default backing uses
+     to reach `:machine` is a filesystem fallback — POSIX has no
+     compare-and-rename — and it costs an extra blob open and lock per write to a
+     fenced key. A store with a native conditional operation (SQL row version,
+     Redis WATCH, a DynamoDB ConditionExpression, GCS generation match, S3
+     If-Match) should implement the comparison there instead: no extra round
+     trips, and a stronger reach. The sidecar work is gated on a backing
+     declaring `:process`/`:machine`, so backings that declare nothing or
+     `:global` pay nothing for it.
+
      WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
      backing enforces the comparison in `konserve.impl.defaults/io-operation`:
      read the stored revision and write the new value while holding a local lock.
