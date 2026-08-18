@@ -519,7 +519,7 @@
   ;; :machine. `_lock` opens an exclusive `.lock` FILE, so a second process
   ;; attempting the same path fails and the compare-and-write is one step for
   ;; processes on this filesystem. Not beyond it.
-  (-conditional-write? [_] :machine)
+  (-conditional-write-domain [_] :machine)
 
   storage-layout/PBackingStore
   (-create-blob [_this store-key env]

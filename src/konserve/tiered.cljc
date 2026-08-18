@@ -5,7 +5,7 @@
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
-            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write? -revision
+            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write-domain -revision
                                                       -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc -assoc-serializers
@@ -182,7 +182,7 @@
    is the caller's, and the frontend's token would be meaningless to them.
 
    The BACKEND keeps the caller's opts: it is the store whose revisions
-   `-revision` reports and whose domain `-conditional-write?` advertises."
+   `-revision` reports and whose domain `-conditional-write-domain` advertises."
   [opts]
   ;; NOT `(dissoc opts ...)`: this namespace shadows `clojure.core/dissoc` with
   ;; the store operation, and `clojure.core/dissoc` cannot be written out in a
@@ -200,13 +200,13 @@
   ;;
   ;; `:frontend-only` is a read-through cache over a backend another peer owns; it
   ;; must not mutate it at all, let alone fence it.
-  (-conditional-write? [_]
+  (-conditional-write-domain [_]
     ;; The BACKEND's domain, because the backend is what decides the write. A
     ;; memory frontend over an S3 backend is :global; reporting the frontend's
     ;; :process would be exactly backwards.
     (when (= :write-through write-policy)
       (when (satisfies? PConditionalWrite backend-store)
-        (-conditional-write? backend-store))))
+        (-conditional-write-domain backend-store))))
   ;; ALWAYS the backend, never the read-policy's choice. The two tiers keep
   ;; INDEPENDENT revision counters — they are separate stores — so a revision read
   ;; from the frontend and compared against the backend compares two unrelated

@@ -181,7 +181,7 @@
   ;; the compare and the write are one step for processes sharing this filesystem.
   ;; NOT further: the lock file is local, so nothing coordinates two machines, and
   ;; advisory locks over NFS are not dependable.
-  (-conditional-write? [_] :machine)
+  (-conditional-write-domain [_] :machine)
   PBackingStore
   (-create-blob [_this store-key env]
     (let [{:keys [sync?]} env

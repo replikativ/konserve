@@ -269,6 +269,55 @@
    your store allows atomic transactions over both objects, e.g. using two
    columns in a SQL database.
 
+** Conditional writes
+   :PROPERTIES:
+   :CUSTOM_ID: h:1f4a0c62-3b7a-4f0e-9a5a-7a6c0d2b41e2
+   :END:
+   A write can be made conditional on the revision the caller read
+   (=:expected-revision=), so that concurrent writers cannot silently overwrite
+   each other. Implementing this is OPTIONAL, and a store that does not
+   implement it REFUSES the option rather than ignoring it — silently degrading
+   to an unconditional write is worse than having no fencing at all, because the
+   caller asked for a guarantee and got a knob that reads as handled.
+
+   To offer it, implement =PConditionalWrite/-conditional-write-domain= and
+   return how far your guarantee actually reaches:
+
+   - =:process= — atomic against other threads in this runtime.
+   - =:machine= — atomic against other processes on this host.
+   - =:global=  — atomic against every writer anywhere.
+
+   Return a DOMAIN and not a boolean, and return the one you can actually
+   defend. A caller planning two processes against a =:process= store, or two
+   machines against a =:machine= one, would otherwise believe it was fenced when
+   it was only serialized against a narrower set of writers.
+
+   *What the domain claims is a mechanism.* If you build on
+   =konserve.impl.defaults= you inherit its compare-and-write, which reads the
+   stored revision and writes under a local lock: that reaches =:machine= at
+   best, never =:global=. To claim =:global= your storage layer itself must
+   evaluate the precondition — konserve-s3 uses a conditional PUT (=If-Match= on
+   the object's ETag), which S3 evaluates.
+
+   *If you inherit the default backing*, note that a fenced key gets a sidecar
+   blob named =<store-key>.cas=. The lock lives there because konserve replaces
+   a value by renaming a new blob over it, which orphans a lock taken on the old
+   one; the sidecar is never renamed. It PERSISTS, so if your backend filters
+   its own key enumeration, skip that suffix — see
+   =konserve.impl.defaults/internal-artifact?=. A backend that enumerates it as
+   a key will hand it to =-handle-foreign-key=, i.e. the old-layout migration
+   path, and =k/keys= will throw from the first conditional write onwards.
+
+   *Verify the claim.* =konserve.compliance-test/conditional-write-compliance-test=
+   is the contract, and a store without the capability passes it by refusing;
+   =async-conditional-write-compliance-test= is the same contract for async-only
+   backends. Call one of them from your suite. The contract catches a backend
+   that declares a domain and does not implement the option — there is a test in
+   konserve that proves it does — but no single-process test can witness a
+   =:global= claim, which is an assertion about atomicity across machines. That
+   part rests on your storage layer, so claim it only if the storage layer is
+   what evaluates the precondition.
+
 * Migration
   :PROPERTIES:
   :CUSTOM_ID: h:6cd7020b-f14d-4feb-96b3-1db67c5cb7cb

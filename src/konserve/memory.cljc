@@ -3,7 +3,7 @@
    Does not support serialization."
   (:require [clojure.core.async :as async :refer [go <!]]
             [konserve.impl.defaults :as kd]
-            [konserve.protocols :refer [PConditionalWrite -conditional-write? -revision
+            [konserve.protocols :refer [PConditionalWrite -conditional-write-domain -revision
                                         PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
@@ -118,7 +118,7 @@
   ;; has no anyone else. Placed AFTER PEDNKeyValueStore's methods on purpose:
   ;; splitting a protocol's methods around another marker is silently tolerated on
   ;; the JVM and is a compile warning in ClojureScript, which is how this was found.
-  (-conditional-write? [_] :process)
+  (-conditional-write-domain [_] :process)
   (-revision [_ key opts]
     (async+sync (:sync? opts)
                 {go do}

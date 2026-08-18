@@ -71,8 +71,16 @@
    this must REFUSE `:expected-revision`, not ignore it. Silently degrading to an
    unconditional write is worse than having no fencing at all: the caller has
    asked for a guarantee, and would get a knob that reads as handled."
-  (-conditional-write? [this]
-    "How far this store's conditional writes actually reach, or nil for not at all:
+  (-conditional-write-domain [this]
+    "How far this store's conditional writes actually reach, or nil for not at all.
+
+     Named for what it RETURNS. It was `-conditional-write?` for a while, which
+     reads as a predicate to every backend author who has to implement it — and a
+     domain answered as if it were a boolean is the precise confusion this whole
+     protocol exists to prevent. `konserve.core/conditional-write?` keeps the `?`,
+     because that one really is a predicate: it compares a domain you need against
+     the domain a store has.
+
 
        nil       cannot compare-and-write; `:expected-revision` is REFUSED
        :process  atomic against other threads in this runtime  (memory: one `swap!`)

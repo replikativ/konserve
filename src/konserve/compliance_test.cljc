@@ -47,11 +47,11 @@
                      (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision :anything))))))
       (testing "conditional writes"
         (testing "create-if-absent succeeds on a missing key"
-          (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision konserve.impl.defaults/absent)))
+          (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision k/absent)))
           (is (= {:v 1} (<!! (k/get store k* nil opts)))))
 
         (testing "create-if-absent is rejected once the key exists"
-          (is (rejected? #(k/assoc store k* {:v :no} (assoc opts :expected-revision konserve.impl.defaults/absent)))))
+          (is (rejected? #(k/assoc store k* {:v :no} (assoc opts :expected-revision k/absent)))))
 
         (let [r0 (<!! (k/revision store k* opts))]
           (testing "a write on the revision we read succeeds and MOVES the revision"
@@ -85,7 +85,7 @@
             (is (= :missing (<!! (k/get store ghost :missing opts)))
                 "and reading it reports not-found rather than raising")
             (testing "so create-if-absent still succeeds afterwards"
-              (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision konserve.impl.defaults/absent)))
+              (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision k/absent)))
               (is (= {:v 1} (<!! (k/get store ghost nil opts)))))))
 
         ;; ENUMERATION MUST SURVIVE A FENCED WRITE. A backing may leave
@@ -408,12 +408,12 @@
               "an unsupported :expected-revision must come back as an error"))
         (testing "conditional writes"
           (is (not (rejected? (<! (k/assoc store :cas-async {:v 1}
-                                           {:expected-revision konserve.impl.defaults/absent}))))
+                                           {:expected-revision k/absent}))))
               "create-if-absent succeeds on a missing key")
           (is (= {:v 1} (<! (k/get store :cas-async nil))))
 
           (is (rejected? (<! (k/assoc store :cas-async {:v :no}
-                                      {:expected-revision konserve.impl.defaults/absent})))
+                                      {:expected-revision k/absent})))
               "create-if-absent is rejected once the key exists")
 
           (let [r0 (<! (k/revision store :cas-async))]
@@ -451,7 +451,7 @@
           (is (false? (<! (k/exists? store :cas-async-ghost)))
               "a rejected write on a missing key leaves the key missing")
           (is (not (rejected? (<! (k/assoc store :cas-async-ghost {:v 1}
-                                           {:expected-revision konserve.impl.defaults/absent}))))
+                                           {:expected-revision k/absent}))))
               "so create-if-absent still succeeds afterwards"))))))
 
 (defn async-compliance-test [store]

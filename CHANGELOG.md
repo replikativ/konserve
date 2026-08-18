@@ -10,7 +10,7 @@ All notable, user-visible changes to konserve are documented here.
   only if the stored revision is still that one, and otherwise raises
   `{:type :konserve/revision-mismatch}` having written nothing and — for
   `update-in` — WITHOUT running `up-fn`. Pass
-  `konserve.impl.defaults/absent` to mean "only if this key does not exist".
+  `konserve.core/absent` to mean "only if this key does not exist".
   `:with-revision? true` reports the revision a read saw or a write produced, so
   a fencing caller can chain writes without a re-read; on a read it returns
   `[value revision]`, on a write `[[old new] revision]`.

@@ -22,7 +22,7 @@
       logged, the caller was told the fenced write succeeded, and every later
       `:frontend-first` read returned the PRE-WRITE value indefinitely. Using the
       fence created the incoherence it exists to prevent, in the one configuration
-      `-conditional-write?` explicitly advertises as supported."
+      `-conditional-write-domain` explicitly advertises as supported."
      [frontend-store backend-store]
      (let [store (clojure.core.async/<!! (tiered/connect-tiered-store
                                           frontend-store backend-store

@@ -129,7 +129,7 @@
           ;; Same store, with a backing that fences in its own storage layer.
           global (clojure.core/assoc store :backing
                                      (reify konserve.protocols/PConditionalWrite
-                                       (-conditional-write? [_] :global)))]
+                                       (-conditional-write-domain [_] :global)))]
       (is (= :global (k/conditional-write-domain global))
           "a storage-layer fencer keeps its domain without konserve's lock")
       (delete-store folder))))

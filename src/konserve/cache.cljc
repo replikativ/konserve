@@ -99,7 +99,13 @@
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
-  not resolvable."
+  not resolvable.
+
+   `:with-revision?` is REFUSED here: a cached value carries no revision, so the
+   only answers available are to invent one or to silently miss the cache, and a
+   revision that is sometimes real and sometimes invented is worse than none —
+   it is the token a caller fences on. Use `konserve.core/get` on the same store,
+   which does not read through the cache. Conditional WRITES are supported."
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
@@ -119,7 +125,9 @@
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   See [[get-in]] on `:with-revision?`, which a cached read cannot answer."
   ([store key]
    (get store key nil))
   ([store key not-found]
@@ -136,7 +144,7 @@
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
    (log/trace :konserve/cache-update-in {:key-vec key-vec})
-   (core/check-conditional-supported!* store opts)
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -177,7 +185,7 @@
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
    (log/trace :konserve/cache-assoc-in {:key-vec key-vec})
-   (core/check-conditional-supported!* store opts)
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -205,7 +213,7 @@
    (assoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/cache-assoc {:key key})
-   (core/check-conditional-supported!* store opts)
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked

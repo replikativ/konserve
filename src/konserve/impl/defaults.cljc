@@ -12,7 +12,7 @@
                                              -serialize -deserialize
                                              PAssocSerializers
                                              PKeyIterable
-                                             PMultiKeySupport PConditionalWrite -conditional-write? -revision
+                                             PMultiKeySupport PConditionalWrite -conditional-write-domain -revision
                                              PMultiKeyEDNValueStore
                                              PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
@@ -427,7 +427,7 @@
           lock-based-fencing?
           (and (:lock-blob? config)
                (satisfies? protocols/PConditionalWrite backing)
-               (contains? #{:process :machine} (protocols/-conditional-write? backing)))]
+               (contains? #{:process :machine} (protocols/-conditional-write-domain backing)))]
       (cond
         ;; Read-first (PReadMissSafe): no existence probe — read the blob and
         ;; treat an absent key (store-key-not-found-ex) as the caller's
@@ -967,7 +967,7 @@
   ;; processes on one filesystem. NOT across machines: the lock file is local.
   ;; A backing without `:lock-blob?` serializes nothing, so it cannot honour the
   ;; contract and must say so.
-  (-conditional-write? [_]
+  (-conditional-write-domain [_]
     ;; ASK THE BACKING, do not infer from `:lock-blob?`. That flag says a lock is
     ;; requested, not that one exists: konserve's IndexedDB backing sets it and
     ;; implements `-get-lock` as a NO-OP ("the alternative is to overwrite
@@ -976,7 +976,7 @@
     ;; the lie this capability exists to prevent. A backing that does not declare a
     ;; domain gets none, and `:expected-revision` is refused.
     (let [declared (when (satisfies? protocols/PConditionalWrite backing)
-                     (protocols/-conditional-write? backing))]
+                     (protocols/-conditional-write-domain backing))]
       ;; WHICH MECHANISM the domain rests on decides whether `:lock-blob?` can
       ;; revoke it, and the domain itself says which:
       ;;
