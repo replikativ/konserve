@@ -12,7 +12,7 @@
                                              -serialize -deserialize
                                              PAssocSerializers
                                              PKeyIterable
-                                             PMultiKeySupport PConditionalWrite -conditional-write-domain -revision
+                                             PMultiKeySupport PConditionalWrite
                                              PMultiKeyEDNValueStore
                                              PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
