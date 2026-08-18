@@ -594,34 +594,44 @@
                                 ;; the race in the cleanup together.
                                 skip-blob? (and expected-revision (not exists-under-lock?))
                                 blob (when-not skip-blob?
-                                       (<?- (-create-blob backing store-key env)))
-                                lock (when (and blob (:lock-blob? config))
-                                       (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                                       (<?- (get-lock blob (first key-vec) env)))]
+                                       (<?- (-create-blob backing store-key env)))]
+                            ;; The value blob gets the same treatment as the
+                            ;; sidecar, one level down, and for the same reason: it
+                            ;; was opened in a `let` binding and closed in a
+                            ;; `finally` below the lock acquisition, so a `get-lock`
+                            ;; that threw — about a second of contention is enough —
+                            ;; leaked the handle. Measured one file descriptor per
+                            ;; failed attempt, which is a slow EMFILE for a process
+                            ;; that retries. Fixing this at the sidecar and not here
+                            ;; was an incomplete fix, not a different bug.
                             (try
-                              (let [old (cond
+                              (let [lock (when (and blob (:lock-blob? config))
+                                           (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                                           (<?- (get-lock blob (first key-vec) env)))]
+                                (try
+                                  (let [old (cond
                                           ;; A FENCED write decides from the existence
                                           ;; probe taken UNDER the lock, not from the
                                           ;; pre-lock one.
-                                          expected-revision
-                                          (if exists-under-lock?
-                                            (<?- (read-blob blob read-handlers serializers env))
-                                            [nil nil])
+                                              expected-revision
+                                              (if exists-under-lock?
+                                                (<?- (read-blob blob read-handlers serializers env))
+                                                [nil nil])
                                           ;; full overwrite never needs the old value
-                                          overwrite? [nil nil]
+                                              overwrite? [nil nil]
                                           ;; miss-safe non-overwrite write: no probe was done, so
                                           ;; read-first and treat an absent key as a fresh write.
-                                          skip-write-probe?
-                                          (try (<?- (read-blob blob read-handlers serializers env))
-                                               (catch #?(:clj Exception :cljs js/Error) e
-                                                 (if (store-key-not-found? e) [nil nil] (throw e))))
+                                              skip-write-probe?
+                                              (try (<?- (read-blob blob read-handlers serializers env))
+                                                   (catch #?(:clj Exception :cljs js/Error) e
+                                                     (if (store-key-not-found? e) [nil nil] (throw e))))
                                           ;; probe said the key exists (or this is a retry): read old
-                                          (or store-key-exists? (pos? attempt))
-                                          (<?- (read-blob blob read-handlers serializers env))
-                                          :else [nil nil])]
-                                (when expected-revision
-                                  (check-revision! key expected-revision (first old)))
-                                (if write-op?
+                                              (or store-key-exists? (pos? attempt))
+                                              (<?- (read-blob blob read-handlers serializers env))
+                                              :else [nil nil])]
+                                    (when expected-revision
+                                      (check-revision! key expected-revision (first old)))
+                                    (if write-op?
                                   ;; The meta is computed ONCE and the same value is both
                                   ;; written and reported. Calling the meta-fn a second time
                                   ;; to learn the revision was correct only while the
@@ -630,18 +640,19 @@
                                   ;; revision that had never been stored — and every chained
                                   ;; fenced write then failed against a head nobody else had
                                   ;; touched. Measured 60/60 wrong before this.
-                                  (let [new-meta (when (:with-revision? env)
-                                                   ((:up-fn-meta env) (first old)))
-                                        env      (cond-> env new-meta (assoc :up-fn-meta (constantly new-meta)))
-                                        res      (<?- (update-blob backing store-key serializer write-handlers env old))]
-                                    (if new-meta
-                                      [res (:revision new-meta)]
-                                      res))
-                                  old))
+                                      (let [new-meta (when (:with-revision? env)
+                                                       ((:up-fn-meta env) (first old)))
+                                            env      (cond-> env new-meta (assoc :up-fn-meta (constantly new-meta)))
+                                            res      (<?- (update-blob backing store-key serializer write-handlers env old))]
+                                        (if new-meta
+                                          [res (:revision new-meta)]
+                                          res))
+                                      old))
+                                  (finally
+                                    (when lock
+                                      (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
+                                      (<?- (-release lock env))))))
                               (finally
-                                (when lock
-                                  (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                                  (<?- (-release lock env)))
                                 (when blob (<?- (-close blob env))))))
                           (finally
                             (when cas-lock (<?- (-release cas-lock env))))))
