@@ -24,6 +24,52 @@
   ([store cache]
    (clojure.core/assoc store :cache cache)))
 
+(defn- refuse-revision-read!
+  "A cached read cannot report a revision, so it says so instead of guessing.
+
+   A cache HIT has no revision — only the value was stored — so the only answers
+   available are to invent one or to silently miss the cache, and a revision that
+   is sometimes real and sometimes invented is worse than no revision at all: it
+   is the token a caller fences on. `konserve.core/get` takes the same store and
+   does not consult the cache, which is the right call for a fencing read."
+  [opts]
+  (when (:with-revision? opts)
+    (throw (ex-info (str ":with-revision? is not supported on a cached read — a cached value carries "
+                         "no revision. Use konserve.core/get on the same store, which does not read "
+                         "through the cache.")
+                    {:type :konserve/with-revision-unsupported-on-cache}))))
+
+(defn- split-revision
+  "konserve answers a write with `[old new]`, or with `[[old new] revision]` when
+   the caller asked `:with-revision? true`. Normalise to `[[old new] revision]`.
+
+   Without this the cache destructured the revision-bearing shape as if it were
+   the plain one, so `old-val` became `[old new]` and `new-val` became the
+   REVISION — which was then written into the cache as the key's value. Every
+   later cached read of that key returned a revision token where the caller
+   expected their data."
+  [res opts]
+  (if (:with-revision? opts) res [res nil]))
+
+(defn- revision-result [old-val new-val revision opts]
+  (if (:with-revision? opts) [[old-val new-val] revision] [old-val new-val]))
+
+(defn- evict-on-conflict!
+  "Drop `key` from the cache when `e` is a revision mismatch, then rethrow.
+
+   A mismatch is PROOF that the key moved under us, so it is the one moment the
+   cached value is known to be wrong — and it was the one moment nothing was
+   evicted, because the eviction sits after the write and a rejection propagates
+   first. A read-then-CAS retry loop over this namespace could never converge: it
+   re-read the same stale value from the cache and rebuilt the same doomed write.
+
+   Takes the throwable rather than a thunk: the write parks on `<?-`, which is
+   what raises, and a parking take cannot live inside a nested fn in a go block."
+  [cache key e]
+  (when (= :konserve/revision-mismatch (:type (ex-data e)))
+    (swap! cache cache/evict key))
+  (throw e))
+
 (defn- read-through [store key opts]
   (async+sync
    (:sync? opts)
@@ -53,13 +99,20 @@
 
 (defn get-in
   "Returns the value stored described by key-vec or nil if the path is
-  not resolvable."
+  not resolvable.
+
+   `:with-revision?` is REFUSED here: a cached value carries no revision, so the
+   only answers available are to invent one or to silently miss the cache, and a
+   revision that is sometimes real and sometimes invented is worse than none —
+   it is the token a caller fences on. Use `konserve.core/get` on the same store,
+   which does not read through the cache. Conditional WRITES are supported."
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
    (get-in store key-vec not-found {:sync? false}))
   ([store key-vec not-found opts]
    (log/trace :konserve/cache-get-in {:key-vec key-vec})
+   (refuse-revision-read! opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -72,7 +125,9 @@
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   See [[get-in]] on `:with-revision?`, which a cached read cannot answer."
   ([store key]
    (get store key nil))
   ([store key not-found]
@@ -89,13 +144,18 @@
    (update-in store key-vec up-fn {:sync? false}))
   ([store key-vec up-fn opts]
    (log/trace :konserve/cache-update-in {:key-vec key-vec})
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old-val new-val] (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (try (<?- (-update-in store key-vec (partial meta-update (first key-vec) :edn) up-fn opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -105,7 +165,7 @@
                                               :key-vec key-vec
                                               :old-value old-val
                                               :value new-val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn update
@@ -125,13 +185,18 @@
    (assoc-in store key-vec val {:sync? false}))
   ([store key-vec val opts]
    (log/trace :konserve/cache-assoc-in {:key-vec key-vec})
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [cache (:cache store)
                       key (first key-vec)
-                      [old-val new-val] (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (try (<?- (-assoc-in store key-vec (partial meta-update key :edn) val opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -140,7 +205,7 @@
                                               :key key
                                               :key-vec key-vec
                                               :value val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 (defn assoc
   "Associates the key to the value. This is a simple top-level overwrite."
@@ -148,6 +213,7 @@
    (assoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/cache-assoc {:key key})
+   (core/check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -156,7 +222,11 @@
                 ;; :assoc-in we'd inherit by delegating to assoc-in — so hook
                 ;; consumers see the same op label as the non-cache API.
                 (let [cache (:cache store)
-                      [old-val new-val] (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                      [[old-val new-val] revision] (split-revision
+                                                    (try (<?- (-assoc-in store [key] (partial meta-update key :edn) val opts))
+                                                         (catch #?(:clj Exception :cljs js/Error) e
+                                                           (evict-on-conflict! cache key e)))
+                                                    opts)
                       had-key? (cache/has? @cache key)]
                   (swap! cache cache/evict key)
                   (when had-key?
@@ -164,7 +234,7 @@
                   (invoke-write-hooks! store {:api-op :assoc
                                               :key key
                                               :value val})
-                  [old-val new-val])))))
+                  (revision-result old-val new-val revision opts))))))
 
 (defn dissoc
   "Removes an entry from the store. "
@@ -172,6 +242,10 @@
    (dissoc store key {:sync? false}))
   ([store key opts]
    (log/trace :konserve/cache-dissoc {:key key})
+   ;; `konserve.core/dissoc` refuses this; the cached twin silently DELETED the
+   ;; key instead — verbatim the failure the capability exists to remove, and
+   ;; reachable by anyone who wraps their store in a cache.
+   (core/refuse-conditional-unsupported! "dissoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked

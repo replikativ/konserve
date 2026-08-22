@@ -8,6 +8,7 @@
             [konserve.impl.defaults :as d]
             [konserve.node-filestore :as filestore :refer [connect-fs-store]]
             [konserve.protocols :as p]
+            [konserve.compliance-test :refer [conditional-write-compliance-test]]
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
             [konserve.tests.gc :as gct]
@@ -107,7 +108,17 @@
     (is (= [nil 42] (k/assoc-in store [:value-blob] 42 opts)))
     (is (true? (k/bassoc store :bin-blob #js[255 255 255] opts)))
     (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
-           (set (map #(dissoc % :last-write) (k/keys store opts)))))))
+           (set (map #(dissoc % :last-write :revision) (k/keys store opts)))))))
+
+(deftest node-filestore-conditional-write-test
+  ;; node-filestore answers `:machine`, and an unenforced claim is exactly what
+  ;; the capability exists to prevent. Worth knowing what backs it here: node has
+  ;; no `FileLock`, so the cross-process mechanism is an O_EXCL `.lock` FILE.
+  ;; Exclusive create is atomic on a local filesystem, so the claim holds — but
+  ;; the failure mode differs from the JVM filestore's OS advisory lock, which
+  ;; the kernel releases when a process dies. A lockfile does not: a crashed
+  ;; writer leaves a stale `.lock` that blocks every later one.
+  (conditional-write-compliance-test (connect-fs-store store-path :opts {:sync? true})))
 
 (deftest PKeyIterable-async-test
   (async done
@@ -118,7 +129,7 @@
              (is (= [nil 42] (<! (k/assoc-in store [:value-blob] 42 opts))))
              (is (true? (<! (k/bassoc store :bin-blob #js[255 255 255] opts))))
              (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
-                    (set (map #(dissoc % :last-write) (<! (k/keys store opts))))))
+                    (set (map #(dissoc % :last-write :revision) (<! (k/keys store opts))))))
              (is (every? inst? (map :last-write (<! (k/keys store opts)))))
              (done)))))
 

@@ -7,14 +7,14 @@
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor null-compressor]]
    [konserve.encryptor :refer [get-encryptor null-encryptor]]
-   [konserve.protocols :refer [PEDNKeyValueStore
-                               PBinaryKeyValueStore
-                               -serialize -deserialize
-                               PAssocSerializers
-                               PKeyIterable
-                               PMultiKeySupport
-                               PMultiKeyEDNValueStore
-                               PWriteHookStore]]
+   [konserve.protocols :as protocols :refer [PEDNKeyValueStore
+                                             PBinaryKeyValueStore
+                                             -serialize -deserialize
+                                             PAssocSerializers
+                                             PKeyIterable
+                                             PMultiKeySupport PConditionalWrite
+                                             PMultiKeyEDNValueStore
+                                             PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
    [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store
                                          -copy -create-blob -delete-blob -blob-exists?
@@ -211,6 +211,27 @@
                             value     (fn-read bais-value)
                             _          (.close bais-value)]
                         [meta value]))
+        ;; Both segments, from the one pass the blob is already open for. The
+        ;; write path has always done this (`:write-edn` below); a READ needs it
+        ;; so a caller can obtain a value AND the revision it is at without a
+        ;; second round-trip — which on a remote store is an extra GET, and worse,
+        ;; is RACY: between reading the value and reading its revision another
+        ;; writer can move both, and the caller would fence against a revision
+        ;; that never belonged to the value it computed from.
+        :read-edn-meta #?(:cljs
+                          (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
+                                value (fn-read (<?- (-read-value blob meta-size env)))]
+                            [meta value])
+                          :clj
+                          (let [bais-meta  (ByteArrayInputStream.
+                                            (<?- (-read-meta blob meta-size env)))
+                                meta       (fn-read bais-meta)
+                                _          (.close bais-meta)
+                                bais-value (ByteArrayInputStream.
+                                            (<?- (-read-value blob meta-size env)))
+                                value      (fn-read bais-value)
+                                _          (.close bais-value)]
+                            [meta value]))
         :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (defn delete-blob
@@ -251,6 +272,71 @@
   remote backends such as S3)."
   #?(:clj (Object.) :cljs (js-obj)))
 
+(def absent
+  "The `:expected-revision` that means THE KEY MUST NOT EXIST — the create half of
+   a conditional write. Distinct from `nil`, which means \"unconditional\": a
+   caller that passed nil for \"I read nothing there\" would silently get an
+   unconditional overwrite, which is the failure this whole mechanism exists to
+   remove."
+  ::absent)
+
+(def ^:const cas-lock-suffix
+  "Suffix of the sidecar blob a FENCED write takes its lock on.
+
+   Its own blob rather than the value's because a lock lives on an INODE, and the
+   write replaces the value blob by rename — which orphans a lock taken on it, so
+   two writers could each hold a lock on a different inode and both believe they
+   were serialized. The sidecar is never renamed, so it is a stable thing to lock.
+
+   It therefore PERSISTS after the write, and must be recognised as konserve's own
+   bookkeeping wherever store keys are enumerated. See `internal-artifact?`."
+  ".cas")
+
+(defn internal-artifact?
+  "Is `store-key` konserve's own bookkeeping rather than a stored value?
+
+   `.new` and `.backup` are transient write artifacts; `.cas` is the fenced-write
+   lock sidecar, which is permanent.
+
+   This matters more than it looks. An unrecognised name falls through to
+   `-handle-foreign-key`, whose job is to migrate a value written in an older
+   layout — so the sidecar was read as if it were a value, and `k/keys` (and
+   `konserve.gc/sweep!` through it) THREW from the first fenced write onwards, on
+   every default-backing store, permanently: the file is not transient and
+   `dissoc`ing the key does not remove it. Backends that filter enumeration
+   themselves must include this suffix too."
+  [store-key]
+  (or (ends-with? store-key ".new")
+      (ends-with? store-key ".backup")
+      (ends-with? store-key cas-lock-suffix)))
+
+(defn check-revision!
+  "Throw unless the stored revision is the one the caller derived its value from.
+
+   `old-meta` is nil when the key does not exist. The comparison is `=` on an
+   OPAQUE token: for this backing it is an integer counter kept in the metadata,
+   for others it can be whatever their storage gives (an S3 ETag, a row version).
+   Callers must treat it as opaque and pass back what they read.
+
+   A key never written since revisions were introduced has no `:revision`, so it
+   reads as nil and a caller that read nil and passes nil back still matches."
+  [key expected old-meta]
+  (when (and (some? old-meta) (not (contains? old-meta :revision)))
+    ;; Written before revisions existed. There is no token to compare, so there
+    ;; is no way to tell whether it changed — and answering "unchanged" would let
+    ;; the caller overwrite a value it never saw. Refuse; one unconditional write
+    ;; gives the key a revision and it is fenceable from then on.
+    (throw (ex-info "This value predates revisions, so a conditional write cannot be evaluated against it. Write it once unconditionally to give it a revision."
+                    {:type :konserve/revision-unavailable
+                     :key  key})))
+  (let [actual (if (nil? old-meta) absent (:revision old-meta))]
+    (when-not (= expected actual)
+      (throw (ex-info "Conditional write rejected: the stored revision is not the one this value was derived from."
+                      {:type     :konserve/revision-mismatch
+                       :key      key
+                       :expected expected
+                       :actual   actual})))))
+
 (defn get-lock [this store-key env]
   (async+sync
    (:sync? env)
@@ -284,16 +370,24 @@
 (defn io-operation
   "Read/Write blob. For better understanding use the flow-chart of konserve."
   [{:keys [backing]} serializers read-handlers write-handlers
-   {:keys [key-vec operation default-serializer sync? overwrite? config] :as env}]
+   {:keys [key-vec operation default-serializer sync? config expected-revision] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
     (let [key           (first  key-vec)
+          ;; A CONDITIONAL write has to see the old value to compare against it,
+          ;; so it cannot take the full-overwrite shortcut that skips the read.
+          ;; Cleared here rather than at every call site: `assoc` sets
+          ;; `:overwrite? true` for any top-level key, which is exactly the shape
+          ;; a fenced pointer write has.
+          overwrite?    (and (:overwrite? env) (nil? expected-revision))
+          env           (assoc env :overwrite? overwrite?)
           store-key     (key->store-key key)
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           migration-key (<?- (-migratable backing key store-key env))
-          read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation))
+          read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation)
+                            (= :read-edn-meta operation))
           write-op?     (or (= :write-edn operation) (= :write-binary operation))
           ;; A PReadMissSafe backing reports an absent key cleanly from the read
           ;; itself (an absent key throws store-key-not-found-ex), so the
@@ -317,7 +411,27 @@
                             skip-write-probe?)
           store-key-exists? (when-not skip-exists?
                               (<?- (-blob-exists? backing store-key env)))
-          max-retries (get-in config [:optimistic-locking-retries] 0)]
+          max-retries (get-in config [:optimistic-locking-retries] 0)
+          ;; WHO NEEDS THE SIDECAR AT ALL. Only a backing that does NOT fence
+          ;; itself, and therefore needs konserve to provide the mechanism: the
+          ;; compare-and-write in this function, made atomic by a lock.
+          ;;
+          ;; Asked as a mechanism question, not inferred from the domain. The
+          ;; domain says how far a guarantee reaches, which is a different thing
+          ;; from who evaluates it — see `PSelfConditionalWrite`, where the cases
+          ;; that broke the old inference are written out.
+          ;;
+          ;; The cost of getting this wrong is not only tidiness. The probe below
+          ;; is an existence check, and on a `PReadMissSafe` backing that is
+          ;; exactly the round trip the read-miss-safe design exists to remove — a
+          ;; billed HEAD on every write to S3, a `.getKey` transaction on every
+          ;; write to IndexedDB — plus a sidecar blob written into a storage layer
+          ;; that has no use for one.
+          lock-based-fencing?
+          (and (:lock-blob? config)
+               (satisfies? protocols/PConditionalWrite backing)
+               (some? (protocols/-conditional-write-domain backing))
+               (not (satisfies? protocols/PSelfConditionalWrite backing)))]
       (cond
         ;; Read-first (PReadMissSafe): no existence probe — read the blob and
         ;; treat an absent key (store-key-not-found-ex) as the caller's
@@ -325,7 +439,30 @@
         ;; genuinely stored nil still comes back as nil (the read succeeds),
         ;; distinct from the not-found sentinel.
         skip-read-probe?
-        (let [blob (<?- (-create-blob backing store-key env))
+        ;; A REVISION-BEARING READ takes the sidecar too, for two reasons.
+        ;;
+        ;; It makes the read ATOMIC against writers: the caller is reading a
+        ;; value and the token they will fence its successor on, and those two
+        ;; must come from the same state — reading them across another writer's
+        ;; rename would hand back a revision that never belonged to the value.
+        ;;
+        ;; And it makes the key FENCEABLE from the first read rather than the
+        ;; first write, which is what closes the residual window in the scheme
+        ;; described at `cas-blob` below: a caller that re-reads a pointer before
+        ;; each commit (datahike re-reads the branch head) has the sidecar in
+        ;; place before it ever issues a conditional write, so unconditional
+        ;; writers are excluded from that point on.
+        (let [cas-store-key (str store-key cas-lock-suffix)
+              ;; `:read-edn-meta` IS the revision-bearing read — `-get-in` selects
+              ;; that operation for `:with-revision? true` and does not forward the
+              ;; flag itself, so testing the operation is both correct and the only
+              ;; thing available here.
+              cas-blob (when (and (= :read-edn-meta operation) lock-based-fencing?)
+                         (<?- (-create-blob backing cas-store-key env)))
+              cas-lock (when cas-blob
+                         (log/trace :konserve/acquiring-cas-lock {:key key})
+                         (<?- (get-lock cas-blob (first key-vec) env)))
+              blob (<?- (-create-blob backing store-key env))
               lock (when (:lock-blob? config)
                      (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
                      (<?- (get-lock blob (first key-vec) env)))]
@@ -337,7 +474,10 @@
               (when (:lock-blob? config)
                 (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
                 (<?- (-release lock env)))
-              (<?- (-close blob env)))))
+              (<?- (-close blob env))
+              (when cas-lock
+                (<?- (-release cas-lock env))
+                (<?- (-close cas-blob env))))))
 
         (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
@@ -347,33 +487,187 @@
         (loop [attempt 0]
           (let [result
                 (try
-                  (let [blob (<?- (-create-blob backing store-key env))
-                        lock   (when (:lock-blob? config)
-                                 (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                                 (<?- (get-lock blob (first key-vec) env)))]
+                  (let [;; A FENCED write serializes on a SIDECAR whose inode never
+                        ;; moves, acquired BEFORE the blob is even opened.
+                        ;;
+                        ;; The blob lock alone cannot do this. It is held on an
+                        ;; INODE, and a non-in-place write replaces the file by
+                        ;; rename — so a writer that opened the blob, waited for the
+                        ;; lock, and found the file renamed underneath it holds a
+                        ;; lock on an orphan and reads stale metadata. Its compare
+                        ;; then passes against content that already changed.
+                        ;; Reproduced exactly that way from two JVMs: both writers
+                        ;; fenced on one revision, both succeeded, the first write
+                        ;; was lost.
+                        ;;
+                        ;; Writing IN PLACE would also keep the inode stable, and
+                        ;; was tried — but it gives up the atomic rename, and a torn
+                        ;; write to a mutable POINTER is a corrupt database. That is
+                        ;; a worse failure than the race, so the pointer keeps its
+                        ;; rename and the exclusion moves to a file that has none.
+                        ;;
+                        ;; One extra object per FENCED key, not per key: fencing is
+                        ;; for mutable pointers (a branch head), of which there are
+                        ;; a handful, not for the content-addressed values that make
+                        ;; up the bulk of a store.
+                        cas-store-key (str store-key cas-lock-suffix)
+                        ;; WHO TAKES THE SIDECAR. Every write to a FENCEABLE key,
+                        ;; not merely every fenced write — otherwise the lock
+                        ;; excludes the wrong set of writers and the guarantee is
+                        ;; not what `:machine` says.
+                        ;;
+                        ;; An unconditional write renames a NEW inode over this
+                        ;; key. A fenced write that opened the old inode before
+                        ;; taking its lock then holds a lock on a DETACHED file,
+                        ;; reads the pre-write value through it, compares the
+                        ;; revision against that, PASSES, and renames its own
+                        ;; result over the top. The fence does not merely fail to
+                        ;; exclude the other writer: it grants a false pass and
+                        ;; loses their committed value. (S3 does not have this
+                        ;; problem — If-Match is evaluated by S3 at write time, so
+                        ;; an intervening unconditional PUT correctly REJECTS the
+                        ;; fenced write. Without this the filestore would be
+                        ;; strictly weaker than S3 under the same API.)
+                        ;;
+                        ;; A key is fenceable once a sidecar exists for it, and
+                        ;; only fenced writes and revision-bearing reads create
+                        ;; one. So the cost stays where the original design put
+                        ;; it: mutable pointers, of which a store has a handful,
+                        ;; pay an extra file; the content-addressed values that
+                        ;; make up the bulk of a store pay one `exists?` probe
+                        ;; (~1us against a ~200us write) and no extra file at all.
+                        ;;
+                        ;; RESIDUAL, and it is worth stating: the FIRST fenced
+                        ;; write to a key can still race an unconditional one,
+                        ;; because that probe misses until the sidecar exists. It
+                        ;; is self-healing — once created, the hole is closed for
+                        ;; that key forever — and revision-bearing reads create it
+                        ;; too, so a reader that fences (datahike re-reads the
+                        ;; branch head before every commit) closes it before its
+                        ;; first write.
+                        cas-blob (when (and lock-based-fencing?
+                                            (or (some? expected-revision)
+                                                (= :read-edn-meta operation)
+                                                (<?- (-blob-exists? backing cas-store-key env))))
+                                   (<?- (-create-blob backing cas-store-key env)))]
+                    ;; THREE NESTED try/finally, one per thing acquired, because a
+                    ;; `let` binding that throws skips every `finally` written
+                    ;; below it. The sidecar used to be taken up here and released
+                    ;; in the innermost `finally`, so anything that threw in
+                    ;; between — an IOException opening the value blob, the
+                    ;; existence probe, `get-lock` giving up after ~1s of
+                    ;; contention — leaked a `FileLock`. That lock is held by the
+                    ;; OS on behalf of the whole JVM, so ONE transient error made
+                    ;; the key unreadable and unwritable for every process on the
+                    ;; machine until this one exited. Reads take the sidecar too,
+                    ;; so a branch head would simply stop responding.
                     (try
-                      (let [old (cond
-                                  ;; full overwrite never needs the old value
-                                  overwrite? [nil nil]
-                                  ;; miss-safe non-overwrite write: no probe was done, so
-                                  ;; read-first and treat an absent key as a fresh write.
-                                  skip-write-probe?
-                                  (try (<?- (read-blob blob read-handlers serializers env))
-                                       (catch #?(:clj Exception :cljs js/Error) e
-                                         (if (store-key-not-found? e) [nil nil] (throw e))))
-                                  ;; probe said the key exists (or this is a retry): read old
-                                  (or store-key-exists? (pos? attempt))
-                                  (<?- (read-blob blob read-handlers serializers env))
-                                  :else [nil nil])]
-                        (if write-op?
-                          (<?- (update-blob backing store-key serializer write-handlers env old))
-                          old))
+                      (let [cas-lock (when cas-blob
+                                       (log/trace :konserve/acquiring-cas-lock {:key key})
+                                       (<?- (get-lock cas-blob (first key-vec) env)))]
+                        (try
+                          ;; Probed HERE, under the cas lock, because `-create-blob`
+                          ;; creates the file: after it, "does this key exist" can no
+                          ;; longer be asked. The pre-lock probe is not evidence
+                          ;; either — a competing create can land between it and the
+                          ;; lock, and trusting it would let a create-if-absent see
+                          ;; ::absent and overwrite the other create.
+                          (let [exists-under-lock? (when expected-revision
+                                                     (<?- (-blob-exists? backing store-key env)))
+                                ;; NOTHING TO READ MEANS NOTHING TO CREATE. A fenced
+                                ;; write to a key that does not exist either fails its
+                                ;; check (no revision to match) or is a create, and
+                                ;; `update-blob` makes its own blob either way — so
+                                ;; opening this one would only produce an empty file
+                                ;; we might never write.
+                                ;;
+                                ;; That empty file was the "ghost", and the cleanup
+                                ;; written to remove it deleted BY PATH: on a backing
+                                ;; that takes no sidecar (every `:global` one, where
+                                ;; `lock-based-fencing?` is false) it ran unlocked and
+                                ;; unlinked whatever was at the path — which is the
+                                ;; winner's value in an ordinary create-if-absent
+                                ;; race. Reproduced against MinIO: 10 of 10 keys, one
+                                ;; peer told its fenced write SUCCEEDED and the key
+                                ;; then missing. Worse on S3 than on a filestore,
+                                ;; because there `-create-blob` writes nothing
+                                ;; remotely, so there was never a ghost to collect and
+                                ;; the delete was pure destruction.
+                                ;;
+                                ;; Not creating it retires the ghost, the cleanup, and
+                                ;; the race in the cleanup together.
+                                skip-blob? (and expected-revision (not exists-under-lock?))
+                                blob (when-not skip-blob?
+                                       (<?- (-create-blob backing store-key env)))]
+                            ;; The value blob gets the same treatment as the
+                            ;; sidecar, one level down, and for the same reason: it
+                            ;; was opened in a `let` binding and closed in a
+                            ;; `finally` below the lock acquisition, so a `get-lock`
+                            ;; that threw — about a second of contention is enough —
+                            ;; leaked the handle. Measured one file descriptor per
+                            ;; failed attempt, which is a slow EMFILE for a process
+                            ;; that retries. Fixing this at the sidecar and not here
+                            ;; was an incomplete fix, not a different bug.
+                            (try
+                              (let [lock (when (and blob (:lock-blob? config))
+                                           (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                                           (<?- (get-lock blob (first key-vec) env)))]
+                                (try
+                                  (let [old (cond
+                                          ;; A FENCED write decides from the existence
+                                          ;; probe taken UNDER the lock, not from the
+                                          ;; pre-lock one.
+                                              expected-revision
+                                              (if exists-under-lock?
+                                                (<?- (read-blob blob read-handlers serializers env))
+                                                [nil nil])
+                                          ;; full overwrite never needs the old value
+                                              overwrite? [nil nil]
+                                          ;; miss-safe non-overwrite write: no probe was done, so
+                                          ;; read-first and treat an absent key as a fresh write.
+                                              skip-write-probe?
+                                              (try (<?- (read-blob blob read-handlers serializers env))
+                                                   (catch #?(:clj Exception :cljs js/Error) e
+                                                     (if (store-key-not-found? e) [nil nil] (throw e))))
+                                          ;; probe said the key exists (or this is a retry): read old
+                                              (or store-key-exists? (pos? attempt))
+                                              (<?- (read-blob blob read-handlers serializers env))
+                                              :else [nil nil])]
+                                    (when expected-revision
+                                      (check-revision! key expected-revision (first old)))
+                                    (if write-op?
+                                  ;; The meta is computed ONCE and the same value is both
+                                  ;; written and reported. Calling the meta-fn a second time
+                                  ;; to learn the revision was correct only while the
+                                  ;; revision was a counter derived from `old`; a minted
+                                  ;; token differs on every call, so the caller was handed a
+                                  ;; revision that had never been stored — and every chained
+                                  ;; fenced write then failed against a head nobody else had
+                                  ;; touched. Measured 60/60 wrong before this.
+                                      (let [new-meta (when (:with-revision? env)
+                                                       ((:up-fn-meta env) (first old)))
+                                            env      (cond-> env new-meta (assoc :up-fn-meta (constantly new-meta)))
+                                            res      (<?- (update-blob backing store-key serializer write-handlers env old))]
+                                        (if new-meta
+                                          [res (:revision new-meta)]
+                                          res))
+                                      old))
+                                  (finally
+                                    (when lock
+                                      (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
+                                      (<?- (-release lock env))))))
+                              (finally
+                                (when blob (<?- (-close blob env))))))
+                          (finally
+                            (when cas-lock (<?- (-release cas-lock env))))))
                       (finally
-                        (when (:lock-blob? config)
-                          (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                          (<?- (-release lock env)))
-                        (<?- (-close blob env)))))
+                        (when cas-blob (<?- (-close cas-blob env))))))
                   (catch #?(:clj Exception :cljs js/Error) e
+                    ;; DELIBERATELY not retried: `:konserve/revision-mismatch`.
+                    ;; That conflict belongs to the CALLER — retrying would re-run
+                    ;; `up-fn` against a value they never agreed to, which is the
+                    ;; silent drift `:expected-revision` exists to prevent. Only a
+                    ;; backend's own internal lock contention is retried here.
                     (if (and (pos? max-retries)
                              (= :optimistic-lock-conflict (:type (ex-data e)))
                              (< attempt max-retries))
@@ -404,8 +698,7 @@
              [store-key & store-keys] store-keys]
         (if store-key
           (cond
-            (or (ends-with? store-key ".new")
-                (ends-with? store-key ".backup"))
+            (internal-artifact? store-key)
             (recur keys store-keys)
 
             (ends-with? store-key ".ksv")
@@ -508,7 +801,7 @@
             (<?- (-migratable backing key store-key env))
             false)))))
   (-get-in [this key-vec not-found opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? with-revision?]} opts]
       (async+sync
        sync?
        *default-sync-translation*
@@ -520,7 +813,7 @@
         (let [a (<?-
                  (io-operation this serializers read-handlers write-handlers
                                {:key-vec key-vec
-                                :operation :read-edn
+                                :operation (if with-revision? :read-edn-meta :read-edn)
                                 :compressor compressor
                                 :encryptor encryptor
                                 :format    :data
@@ -532,9 +825,16 @@
                                 :not-found not-found-sentinel
                                 :msg       {:type :read-edn-error
                                             :key  key}}))]
-          (if (identical? a not-found-sentinel)
-            not-found
-            (clojure.core/get-in a (rest key-vec))))))))
+          (if with-revision?
+            ;; [value revision] — the absent key reports the absent sentinel as its
+            ;; revision, which is exactly what a create-if-absent write expects.
+            (if (identical? a not-found-sentinel)
+              [not-found absent]
+              (let [[meta value] a]
+                [(clojure.core/get-in value (rest key-vec)) (:revision meta)]))
+            (if (identical? a not-found-sentinel)
+              not-found
+              (clojure.core/get-in a (rest key-vec)))))))))
   (-get-meta [this key opts]
     (let [{:keys [sync?]} opts]
       (io-operation this serializers read-handlers write-handlers
@@ -551,7 +851,7 @@
                                  :key  key}})))
 
   (-assoc-in [this key-vec meta-up val opts]
-    (let [{:keys [sync?]} opts
+    (let [{:keys [sync? expected-revision with-revision?]} opts
           key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
@@ -566,11 +866,18 @@
                      :sync? sync?
                      :buffer-size buffer-size
                      :overwrite? (empty? (rest key-vec))
+                     :expected-revision expected-revision
+                     :with-revision? with-revision?
                      :msg        {:type :write-edn-error
                                   :key  key}})))
 
   (-update-in [this key-vec meta-up up-fn opts]
-    (let [{:keys [sync?]} opts
+    ;; `:with-revision?` is forwarded here for the same reason as in `-assoc-in`:
+    ;; a caller that fences with `:expected-revision` needs the revision its write
+    ;; PRODUCED in order to chain the next one. Omitting it here meant `update-in`
+    ;; silently answered with the plain `[old new]` shape however the caller
+    ;; asked, so a chained fenced update-in had nothing to fence against.
+    (let [{:keys [sync? expected-revision with-revision?]} opts
           key (first key-vec)]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec key-vec
@@ -584,6 +891,8 @@
                      :config     config
                      :sync? sync?
                      :buffer-size buffer-size
+                     :expected-revision expected-revision
+                     :with-revision? with-revision?
                      :msg        {:type :write-edn-error
                                   :key  key}})))
   (-dissoc [_ key opts]
@@ -653,6 +962,56 @@
                   :sync? sync?
                   :buffer-size buffer-size
                   :msg {:type :read-all-keys-error}})))
+
+  PConditionalWrite
+  (-conditional-write-domain [_]
+    ;; ASK THE BACKING, do not infer from `:lock-blob?`. That flag says a lock is
+    ;; requested, not that one exists: konserve's IndexedDB backing sets it and
+    ;; implements `-get-lock` as a NO-OP ("the alternative is to overwrite
+    ;; defaults/update-blob"), so inferring a domain from the flag would tell two
+    ;; browser tabs they are fenced when nothing serializes them at all — precisely
+    ;; the lie this capability exists to prevent. A backing that does not declare a
+    ;; domain gets none, and `:expected-revision` is refused.
+    (let [declared (when (satisfies? protocols/PConditionalWrite backing)
+                     (protocols/-conditional-write-domain backing))]
+      ;; `:lock-blob?` can revoke a claim that RESTS on konserve's lock, and only
+      ;; such a claim. Without the flag there is no lock, the compare and the write
+      ;; stop being one step, and the claim is void however sincerely it is made.
+      ;;
+      ;; A backing that fences ITSELF keeps its domain whatever the flag says: the
+      ;; flag is about a lock it never uses. That used to be decided by testing the
+      ;; domain for `:global`, which held only because the one self-fencing backing
+      ;; happened to be global — see `PSelfConditionalWrite` for the stores that
+      ;; fence themselves without reaching that far, which the old test would have
+      ;; silently disarmed.
+      (if (satisfies? protocols/PSelfConditionalWrite backing)
+        declared
+        (when (:lock-blob? config) declared))))
+  (-revision [this key opts]
+    (async+sync (:sync? opts) *default-sync-translation*
+                (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
+                           (cond
+                             (nil? m) absent
+                             ;; A KEY WITH NO REVISION MUST NOT ANSWER nil. Every
+                             ;; value written by this version has one, but a store
+                             ;; upgraded from an earlier konserve does not, and
+                             ;; neither does a key rebuilt by `migrate-file-v1`.
+                             ;; Handing back nil looked like a token and was then
+                             ;; accepted as one — nil is falsy, so it sailed past
+                             ;; every conditional gate and wrote UNCONDITIONALLY,
+                             ;; while the caller believed they had fenced. That is
+                             ;; the documented read-then-hand-it-back pattern
+                             ;; silently overwriting exactly the keys someone would
+                             ;; try it on first. Refuse instead: rewrite the key
+                             ;; once (an ordinary write mints a revision) and fence
+                             ;; from there.
+                             (nil? (:revision m))
+                             (throw (ex-info (str "This key has no revision: it was written before konserve "
+                                                  "recorded them, so there is nothing to fence against. Write "
+                                                  "it once unconditionally to mint one.")
+                                             {:type :konserve/revision-unavailable
+                                              :key  key}))
+                             :else (:revision m))))))
 
   PMultiKeySupport
   (-supports-multi-key? [_]

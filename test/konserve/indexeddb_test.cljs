@@ -181,7 +181,7 @@
              (is (= [nil 42] (<! (k/assoc-in store [:value-blob] 42 opts))))
              (is (true? (<! (k/bassoc store :bin-blob #js[255 255 255] opts))))
              (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
-                    (set (map #(dissoc % :last-write) (<! (k/keys store opts))))))
+                    (set (map #(dissoc % :last-write :revision) (<! (k/keys store opts))))))
              (is (every? inst? (map :last-write (<! (k/keys store opts)))))
              (<! (.close (:backing store)))
              (<! (idb/delete-idb db-name))

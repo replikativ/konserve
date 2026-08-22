@@ -2,7 +2,9 @@
   "Address globally aggregated immutable key-value store(s).
    Does not support serialization."
   (:require [clojure.core.async :as async :refer [go <!]]
-            [konserve.protocols :refer [PEDNKeyValueStore -update-in
+            [konserve.impl.defaults :as kd]
+            [konserve.protocols :refer [PConditionalWrite -conditional-write-domain -revision
+                                        PEDNKeyValueStore -update-in
                                         PBinaryKeyValueStore PKeyIterable
                                         PMultiKeyEDNValueStore PMultiKeySupport
                                         PAssocSerializers PWriteHookStore]]
@@ -18,6 +20,28 @@
   memory-store-registry
   (atom {}))
 
+(defn- atomic!
+  "Run `f` with exclusive access to `state`.
+
+   `swap!` is not enough for `-update-in`. It RETRIES its function whenever the
+   atom changed underneath, so a conflict arriving mid-flight ran the caller's
+   `up-fn` and only THEN rejected — while konserve promises that a rejected
+   update does not run it at all, and this store is the reference the compliance
+   suite is pointed at. A monitor makes read, check, apply and write one step, so
+   `up-fn` runs exactly once and never on a rejection.
+
+   EVERY mutation takes it, not only the fenced ones: mixing a monitor with bare
+   `swap!`s elsewhere would let another write land between this one's read and
+   write and be silently overwritten, which is the race the monitor was added to
+   remove.
+
+   `:process` is exactly what this store claims — atomic against other threads in
+   this runtime, which two store objects sharing one state atom are — so this is
+   the honest way to provide it. ClojureScript needs no lock: a synchronous block
+   cannot be interrupted there."
+  [state f]
+  #?(:clj (locking state (f)) :cljs (f)))
+
 (defrecord MemoryStore [state read-handlers write-handlers locks write-hooks]
   PEDNKeyValueStore
   (-exists? [_ key opts]
@@ -27,41 +51,88 @@
                    <! do}
                   (go  (if (get @state key false) true false)))))
   (-get-in [_ key-vec not-found opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? with-revision?]} opts]
       (async+sync sync?
                   {go do
                    <! do}
-                  (go (if-let [a (second (get @state (first key-vec)))]
-                        (get-in a (rest key-vec) not-found)
-                        not-found)))))
+                  (go (let [entry (get @state (first key-vec))
+                            v     (if-let [a (second entry)]
+                                    (get-in a (rest key-vec) not-found)
+                                    not-found)]
+                        ;; `:with-revision?` is part of the contract, not an
+                        ;; optimisation: a caller written against it destructures
+                        ;; `[value revision]`, and returning a bare value here
+                        ;; makes portable code throw on `nth` — or, worse, silently
+                        ;; fence on nil when this store is a tiered frontend.
+                        (if with-revision?
+                          [v (if entry (:revision (first entry)) kd/absent)]
+                          v))))))
   (-get-meta [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
                   {go do}
                   (go (first (get @state key))))))
   (-update-in [_ key-vec meta-up-fn up-fn opts]
-    (let [{:keys [sync? overwrite?]} opts]
+    (let [{:keys [sync? overwrite? expected-revision with-revision?]} opts]
       (async+sync sync?
                   {go do}
                   (go
-                    (let [[fkey & rkey] key-vec
-                          update-atom
-                          (fn [store]
-                            (swap! store
-                                   (fn [old]
-                                     (update old fkey
-                                             (fn [[meta data]]
-                                               [(meta-up-fn meta)
-                                                (if rkey
-                                                  (update-in data rkey up-fn)
-                                                  (up-fn data))])))))
-                          [_ old-val] (get @state fkey)
-                          {[_ new-val] fkey} (update-atom state)]
-                      (if overwrite?
-                        [nil new-val]
-                        [old-val new-val]))))))
+                    ;; The rejection must arrive AS A VALUE on this channel. This
+                    ;; store uses a plain `go`, not `go-try-`, so a throw from
+                    ;; `check-revision!` would escape to the async thread's uncaught
+                    ;; handler and close the channel EMPTY — an async caller could
+                    ;; not tell a rejected fence from a successful write, and the
+                    ;; error would surface only as noise in the log.
+                    (try
+                      (let [[fkey & rkey] key-vec
+                            ;; Read, check, apply and write as ONE step. The old
+                            ;; value is read in here too: taken outside, it could
+                            ;; be from before another writer's update and reported
+                            ;; as this call's `old`.
+                            [old-val new-meta new-val]
+                            (atomic! state
+                                     (fn []
+                                       (let [old @state
+                                             [_ prev-val] (get old fkey)]
+                                         (when expected-revision
+                                           (kd/check-revision! fkey expected-revision
+                                                               (first (get old fkey))))
+                                         (let [next-state
+                                               (update old fkey
+                                                       (fn [[meta data]]
+                                                         [(meta-up-fn meta)
+                                                          (if rkey
+                                                            (update-in data rkey up-fn)
+                                                            (up-fn data))]))
+                                               [nm nv] (get next-state fkey)]
+                                           (reset! state next-state)
+                                           [prev-val nm nv]))))
+                            res (if overwrite? [nil new-val] [old-val new-val])]
+                        ;; `:with-revision?` reports the revision this write
+                        ;; PRODUCED, so a caller can chain a fenced write without a
+                        ;; re-read. It was destructured nowhere here, so this store
+                        ;; — konserve's own reference implementation, which declares
+                        ;; `:process` and passes the contract — accepted the option
+                        ;; and returned the plain shape. A caller destructuring
+                        ;; `[[old new] rev]` got the VALUE bound as the token and
+                        ;; fenced the next write on it, and `k/update-in` threw
+                        ;; `nth not supported on this type` outright. Accepted and
+                        ;; silently dropped is the exact failure this whole
+                        ;; mechanism exists to remove.
+                        (if with-revision?
+                          [res (:revision new-meta)]
+                          res))
+                      ;; The two arms report differently, and both must be honoured:
+                      ;; a SYNC caller expects a throw, an ASYNC caller expects the
+                      ;; error as a value on the channel (throwing there escapes to
+                      ;; the async thread and closes the channel empty). `async+sync`
+                      ;; collapses the `go` to a `do` for the sync arm, so one catch
+                      ;; serves both only if it rethrows there.
+                      (catch #?(:clj Exception :cljs js/Error) e
+                        (if sync? (throw e) e)))))))
   (-assoc-in [this key-vec meta val opts]
     (-update-in this key-vec meta (fn [_] val) (assoc opts :overwrite? true)))
+
   (-dissoc [_ key opts]
     (let [{:keys [sync?]} opts]
       (async+sync sync?
@@ -71,9 +142,23 @@
                     (let [v (get @state key ::not-found)]
                       (if (not= v ::not-found)
                         (do
-                          (swap! state dissoc key)
+                          (atomic! state (fn [] (swap! state dissoc key)))
                           true)
                         false))))))
+
+  PConditionalWrite
+  ;; :process. The compare and the write are one `swap!`, which covers every
+  ;; thread sharing this atom and says nothing about anyone else — a memory store
+  ;; has no anyone else. Placed AFTER PEDNKeyValueStore's methods on purpose:
+  ;; splitting a protocol's methods around another marker is silently tolerated on
+  ;; the JVM and is a compile warning in ClojureScript, which is how this was found.
+  (-conditional-write-domain [_] :process)
+  (-revision [_ key opts]
+    (async+sync (:sync? opts)
+                {go do}
+                (go (if-let [[meta _] (get @state key)]
+                      (:revision meta)
+                      kd/absent))))
   PBinaryKeyValueStore
   (-bget [_ key locked-cb opts]
     (let [{:keys [sync?]} opts]
@@ -102,11 +187,13 @@
                   {go do
                    <! do}
                   (go
-                    (swap! state
-                           (fn [old]
-                             (update old key
-                                     (fn [[meta _data]]
-                                       [(meta-up-fn meta) input]))))
+                    (atomic! state
+                             (fn []
+                               (swap! state
+                                      (fn [old]
+                                        (update old key
+                                                (fn [[meta _data]]
+                                                  [(meta-up-fn meta) input]))))))
                     true))))
   PAssocSerializers ;; no serializers needed for memory
   (-assoc-serializers [this _serializers] this)
@@ -128,14 +215,16 @@
                   {go do}
                   (go
                     ;; Use an atomic update on the state atom to ensure all key-val pairs are updated atomically
-                    (swap! state
-                           (fn [old-state]
-                             (reduce (fn [acc [key val]]
-                                       (update acc key
-                                               (fn [[meta _data]]
-                                                 [(meta-up-fn key :edn meta) val])))
-                                     old-state
-                                     kvs)))
+                    (atomic! state
+                             (fn []
+                               (swap! state
+                                      (fn [old-state]
+                                        (reduce (fn [acc [key val]]
+                                                  (update acc key
+                                                          (fn [[meta _data]]
+                                                            [(meta-up-fn key :edn meta) val])))
+                                                old-state
+                                                kvs)))))
                     ;; Return a map of keys to success status
                     (into {} (map (fn [[k _]] [k true]) kvs))))))
 
@@ -145,9 +234,11 @@
                   {go do}
                   (go
                     ;; Atomically swap state and capture old value to avoid race conditions
-                    (let [[old-state _new-state] (swap-vals! state
-                                                             (fn [s]
-                                                               (apply dissoc s keys)))]
+                    (let [[old-state _new-state] (atomic! state
+                                                          (fn []
+                                                            (swap-vals! state
+                                                                        (fn [s]
+                                                                          (apply dissoc s keys)))))]
                       ;; Check existence against the actual old state we swapped from
                       (into {} (map (fn [k]
                                       [k (contains? old-state k)])

@@ -5,6 +5,28 @@ All notable, user-visible changes to konserve are documented here.
 ## Unreleased
 
 ### Added
+- **Conditional writes (`:expected-revision`), with an explicit capability.** A
+  write can now be made conditional on the revision the caller read: it lands
+  only if the stored revision is still that one, and otherwise raises
+  `{:type :konserve/revision-mismatch}` having written nothing and — for
+  `update-in` — WITHOUT running `up-fn`. Pass
+  `konserve.core/absent` to mean "only if this key does not exist".
+  `:with-revision? true` reports the revision a read saw or a write produced, so
+  a fencing caller can chain writes without a re-read; on a read it returns
+  `[value revision]`, on a write `[[old new] revision]`.
+
+  The capability is EXPLICIT and a store that lacks it REFUSES rather than
+  ignoring the option — silently degrading to an unconditional write is worse
+  than having no fencing, because the caller asked for a guarantee and got a knob
+  that reads as handled. `conditional-write-domain` reports how far a store's
+  guarantee reaches (`:process`, `:machine`, `:global`) rather than a boolean,
+  since the API is uniform and the guarantee is not: `true` would let someone
+  running two processes against a memory store, or two machines against a
+  filestore, believe they were fenced when they were only serialized against a
+  narrower set of writers. `conditional-write?` compares against a domain you
+  need. Backed by `konserve.compliance-test/conditional-write-compliance-test`,
+  which any backend can call — a store without the capability passes it by
+  refusing.
 - **Simulation testing harness** (`konserve.simulation.backing`, `.crash`,
   `.memory`). A fault-injecting wrapper around any `PBackingStore` (19
   per-operation error and corruption rates, seeded from a `SplittableRandom` so
@@ -141,6 +163,30 @@ All notable, user-visible changes to konserve are documented here.
   (previously `memory-store-delete` *asserted* the broken behaviour).
 
 ### Changed
+- **A fenced key carries a sidecar lock file (`<key>.cas`).** It exists because
+  konserve replaces a value by renaming a new file over it, which orphans a lock
+  taken on the old one; the sidecar is never renamed, so it is a stable thing to
+  lock. Every write to a key that has one takes it, so the fence excludes
+  unconditional writers too — without that it would grant a false pass and lose
+  their write. A key gets a sidecar the first time a conditional write or a
+  revision-bearing read touches it, so keys that are never fenced cost one
+  existence probe and no extra file. Backends that filter their own key
+  enumeration must skip this suffix (see `konserve.impl.defaults/internal-artifact?`).
+- **Fencing orders the writers that participate.** Conditional writes are
+  optimistic concurrency control: a writer that writes unconditionally overwrites
+  whatever is there, here as on S3 or against a row-version column. Fencing a key
+  means every writer to it fences. Konserve does go further than that where it
+  can — once a key has a sidecar, unconditional writers take its lock too — but a
+  deployment that mixes fenced and unfenced writers to one key is not protected
+  by any of this, and should not be read as if it were.
+- **Every value's metadata now carries a `:revision`.** It is what
+  `:expected-revision` compares and what `konserve.core/revision` returns — an
+  OPAQUE token, minted per write, to be passed back rather than interpreted. It
+  is deliberately not `:last-write`: that clock is non-decreasing and admits
+  same-millisecond ties, so two writes could share one value and a fence built on
+  it would pass when it should fail. The visible consequence is that metadata
+  maps have one more key, so a test or tool comparing them whole (`k/keys`,
+  `get-meta`) should strip `:revision` alongside `:last-write`.
 - **Probe-elision now covers non-overwrite writes, not only reads.** On a
   `PReadMissSafe` backing, `update-in` / `update` / nested `assoc-in` / `bassoc`
   read the old value *read-first* (an absent key → a fresh write) instead of a

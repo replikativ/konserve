@@ -5,7 +5,8 @@
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
-            [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
+            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write-domain -revision
+                                                      -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc -assoc-serializers
                                                       PEDNKeyValueStore PBinaryKeyValueStore
@@ -165,7 +166,54 @@
                   :root-keys (count root-keys)
                   :reachable-keys (count reachable-keys)}))))
 
+(def ^:private core-dissoc
+  "`dissoc` from the host core, which this namespace shadows with the store op."
+  #?(:clj clojure.core/dissoc :cljs cljs.core/dissoc))
+
+(defn ^:private frontend-opts
+  "`opts` with the fencing options removed, for a call to the FRONTEND store.
+
+   A revision belongs to the store that minted it, and the two tiers mint their
+   own. Forwarding `:expected-revision` made the frontend reject a write the
+   backend had just accepted; the rejection was caught and logged, the caller was
+   told the fenced write succeeded, and every later `:frontend-first` read
+   returned the PRE-WRITE value indefinitely — using the fence created the
+   incoherence it exists to prevent. `:with-revision?` goes too: its result shape
+   is the caller's, and the frontend's token would be meaningless to them.
+
+   The BACKEND keeps the caller's opts: it is the store whose revisions
+   `-revision` reports and whose domain `-conditional-write-domain` advertises."
+  [opts]
+  ;; NOT `(dissoc opts ...)`: this namespace shadows `clojure.core/dissoc` with
+  ;; the store operation, and `clojure.core/dissoc` cannot be written out in a
+  ;; .cljc file because there it is `cljs.core/dissoc`.
+  (core-dissoc opts :expected-revision :with-revision?))
+
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
+  PConditionalWrite
+  ;; Only `:write-through` can honour this, and only if the backend can.
+  ;;
+  ;; `:write-behind` cannot, for a reason no implementation effort would fix: it
+  ;; returns to the caller once the FRONTEND has the value and writes the backend
+  ;; in a `go` afterwards, so a rejected conditional write would be discovered
+  ;; after the caller was told it succeeded. There is nobody left to report it to.
+  ;;
+  ;; `:frontend-only` is a read-through cache over a backend another peer owns; it
+  ;; must not mutate it at all, let alone fence it.
+  (-conditional-write-domain [_]
+    ;; The BACKEND's domain, because the backend is what decides the write. A
+    ;; memory frontend over an S3 backend is :global; reporting the frontend's
+    ;; :process would be exactly backwards.
+    (when (= :write-through write-policy)
+      (when (satisfies? PConditionalWrite backend-store)
+        (-conditional-write-domain backend-store))))
+  ;; ALWAYS the backend, never the read-policy's choice. The two tiers keep
+  ;; INDEPENDENT revision counters — they are separate stores — so a revision read
+  ;; from the frontend and compared against the backend compares two unrelated
+  ;; numbers. That would fail open or closed at random, which is worse than having
+  ;; no fencing, because it looks like fencing.
+  (-revision [_ key opts] (-revision backend-store key opts))
+
   PEDNKeyValueStore
   (-exists? [_this key opts]
     (log/trace :konserve/tiered-exists? {:key key})
@@ -202,28 +250,38 @@
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
-                 (case read-policy
-                   :frontend-first
-                   (let [frontend-result (<?- (-get-in frontend-store key-vec ::missing opts))]
-                     (if (not= frontend-result ::missing)
-                       frontend-result  ;; Cache hit
-                       (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
-                         (when (not= backend-result ::missing)
+                 (if (:with-revision? opts)
+                   ;; STRAIGHT TO THE BACKEND, whatever the read-policy says. The
+                   ;; revision must come from the tier that will EVALUATE the
+                   ;; conditional write, and that is always the backend. Serving it
+                   ;; from the frontend returns a token the backend has never seen —
+                   ;; and because the frontend is usually a memory store, the value
+                   ;; came back bare, so the caller fenced on nil and got an
+                   ;; UNCONDITIONAL write from a store advertising :machine. A cache
+                   ;; hit must not decide the identity of a durable value.
+                   (<?- (-get-in backend-store key-vec not-found opts))
+                   (case read-policy
+                     :frontend-first
+                     (let [frontend-result (<?- (-get-in frontend-store key-vec ::missing opts))]
+                       (if (not= frontend-result ::missing)
+                         frontend-result  ;; Cache hit
+                         (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
+                           (when (not= backend-result ::missing)
                            ;; Populate frontend asynchronously (fire-and-forget)
-                           (go (try
-                                 (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result opts))
-                                 (invoke-write-hooks! frontend-store {:api-op :assoc-in
-                                                                      :key (first key-vec)
-                                                                      :key-vec key-vec
-                                                                      :value backend-result})
-                                 (catch #?(:clj Exception :cljs js/Error) e
-                                   (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
-                         (if (not= backend-result ::missing)
-                           backend-result
-                           not-found))))
+                             (go (try
+                                   (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result (frontend-opts opts)))
+                                   (invoke-write-hooks! frontend-store {:api-op :assoc-in
+                                                                        :key (first key-vec)
+                                                                        :key-vec key-vec
+                                                                        :value backend-result})
+                                   (catch #?(:clj Exception :cljs js/Error) e
+                                     (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
+                           (if (not= backend-result ::missing)
+                             backend-result
+                             not-found))))
 
-                   :frontend-only
-                   (<?- (-get-in frontend-store key-vec not-found opts))))))
+                     :frontend-only
+                     (<?- (-get-in frontend-store key-vec not-found opts)))))))
 
   (-update-in [_this key-vec meta-up-fn up-fn opts]
     (log/trace :konserve/tiered-update-in {:key-vec key-vec})
@@ -235,14 +293,14 @@
                    ;; Write to both stores - backend first for durability
                    (let [backend-result (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))]
                      (try
-                       (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))
+                       (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))
                        (catch #?(:clj Exception :cljs js/Error) e
                          (log/warn :konserve/tiered-frontend-update-failed {:key key-vec :error e})))
                      backend-result)
 
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                   (let [frontend-result (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))]
+                   (let [frontend-result (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))]
                      (go (try
                            (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))
                            (catch #?(:clj Exception :cljs js/Error) e
@@ -253,14 +311,14 @@
                    ;; Write only to backend, invalidate frontend
                    (let [result (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))]
                      (go (try
-                           (<?- (-dissoc frontend-store (first key-vec) opts))
+                           (<?- (-dissoc frontend-store (first key-vec) (frontend-opts opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
                      result)
 
                    :frontend-only
                    ;; Cache mode: write to the frontend only; never touch the backend.
-                   (<?- (-update-in frontend-store key-vec meta-up-fn up-fn opts))))))
+                   (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))))))
 
   (-assoc-in [_this key-vec meta-up-fn val opts]
     (log/trace :konserve/tiered-assoc-in {:key-vec key-vec})
@@ -271,14 +329,23 @@
                    :write-through
                    (let [backend-result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
                      (try
-                       (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))
+                       ;; The FRONTEND IS NOT FENCED, and must not be handed the
+                       ;; caller's token. Revisions belong to the store that minted
+                       ;; them, and the two tiers mint their own — so forwarding
+                       ;; `:expected-revision` made the frontend reject a write the
+                       ;; backend had just accepted. The rejection was caught and
+                       ;; logged, the caller was told the fenced write succeeded,
+                       ;; and every later `:frontend-first` read returned the
+                       ;; PRE-WRITE value, indefinitely. Using the fence created
+                       ;; the incoherence it exists to prevent.
+                       (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))
                        (catch #?(:clj Exception :cljs js/Error) e
                          (log/warn :konserve/tiered-frontend-assoc-failed {:key key-vec :error e})))
                      backend-result)
 
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                   (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))]
+                   (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))]
                      (go (try
                            (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
                            (catch #?(:clj Exception :cljs js/Error) e
@@ -288,13 +355,13 @@
                    :write-around
                    (let [result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
                      (go (try
-                           (<?- (-dissoc frontend-store (first key-vec) opts))
+                           (<?- (-dissoc frontend-store (first key-vec) (frontend-opts opts)))
                            (catch #?(:clj Exception :cljs js/Error) e
                              (log/warn :konserve/tiered-frontend-invalidation-failed {:key (first key-vec) :error e}))))
                      result)
 
                    :frontend-only
-                   (<?- (-assoc-in frontend-store key-vec meta-up-fn val opts))))))
+                   (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))))))
 
   (-dissoc [_this key opts]
     (log/trace :konserve/tiered-dissoc {:key key})
