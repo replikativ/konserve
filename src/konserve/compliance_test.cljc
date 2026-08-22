@@ -1,14 +1,136 @@
 (ns konserve.compliance-test
   (:require [clojure.core.async :refer [#?(:clj <!!) <! go]]
             [konserve.core :as k]
+            [konserve.impl.defaults]
             [konserve.utils :as utils]
-            #?(:cljs [cljs.test :refer [is]])
+            #?(:cljs [cljs.test :refer [is testing]])
             #?(:clj [clojure.test :refer [are is testing]])))
 
 #_(deftype UnknownType [])
 
 #_(:clj (defn exception? [thing]
           (instance? Throwable thing)))
+
+(defn conditional-write-compliance-test
+  "The `:expected-revision` contract, for any backend that claims to support it.
+
+      A backend that does NOT implement `PConditionalWrite` passes trivially — that
+      is the point of the capability: not supporting fencing is a legitimate state,
+      SILENTLY IGNORING a request for it is not. So the one thing checked for such a
+      store is that it refuses rather than writes.
+
+      Call this from your backend's test suite with a connected, empty store."
+  [store]
+  ;; The ASYNC arm is JVM-only: resolving a channel to a value needs `<!!`, which
+  ;; ClojureScript has no equivalent of. The sync arm covers cljs, where konserve
+  ;; does have synchronous IO (node-filestore, memory) — which is the arm that
+  ;; matters there anyway. Written as one function rather than two so the contract
+  ;; cannot drift between platforms; it was previously wrapped whole in
+  ;; `#?(:clj ...)` while `memory_test` referred it unconditionally, so the cljs
+  ;; build simply did not compile.
+  (doseq [opts #?(:clj [{:sync? false} {:sync? true}] :cljs [{:sync? true}])
+          :let [<!! (if (:sync? opts) identity #?(:clj <!! :cljs identity))
+                k*  (keyword (str "cas-" (if (:sync? opts) "sync" "async")))
+                   ;; A rejection arrives DIFFERENTLY in the two arms: synchronously
+                   ;; it is thrown, asynchronously konserve delivers the exception
+                   ;; as a VALUE on the channel. `(is (thrown? ...))` around `<!!`
+                   ;; therefore cannot pass in the async arm — the first version of
+                   ;; this test asserted exactly that and failed 3/18 the first time
+                   ;; anyone ran it. Normalise, then assert on the type.
+                rejected? (fn [f]
+                            (let [r (try (<!! (f)) (catch #?(:clj Exception :cljs js/Error) e e))]
+                              (= :konserve/revision-mismatch
+                                 (:type (ex-data r)))))]]
+    (if-not (k/conditional-write? store)
+      (testing "a store without the capability REFUSES, it does not ignore"
+        (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                     (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision :anything))))))
+      (testing "conditional writes"
+        (testing "create-if-absent succeeds on a missing key"
+          (<!! (k/assoc store k* {:v 1} (assoc opts :expected-revision k/absent)))
+          (is (= {:v 1} (<!! (k/get store k* nil opts)))))
+
+        (testing "create-if-absent is rejected once the key exists"
+          (is (rejected? #(k/assoc store k* {:v :no} (assoc opts :expected-revision k/absent)))))
+
+        (let [r0 (<!! (k/revision store k* opts))]
+          (testing "a write on the revision we read succeeds and MOVES the revision"
+            (<!! (k/assoc store k* {:v 2} (assoc opts :expected-revision r0)))
+            (is (= {:v 2} (<!! (k/get store k* nil opts))))
+            (is (not= r0 (<!! (k/revision store k* opts)))))
+
+          (testing "the same revision a second time is rejected, and writes nothing"
+            (is (rejected? #(k/assoc store k* {:v :lost} (assoc opts :expected-revision r0))))
+            (is (= {:v 2} (<!! (k/get store k* nil opts)))
+                "the loser must not have overwritten the winner"))
+
+          (testing "update-in is fenced too, and up-fn does not run when rejected"
+            (let [ran (atom 0)]
+              (is (rejected? #(k/update-in store [k*] (fn [v] (swap! ran inc) (assoc v :v :lost))
+                                           (assoc opts :expected-revision r0))))
+              (is (zero? @ran) "a rejected update must not run the caller's function"))))
+
+           ;; The rejection must leave NO trace. A backing that creates its blob
+           ;; before it can compare revisions leaves an empty one behind when the
+           ;; comparison fails, and an empty blob is worse than a missing key: it
+           ;; is not absent (so `create-if-absent` can never succeed again) and it
+           ;; is not readable (a header-size error, not not-found). One ordinary
+           ;; conflict on a key that never existed would brick that key forever.
+        (testing "a REJECTED write on a missing key leaves the key missing"
+          (let [ghost (keyword (str "cas-ghost-" (if (:sync? opts) "sync" "async")))]
+            (is (rejected? #(k/assoc store ghost {:v :no}
+                                     (assoc opts :expected-revision :a-revision-that-never-existed))))
+            (is (false? (<!! (k/exists? store ghost opts)))
+                "the key must not have come into existence")
+            (is (= :missing (<!! (k/get store ghost :missing opts)))
+                "and reading it reports not-found rather than raising")
+            (testing "so create-if-absent still succeeds afterwards"
+              (<!! (k/assoc store ghost {:v 1} (assoc opts :expected-revision k/absent)))
+              (is (= {:v 1} (<!! (k/get store ghost nil opts)))))))
+
+        ;; `:with-revision?` IS HALF THE PUBLIC SURFACE and had no coverage at
+        ;; all, which is how konserve's own memory store — the honest reference
+        ;; this suite is usually pointed at — came to accept the option and
+        ;; return the plain shape. A caller destructuring `[[old new] rev]` then
+        ;; binds the VALUE as the token and fences the next write on it.
+        (testing "a write reports the revision it produced, and that revision chains"
+          (let [res (<!! (k/assoc store k* {:v 4} (assoc opts :with-revision? true)))
+                [[_ new-val] rev] res]
+            (is (= {:v 4} new-val)
+                (str "the new VALUE belongs in the second slot, not the token: " (pr-str res)))
+            (is (some? rev) "and a revision beside it")
+            (is (= rev (<!! (k/revision store k* opts)))
+                "the reported revision must be the one that was stored")
+            (testing "so it can be handed straight back without a re-read"
+              (let [[[_ newer] rev2] (<!! (k/update-in store [k*] #(assoc % :v 5)
+                                                       (assoc opts :expected-revision rev
+                                                              :with-revision? true)))]
+                (is (= {:v 5} newer) "update-in reports the same shape")
+                (is (some? rev2))
+                (is (not= rev rev2) "and the revision moved")))))
+
+        ;; ENUMERATION MUST SURVIVE A FENCED WRITE. A backing may leave
+        ;; bookkeeping of its own behind — the default one takes its lock on a
+        ;; `.cas` sidecar that persists — and anything not recognised as
+        ;; bookkeeping is read as a value from an older layout and MIGRATED. That
+        ;; broke `k/keys`, and `konserve.gc/sweep!` through it, from the first
+        ;; fenced write onwards, permanently, on every default-backing store.
+        ;; Checked here rather than in one backend's suite because every backend
+        ;; that filters its own enumeration has to get this right.
+        (testing "keys still enumerate after a fenced write"
+          (let [ks (<!! (k/keys store opts))]
+            (is (every? map? ks) "no artifact leaked in as a key")
+            (is (contains? (set (map :key ks)) k*)
+                "and the key that was written is there")))
+
+        (testing "an unconditional write still works"
+          (<!! (k/assoc store k* {:v 3} opts))
+          (is (= {:v 3} (<!! (k/get store k* nil opts)))))
+
+        (testing "multi-assoc refuses to be made conditional"
+          (when (utils/multi-key-capable? store)
+            (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                         (<!! (k/multi-assoc store {:cas-m1 1} (assoc opts :expected-revision :x)))))))))))
 
 #?(:clj
    (defn compliance-test [store]
@@ -111,7 +233,10 @@
                 :type :binary}
                {:key :foolog
                 :type :append-log}}
-             (->> list-keys (map #(clojure.core/dissoc % :last-write)) set)
+             ;; `:revision` is dropped for the same reason as `:last-write`: both
+             ;; are bookkeeping the store maintains, not part of what the caller
+             ;; stored, and neither is stable across the writes this test makes.
+             (->> list-keys (map #(clojure.core/dissoc % :last-write :revision)) set)
              true
              (every?
               (fn [{:keys [:last-write]}]
@@ -276,6 +401,88 @@
             ;; Clean up
              (<!! (k/dissoc store :hook-bin opts))
              (<!! (k/dissoc store :hook-after-remove opts))))))))
+
+(defn async-conditional-write-compliance-test
+  "The `:expected-revision` contract for ASYNC-ONLY backends. Returns a channel.
+
+   The same contract as [[conditional-write-compliance-test]], and a separate
+   function for the same reason `async-compliance-test` is: resolving a result to
+   a value needs `<!!` in the sync suite, and ClojureScript has no blocking take,
+   so a shared body cannot serve both. That leaves the suite unable to reach a
+   backend that is async-only under cljs — konserve-s3's ClojureScript backing is
+   exactly that, and it claims `:global`. An unenforced claim is what this whole
+   capability exists to prevent, so the suite has to be able to get at it.
+
+   Assertions are kept in step with the sync version by hand; if you add a rule
+   to one, add it to the other."
+  [store]
+  (go
+    (let [rejected? (fn [v] (= :konserve/revision-mismatch (:type (ex-data v))))]
+      (if-not (k/conditional-write? store)
+        (testing "a store without the capability REFUSES, it does not ignore"
+          ;; Async failures arrive as a VALUE on the channel rather than thrown,
+          ;; so this asserts on what was delivered. `(is (thrown? ...))` around a
+          ;; take cannot pass here — the sync suite asserted exactly that once and
+          ;; failed 3 of its own assertions the first time anyone ran it.
+          (is (some? (ex-data (<! (k/assoc store :cas-async {:v 1}
+                                           {:expected-revision :anything}))))
+              "an unsupported :expected-revision must come back as an error"))
+        (testing "conditional writes"
+          (is (not (rejected? (<! (k/assoc store :cas-async {:v 1}
+                                           {:expected-revision k/absent}))))
+              "create-if-absent succeeds on a missing key")
+          (is (= {:v 1} (<! (k/get store :cas-async nil))))
+
+          (is (rejected? (<! (k/assoc store :cas-async {:v :no}
+                                      {:expected-revision k/absent})))
+              "create-if-absent is rejected once the key exists")
+
+          (let [r0 (<! (k/revision store :cas-async))]
+            (is (not (rejected? (<! (k/assoc store :cas-async {:v 2}
+                                             {:expected-revision r0}))))
+                "a write on the revision we read succeeds")
+            (is (= {:v 2} (<! (k/get store :cas-async nil))))
+            (is (not= r0 (<! (k/revision store :cas-async)))
+                "and MOVES the revision")
+
+            (is (rejected? (<! (k/assoc store :cas-async {:v :lost}
+                                        {:expected-revision r0})))
+                "the same revision a second time is rejected")
+            (is (= {:v 2} (<! (k/get store :cas-async nil)))
+                "the loser must not have overwritten the winner")
+
+            (let [ran (atom 0)]
+              (is (rejected? (<! (k/update-in store [:cas-async]
+                                              (fn [v] (swap! ran inc) (assoc v :v :lost))
+                                              {:expected-revision r0})))
+                  "update-in is fenced too")
+              (is (zero? @ran) "a rejected update must not run the caller's function")))
+
+          ;; See the sync arm on why `:with-revision?` is part of the contract.
+          (let [res (<! (k/assoc store :cas-async {:v 4} {:with-revision? true}))
+                [[_ new-val] rev] res]
+            (is (= {:v 4} new-val)
+                (str "the new VALUE belongs in the second slot, not the token: " (pr-str res)))
+            (is (some? rev) "and a revision beside it")
+            (is (= rev (<! (k/revision store :cas-async)))
+                "the reported revision must be the one that was stored"))
+
+          ;; See the sync arm: a backing's own bookkeeping must not be read back
+          ;; as a value, or `k/keys` and the GC that walks it break permanently.
+          (let [ks (<! (k/keys store))]
+            (is (every? map? ks) "keys still enumerate after a fenced write")
+            (is (contains? (set (map :key ks)) :cas-async)
+                "and the key that was written is there"))
+
+          ;; A rejection must leave no trace on a key that never existed — an
+          ;; empty blob is neither absent nor readable, which bricks the key.
+          (is (rejected? (<! (k/assoc store :cas-async-ghost {:v :no}
+                                      {:expected-revision :a-revision-that-never-existed}))))
+          (is (false? (<! (k/exists? store :cas-async-ghost)))
+              "a rejected write on a missing key leaves the key missing")
+          (is (not (rejected? (<! (k/assoc store :cas-async-ghost {:v 1}
+                                           {:expected-revision k/absent}))))
+              "so create-if-absent still succeeds afterwards"))))))
 
 (defn async-compliance-test [store]
   (go

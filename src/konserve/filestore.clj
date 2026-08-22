@@ -3,7 +3,7 @@
    [clojure.core.async :refer [go <!! chan close! put!]]
    [clojure.java.io :as io]
    [clojure.string :refer [includes? ends-with?]]
-   [konserve.impl.defaults :refer [update-blob connect-default-store key->store-key store-key->uuid-key normalize-store-config]]
+   [konserve.impl.defaults :as kd :refer [update-blob connect-default-store key->store-key store-key->uuid-key normalize-store-config]]
    [konserve.impl.storage-layout :refer [PBackingStore
                                          PBackingBlob -close
                                          PBackingLock header-size
@@ -175,6 +175,13 @@
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
 (defrecord BackingFilestore [base detected-old-blobs ephemeral? filesystem]
+  konserve.protocols/PConditionalWrite
+  ;; :machine. `-get-lock` takes a java.nio FileLock, which the OS holds on behalf
+  ;; of the whole JVM against every other process that opens the same file — so
+  ;; the compare and the write are one step for processes sharing this filesystem.
+  ;; NOT further: the lock file is local, so nothing coordinates two machines, and
+  ;; advisory locks over NFS are not dependable.
+  (-conditional-write-domain [_] :machine)
   PBackingStore
   (-create-blob [_this store-key env]
     (let [{:keys [sync?]} env
@@ -694,7 +701,12 @@
            key)])))))
 
 (defn detect-old-file-schema
-  "Detect files using old storage schema for migration."
+  "Detect files using old storage schema for migration.
+
+   konserve's own bookkeeping is not a value in any layout, so it is skipped —
+   the fenced-write sidecar otherwise fell through to the `:else` arm and a store
+   with `:detect-old-file-schema? true` logged a phantom migration on every
+   connect, forever, with a count that never dropped."
   ([base] (detect-old-file-schema nil base))
   ([filesystem base]
    (reduce
@@ -703,7 +715,8 @@
         (cond
           (or
            (includes? store-key "data")
-           (ends-with? store-key ".ksv"))    old-list
+           (ends-with? store-key ".ksv")
+           (kd/internal-artifact? store-key)) old-list
           (re-find #"meta(?!\S)" store-key) (into old-list (detect-old-file-schema filesystem store-key))
           :else                             (into old-list [store-key]))))
     #{}

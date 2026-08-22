@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
-            [konserve.protocols :as protocols :refer [-exists? -get-meta -get-in -assoc-in
+            [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write-domain -revision
+                                                      -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
                                                       -keys -multi-get -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks -lock-free?]]
@@ -234,7 +235,15 @@
 
 (defn get-in
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   `opts` may carry **`:with-revision? true`**, which returns `[value revision]`
+   instead of `value`. That is one call rather than two for a fencing caller, and
+   not merely a convenience: reading the value and its revision separately can
+   straddle another writer's commit, leaving you fencing on a revision that never
+   belonged to the value you read. Pass the revision back as
+   `:expected-revision`. Refused by stores that cannot compare-and-set, and by
+   `konserve.cache` — a cached value carries no revision."
   ([store key-vec]
    (get-in store key-vec nil))
   ([store key-vec not-found]
@@ -249,7 +258,15 @@
 
 (defn get
   "Returns the value stored described by key. Returns nil if the key
-   is not present, or the not-found value if supplied."
+   is not present, or the not-found value if supplied.
+
+   `opts` may carry **`:with-revision? true`**, which returns `[value revision]`
+   instead of `value`. That is one call rather than two for a fencing caller, and
+   not merely a convenience: reading the value and its revision separately can
+   straddle another writer's commit, leaving you fencing on a revision that never
+   belonged to the value you read. Pass the revision back as
+   `:expected-revision`. Refused by stores that cannot compare-and-set, and by
+   `konserve.cache` — a cached value carries no revision."
   ([store key]
    (get store key nil))
   ([store key not-found]
@@ -275,6 +292,142 @@
                     a
                     not-found))))))
 
+(def absent
+  "The `:expected-revision` that means THE KEY MUST NOT EXIST — the create half of
+   a conditional write.
+
+   Re-exported from `konserve.impl.defaults`, which is where it is defined and
+   where it stays for backends. Callers should not have to require an `impl`
+   namespace to use a public contract, and every docstring here that tells you to
+   pass it would otherwise be pointing you into konserve's internals."
+  defaults/absent)
+
+(def conditional-write-domains
+  "Conditional-write reach, weakest first. See `PConditionalWrite`."
+  [:process :machine :global])
+
+(defn conditional-write-domain
+  "How far this store's conditional writes reach — `:process`, `:machine`,
+   `:global` — or nil if it has none."
+  [store]
+  (when (satisfies? PConditionalWrite store)
+    (-conditional-write-domain store)))
+
+(defn ^:private rank-domain!
+  "Position of `domain` in `conditional-write-domains`, weakest first.
+
+   RAISES on a domain that is not one of them rather than ranking it. The
+   comparison below used a default of 0, i.e. `:process`, so a typo — `:machien`,
+   a string `\"machine\"`, a nil out of a config — compared as the WEAKEST domain
+   and every store satisfied it. The one function whose job is to stop a caller
+   believing they are fenced answered true for a memory store."
+  [domain]
+  ;; The map is CALLED, not `get`-ed: this namespace shadows `clojure.core/get`
+  ;; with the store read, so `(get m k)` here is a konserve GET that returns a
+  ;; channel — which then failed to cast to a number, for every domain including
+  ;; the valid ones. `clojure.core/get` cannot be written out either, since this
+  ;; is .cljc and there it is `cljs.core/get`.
+  (or ((zipmap conditional-write-domains (range)) domain)
+      (throw (ex-info (str "Not a conditional-write domain: " (pr-str domain))
+                      {:type   :konserve/unknown-conditional-write-domain
+                       :domain domain
+                       :known  (vec conditional-write-domains)}))))
+
+(defn conditional-write?
+  "Can this store make a write conditional on the revision the caller read, far
+   enough for `required-domain`?
+
+   Called WITHOUT a domain this asks only \"at all?\", which is the right question
+   for a caller that already knows its deployment. Pass the domain you actually
+   need — `:machine` for several processes on one host, `:global` for several
+   hosts — and let the store answer, rather than assuming a `true` covers you."
+  ([store]
+   (some? (conditional-write-domain store)))
+  ([store required-domain]
+   ;; `required-domain` is RANKED, not defaulted: a name that is not a domain is a
+   ;; mistake in the caller, and answering it is how a typo turns into a false
+   ;; assurance. `have` may legitimately be nil (no capability), which is simply
+   ;; below every domain.
+   (let [required (rank-domain! required-domain)
+         have     (conditional-write-domain store)]
+     (boolean (and have (>= (rank-domain! have) required))))))
+
+(defn revision
+  "The store's current revision token for `key`, or `konserve.core/absent`
+   when the key does not exist.
+
+   OPAQUE. Read it, hold it, hand it back as `:expected-revision` — do not order
+   it, derive from it, or persist it as if it meant anything. Backends are free to
+   use whatever their storage gives them (a counter here, an ETag on S3)."
+  ([store key] (revision store key {:sync? false}))
+  ([store key opts]
+   (when-not (conditional-write? store)
+     (throw (ex-info "This store has no revisions to read: it cannot make a write conditional on one."
+                     {:type :konserve/conditional-write-unsupported :store (type store)})))
+   (-revision store key opts)))
+
+(defn check-conditional-supported!
+  "Throw unless `store` can honour an `:expected-revision` in `opts`.
+
+   Public because `konserve.cache` calls the write protocols DIRECTLY rather than
+   through this namespace, so it would otherwise bypass the check and silently
+   ignore the option — the failure mode the capability exists to remove."
+  [store opts]
+  ;; A NIL TOKEN IS NOT A REQUEST FOR AN UNCONDITIONAL WRITE. Every gate below
+  ;; this is a truthiness test, so a nil would sail past `check-revision!` and
+  ;; write unconditionally — while the caller believes they fenced. That is
+  ;; reachable through the front door: `revision` answers nil for a key whose
+  ;; metadata predates `:revision` (an upgraded store, or a migrated key), so the
+  ;; documented read-then-hand-it-back pattern would silently overwrite exactly
+  ;; the keys someone tries it on first. `absent` is the way to say "no value
+  ;; here"; nil is a mistake.
+  (when (and (contains? opts :expected-revision)
+             (nil? (:expected-revision opts)))
+    (throw (ex-info (str ":expected-revision was nil, which is not a revision. Pass a token from "
+                         "konserve.core/revision, or konserve.core/absent to require that "
+                         "the key does not exist. Writing unconditionally here would silently withhold "
+                         "the guarantee that was asked for.")
+                    {:type :konserve/invalid-expected-revision})))
+  ;; `:with-revision?` is refused on the same terms. The read docstrings already
+  ;; said so and the code did not: a store with no domain happily handed back a
+  ;; token that no write of its own would ever accept.
+  (when (and (contains? opts :with-revision?)
+             (:with-revision? opts)
+             (not (conditional-write? store)))
+    (throw (ex-info (str "This store has no revisions to report, so :with-revision? was refused. "
+                         "Handing back a token no write on this store can honour would be worse "
+                         "than not offering one.")
+                    {:type  :konserve/with-revision-unsupported
+                     :store (type store)})))
+  (when (and (contains? opts :expected-revision)
+             (not (conditional-write? store)))
+    (throw (ex-info (str "This store cannot honour :expected-revision, so the conditional write was refused. "
+                         "Writing it unconditionally would give back the very guarantee that was asked for.")
+                    {:type  :konserve/conditional-write-unsupported
+                     :store (type store)}))))
+
+(defn refuse-conditional-unsupported!
+  "Reject `:expected-revision` on an operation that does not implement it.
+
+   Public for the same reason as [[check-conditional-supported!]]: `konserve.cache`
+   reimplements these entry points rather than delegating, so a check kept private
+   here is simply absent there — which is how `konserve.cache/dissoc` came to
+   DELETE a key whose conditional write `konserve.core/dissoc` refuses.
+
+   Ignoring it is the one outcome that must never happen: the caller asked for a
+   guarantee, and a silent unconditional write is the exact failure the whole
+   mechanism exists to remove. Refusing is recoverable; a lost update is not."
+  [op opts]
+  (when (contains? opts :expected-revision)
+    (throw (ex-info (str op " cannot be made conditional; :expected-revision was refused rather than ignored.")
+                    {:type :konserve/conditional-write-unsupported :op op})))
+  ;; Same rule for `:with-revision?`. Dropping it is quieter but no safer: the
+  ;; caller destructures the revision-bearing shape, binds the value where the
+  ;; revision should be, and fences the NEXT write on garbage.
+  (when (contains? opts :with-revision?)
+    (throw (ex-info (str op " cannot report a revision; :with-revision? was refused rather than ignored.")
+                    {:type :konserve/with-revision-unsupported :op op}))))
+
 (defn update-in
   "Updates a position described by key-vec by applying up-fn and storing
   the result atomically. Returns a vector [old new] of the previous
@@ -282,20 +435,46 @@
 
   The optional `meta-up-fn` (5-arity, before the trailing `opts`) is
   `(fn [built-meta] -> meta)`, transforming the value's default metadata — the general
-  metadata form (cf. `assoc`'s `meta` map). `opts` stays last."
+  metadata form (cf. `assoc`'s `meta` map). `opts` stays last.
+
+  `opts` may carry **`:expected-revision`** — a token from [[revision]], or
+  `konserve.core/absent` for \"the key must not exist\". The update then
+  happens only if the stored revision is still that one, and otherwise throws
+  `:konserve/revision-mismatch` having written nothing and WITHOUT running
+  `up-fn`. Use it when the decision to update was made from an earlier read and
+  must not silently drift; plain `update-in` remains the tool for \"recompute from
+  whatever is current\", since `up-fn` already sees the current value.
+
+  **`:with-revision? true`** additionally reports the revision the update
+  PRODUCED, changing the result shape from `[old new]` to `[[old new] revision]`.
+  Hand that back as the next `:expected-revision` to chain fenced updates without
+  a re-read.
+
+  THE REVISION IS PER KEY, NOT PER PATH. `[:k :a :b]` fences the whole `:k` blob,
+  not the `[:a :b]` position inside it — the blob is the unit of storage and of the
+  lock, so it cannot be otherwise."
   ([store key-vec up-fn]
    (update-in store key-vec up-fn nil {:sync? false}))
   ([store key-vec up-fn opts]
    (update-in store key-vec up-fn nil opts))
   ([store key-vec up-fn meta-up-fn opts]
    (log/trace :konserve/update-in {:key-vec key-vec})
+   (check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
                 store (first key-vec)
                 (let [base (partial meta-update (first key-vec) :edn)
                       mfn  (if meta-up-fn (fn [old] (meta-up-fn (base old))) base)
-                      [old-val new-val :as result] (<?- (-update-in store key-vec mfn up-fn opts))]
+                      result (<?- (-update-in store key-vec mfn up-fn opts))
+                      ;; `:with-revision?` makes the result `[[old new] revision]`
+                      ;; rather than `[old new]`, so destructuring it as the plain
+                      ;; shape put the REVISION TOKEN in the hook's `:value` — and
+                      ;; a hook consumer that replicates on `:value` (konserve-sync)
+                      ;; would replicate the token as the key's data. The hook
+                      ;; reports the value either way; the revision is the caller's
+                      ;; business, not the replica's.
+                      [old-val new-val] (if (:with-revision? opts) (first result) result)]
                   (invoke-write-hooks! store {:api-op :update-in
                                               :key (first key-vec)
                                               :key-vec key-vec
@@ -324,13 +503,24 @@
   `(fn [built-meta] -> meta)` — it TRANSFORMS the value's default metadata (the built
   `{:key :type :last-write}`). This is the general form of `assoc`'s `meta` map (a map
   is just the merge-transform), exposed here because nested writes may derive metadata
-  from the built fields. `opts` stays last and purely runtime."
+  from the built fields. `opts` stays last and purely runtime.
+
+   FENCING (`opts`). `:expected-revision` makes the write CONDITIONAL: it lands
+   only if the stored revision is still the one you pass, and otherwise raises
+   `{:type :konserve/revision-mismatch}` having written nothing. Pass
+   `konserve.core/absent` to mean: only if this key does not exist.
+   `:with-revision? true` additionally reports the revision the write PRODUCED,
+   which changes the result shape from `[old new]` to `[[old new] revision]`;
+   hand that back as the next `:expected-revision` to chain fenced writes without
+   a re-read. Both are REFUSED, not ignored, by a store that cannot
+   compare-and-set — see [[conditional-write?]] and [[conditional-write-domain]]."
   ([store key-vec val]
    (assoc-in store key-vec val nil {:sync? false}))
   ([store key-vec val opts]
    (assoc-in store key-vec val nil opts))
   ([store key-vec val meta-up-fn opts]
    (log/trace :konserve/assoc-in {:key-vec key-vec})
+   (check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -353,13 +543,24 @@
    conflict, so `meta` is additive. Use `{:immutable? true}` to mark a content-
    addressed (write-once) value: it is recorded durably AND forwarded on the write-
    hook event, so a consumer (konserve-sync) can skip re-storing a value it already
-   has. `opts` stays last and purely runtime."
+   has. `opts` stays last and purely runtime.
+
+   FENCING (`opts`). `:expected-revision` makes the write CONDITIONAL: it lands
+   only if the stored revision is still the one you pass, and otherwise raises
+   `{:type :konserve/revision-mismatch}` having written nothing. Pass
+   `konserve.core/absent` to mean: only if this key does not exist.
+   `:with-revision? true` additionally reports the revision the write PRODUCED,
+   which changes the result shape from `[old new]` to `[[old new] revision]`;
+   hand that back as the next `:expected-revision` to chain fenced writes without
+   a re-read. Both are REFUSED, not ignored, by a store that cannot
+   compare-and-set — see [[conditional-write?]] and [[conditional-write-domain]]."
   ([store key val]
    (assoc store key val nil {:sync? false}))
   ([store key val opts]
    (assoc store key val nil opts))
   ([store key val meta opts]
    (log/trace :konserve/assoc {:key key})
+   (check-conditional-supported! store opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -446,6 +647,22 @@
              :else                            kvs)]
     (zipmap ks (clojure.core/repeat meta))))
 
+(defn- refuse-conditional-multi!
+  "Reject the fencing options on `multi-assoc`.
+
+   The plural `:expected-revisions` was checked here too, and no such option
+   exists anywhere in konserve — a guard against a key nobody defines guards
+   nothing, while reading as though a batch form had been considered and handled."
+  [opts]
+  (when (or (contains? opts :expected-revision) (contains? opts :with-revision?))
+    (throw (ex-info (str "multi-assoc cannot be made conditional. Verifying every key and then writing "
+                         "every key is not one atomic step on a store whose locks are per blob: another "
+                         "writer can change a key after it was checked and before it was written. Fencing "
+                         "it here would promise an atomicity the backend does not have. Content-addressed "
+                         "values — the usual reason to batch — cannot conflict anyway, since the same key "
+                         "means the same bytes.")
+                    {:type :konserve/conditional-multi-write-unsupported}))))
+
 (defn multi-assoc
   "Associates multiple key-value pairs with flat keys, as one batch. Atomically where the
   backend can (IndexedDB); ordered everywhere (see below), which is the weaker guarantee
@@ -493,6 +710,7 @@
    (multi-assoc store kvs nil opts))
   ([store kvs meta opts]
    (log/trace :konserve/multi-assoc {:key-count (count kvs)})
+   (refuse-conditional-multi! opts)
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
@@ -581,6 +799,7 @@
    (dissoc store key {:sync? false}))
   ([store key opts]
    (log/trace :konserve/dissoc {:key key})
+   (refuse-conditional-unsupported! "dissoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked
@@ -637,6 +856,7 @@
    (append store key elem {:sync? false}))
   ([store key elem opts]
    (log/trace :konserve/append {:key key})
+   (refuse-conditional-unsupported! "append" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (go-locked
@@ -747,6 +967,7 @@
    (bassoc store key val {:sync? false}))
   ([store key val opts]
    (log/trace :konserve/bassoc {:key key})
+   (refuse-conditional-unsupported! "bassoc" opts)
    (async+sync (:sync? opts)
                *default-sync-translation*
                (maybe-go-locked

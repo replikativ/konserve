@@ -64,6 +64,144 @@
   (-set-write-hooks! [this hooks-atom]
     "Set the write-hooks atom. Returns the modified store."))
 
+(defprotocol PSelfConditionalWrite
+  "Marker: THIS backing evaluates the precondition itself.
+
+   REACH AND MECHANISM ARE DIFFERENT QUESTIONS, and `-conditional-write-domain`
+   answers only the first. How far a guarantee extends is a property of the
+   deployment; WHO compares the revision is a property of the implementation, and
+   one does not follow from the other. Implement this when your storage layer
+   evaluates the condition — a conditional PUT, `UPDATE ... WHERE revision = ?`,
+   a `ConditionExpression`, a write transaction — whatever its reach.
+
+   Without it, konserve's default backing provides the mechanism instead: it
+   compares and writes while holding a lock, on a sidecar blob (see
+   `konserve.impl.defaults/cas-lock-suffix`), because a filesystem offers no
+   compare-and-rename. Say so by NOT implementing this marker, which is what both
+   filestores do.
+
+   Why a marker and not an inference from the domain. konserve used to treat
+   `:process`/`:machine` as meaning it wants konserve's lock, and `:global` as
+   meaning it fences itself — sound in only one direction: no local lock
+   can reach across machines, but plenty of stores fence themselves WITHOUT
+   reaching that far. RocksDB is `:process` with a write batch; LMDB is
+   `:machine` with an ACID transaction; a JDBC backend is `:global` on Postgres
+   and `:machine` on SQLite with the SAME statement — so the inference would have
+   handed konserve's sidecar to half of them, writing a phantom `.cas` row into
+   the very table it is fencing.
+
+   It also asked a question the domain cannot answer. Inferring the mechanism
+   means assuming `-get-lock` really serializes; konserve's own IndexedDB backing
+   sets `:lock-blob?` and implements `-get-lock` as a no-op, so the inference
+   would have given it a compare-and-write with no exclusion at all — advertising
+   a domain it does not have, which is the failure this protocol exists to
+   prevent, produced by the machinery meant to prevent it."
+  ;; No methods: implementing it IS the statement.
+  )
+
+(defprotocol PConditionalWrite
+  "Stores that can make a write conditional on the revision the caller read.
+
+   The point of the capability being explicit is that a store which CANNOT do
+   this must REFUSE `:expected-revision`, not ignore it. Silently degrading to an
+   unconditional write is worse than having no fencing at all: the caller has
+   asked for a guarantee, and would get a knob that reads as handled."
+  (-conditional-write-domain [this]
+    "How far this store's conditional writes actually reach, or nil for not at all.
+
+     Named for what it RETURNS. It was `-conditional-write?` for a while, which
+     reads as a predicate to every backend author who has to implement it — and a
+     domain answered as if it were a boolean is the precise confusion this whole
+     protocol exists to prevent. `konserve.core/conditional-write?` keeps the `?`,
+     because that one really is a predicate: it compares a domain you need against
+     the domain a store has.
+
+
+       nil       cannot compare-and-write; `:expected-revision` is REFUSED
+       :process  atomic against other threads in this runtime  (memory: one `swap!`)
+       :machine  atomic against other processes on this host   (JVM filestore: an
+                 OS advisory lock; node filestore: an O_EXCL lockfile, which a
+                 crashed writer leaves behind where the kernel would have
+                 released an advisory one. NOT across NFS or any network
+                 filesystem, where advisory locks are unreliable)
+       :global   atomic against every writer anywhere          (S3: If-Match)
+
+     A DOMAIN rather than a boolean because the API is uniform and the guarantee is
+     not. `true` would let a caller planning to run two processes against a memory
+     store — or two machines against a filestore — believe they are fenced when they
+     are only serialized against a narrower set of writers. That is the same failure
+     the capability exists to prevent, one level finer: appearing fenced without
+     being fenced.
+
+     Ordered weakest-first, so a caller can state the domain it needs and compare.
+
+     WHAT `:machine` EXCLUDES, precisely, because it is easy to assume too much:
+     every writer to that KEY, not merely the ones that also fence. That has to
+     hold — konserve replaces a value by renaming a new file over it, so a fenced
+     write whose lock was taken on the old file would compare its revision
+     against a detached one, pass, and overwrite the value that replaced it. So
+     the lock lives on a sidecar that is never renamed, and every write to a key
+     that HAS one takes it. A key gets one the first time a conditional write or
+     a revision-bearing read touches it; keys that are never fenced pay only an
+     existence probe.
+
+     WHO IS EXCLUDED, and the limit that is not konserve's to fix. Conditional
+     writes are optimistic concurrency control, so they order writers that
+     PARTICIPATE. A writer that issues an unconditional write overwrites whatever
+     is there, and no scheme prevents that — not S3's If-Match, not a row-version
+     column, not this. Fencing a store means every writer to that key fences.
+
+     Given that, konserve serialises correctly from the very first write: two
+     conditional writers racing a key with no sidecar both open the same
+     `<key>.cas` (created, not created-anew), so they take the same lock and one
+     is rejected.
+
+     Where konserve goes FURTHER than the premise requires: once a key has a
+     sidecar, unconditional writers take it too, so they are ordered against
+     fenced ones rather than merely winning by luck. S3 cannot offer that — a
+     non-participant there is beyond reach entirely.
+
+     The gap between those two, stated because it is the one case that behaves
+     worse than S3 rather than better: a key that has no sidecar YET, being
+     written by a non-participant at the same moment as its first conditional
+     write. S3 would reject the conditional writer (its ETag moved); here the
+     conditional writer can read the value the non-participant just replaced,
+     compare against that, pass, and overwrite it. Both are told they succeeded.
+     It requires a writer that does not fence, which is the premise already
+     broken.
+
+     PREFER YOUR OWN STORAGE LAYER. The sidecar konserve's default backing uses
+     to reach `:machine` is a filesystem fallback — POSIX has no
+     compare-and-rename — and it costs an extra blob open and lock per write to a
+     fenced key. A store with a native conditional operation (SQL row version,
+     Redis WATCH, a DynamoDB ConditionExpression, GCS generation match, S3
+     If-Match) should implement the comparison there instead: no extra round
+     trips, and a stronger reach. The sidecar work is gated on a backing
+     declaring `:process`/`:machine`, so backings that declare nothing or
+     `:global` pay nothing for it.
+
+     WHAT A DOMAIN CLAIMS IS A MECHANISM, not an intention. konserve's default
+     backing enforces the comparison in `konserve.impl.defaults/io-operation`:
+     read the stored revision and write the new value while holding a local lock.
+     That is genuinely atomic against threads (`:process`) and, with an OS
+     advisory lock on the blob, against processes on the host (`:machine`) — and
+     it cannot reach further, because nothing in it is visible to another
+     machine. A store that answers `:global` therefore does NOT get there through
+     `io-operation`; it must implement the comparison in its own storage layer,
+     where the guarantee actually lives — konserve-s3 does it with a conditional
+     PUT (`If-Match` on the object's ETag), which S3 evaluates. Answering
+     `:global` while relying on the default compare would be the exact failure
+     this protocol exists to prevent, written one layer down.")
+  (-revision [this key opts]
+    "The token to hand back as `:expected-revision`, or the absent sentinel.
+
+     Its OWN function rather than a field of `-get-meta`, because the two can
+     disagree: a tiered store answers metadata from whichever tier its read-policy
+     names, while the conditional write is evaluated by the tier that owns the
+     durable value. Reading the revision from the frontend and comparing it
+     against the backend's compares two independent counters, which is worse than
+     not comparing at all. This function always resolves to the tier that decides."))
+
 (defprotocol PLockFreeStore
   "Protocol for stores that handle concurrency internally (e.g., MVCC backends like LMDB).
    These stores don't need application-level locking for read/write operations."

@@ -3,6 +3,7 @@
             [clojure.test :refer [deftest is]]
             [fress.api :as fress]
             [konserve.cache :as kc]
+            [konserve.core :as k]
             #?(:cljs [fress.util :refer [byte-array]])))
 
 (defn test-cached-PEDNKeyValueStore-async [store]
@@ -31,6 +32,70 @@
        (is (true? (<! (kc/dissoc store :foo opts))))
        (is (nil? (<! (kc/get-in store [:foo] nil opts))))))))
 
+(defn test-cached-revision-sync
+  "`:with-revision?` through the CACHE. Sync only: the shapes are the thing under
+   test and the async arm delivers a rejection as a value, which would obscure
+   them.
+
+   The cache stores whatever the backing hands back, so a revision-bearing write
+   used to poison it: the `[[old new] revision]` shape destructured as the plain
+   `[old new]` one, and the REVISION was cached as the key's value. The read that
+   catches it is the plain one AFTER the write."
+  [store]
+  (let [store (kc/ensure-cache store)
+        opts  {:sync? true}]
+    (when (k/conditional-write? store)
+      (kc/assoc store :rev-k {:v 1} opts)
+      ;; warm the cache, so the assertion below is about the cache and not the store
+      (is (= {:v 1} (kc/get store :rev-k nil opts)))
+      (let [[[old new] revision] (kc/assoc store :rev-k {:v 2} (assoc opts :with-revision? true))]
+        ;; `old` is nil for a full overwrite whether or not a revision was asked
+        ;; for — konserve never reads the old value on that path. What matters
+        ;; here is that `new` is the VALUE and the revision is beside it, not
+        ;; that the pair collapsed into the `old` slot.
+        (is (nil? old) "a full overwrite reports no old value, as it always has")
+        (is (= {:v 2} new) "the new value, not the revision")
+        (is (some? revision) "and a revision alongside it")
+        (is (= {:v 2} (kc/get store :rev-k nil opts))
+            "a later cached read must return the VALUE, not the revision token"))
+      (let [[[old new] revision] (kc/update-in store [:rev-k] #(assoc % :v 3)
+                                               (assoc opts :with-revision? true))]
+        (is (= {:v 2} old) "update-in reads the old value, so it must survive the shape")
+        (is (= {:v 3} new))
+        (is (some? revision))
+        (is (= {:v 3} (kc/get store :rev-k nil opts))))
+      ;; A cached read cannot answer this: a hit carries no revision.
+      (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                   (kc/get store :rev-k nil (assoc opts :with-revision? true)))))))
+
+(defn test-cached-conflict-coherence-sync
+  "What the cache must do when a conditional write is REJECTED.
+
+   A rejection is proof the key moved under us, so it is the one moment the
+   cached value is known to be wrong — and it was the one moment nothing was
+   evicted, because the eviction sits after the write and the rejection
+   propagates first. A read-then-CAS retry loop over this namespace could never
+   converge: it re-read the same stale value and rebuilt the same doomed write."
+  [store]
+  (let [store (kc/ensure-cache store)
+        opts  {:sync? true}]
+    (when (k/conditional-write? store)
+      (kc/assoc store :conflict-k {:v 1} opts)
+      (is (= {:v 1} (kc/get store :conflict-k nil opts)) "cache is warm")
+      (let [stale (k/revision store :conflict-k opts)]
+        ;; move the key behind the cache's back, as another writer would
+        (k/assoc store :conflict-k {:v :moved} opts)
+        (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                     (kc/assoc store :conflict-k {:v :lost} (assoc opts :expected-revision stale))))
+        (is (= {:v :moved} (kc/get store :conflict-k nil opts))
+            "the rejected write must have dropped the stale entry"))
+      ;; `konserve.core/dissoc` refuses this; the cached twin used to DELETE.
+      (kc/assoc store :refuse-k 1 opts)
+      (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                   (kc/dissoc store :refuse-k (assoc opts :expected-revision :anything))))
+      (is (= 1 (kc/get store :refuse-k nil opts))
+          "and must not have removed the key on the way out"))))
+
 (defn test-cached-PKeyIterable-async [store]
   (go
     (let [store (kc/ensure-cache store)
@@ -43,7 +108,7 @@
          (and
           (is (every? inst? (map :last-write store-keys)))
           (is (= #{{:key :bin-blob :type :binary} {:key :value-blob :type :edn}}
-                 (set (map #(dissoc % :last-write) store-keys))))))))))
+                 (set (map #(dissoc % :last-write :revision) store-keys))))))))))
 
 (defn test-cached-PBin-async [store locked-cb]
   (let [store (kc/ensure-cache store)

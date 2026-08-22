@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [go <! timeout alts! promise-chan put! close!]]
             [clojure.test :refer [is testing]]
             [konserve.core :as k]
+            [konserve.protocols :as protocols]
             [konserve.tiered :as tiered]
             [konserve.compliance-test :refer [async-compliance-test] :as ct]
             [superv.async :refer [<?-]]))
@@ -10,6 +11,116 @@
    (defn test-tiered-compliance-sync [frontend-store backend-store]
      (let [store (clojure.core.async/<!! (tiered/connect-tiered-store frontend-store backend-store))]
        (ct/compliance-test store))))
+
+#?(:clj
+   (defn test-tiered-fenced-write-through-sync
+     "A fenced write through a `:write-through` tiered store must leave the tiers
+      AGREEING.
+
+      Revisions belong to the store that minted them, and the two tiers mint their
+      own — so forwarding the caller's `:expected-revision` to the frontend made it
+      reject a write the backend had just accepted. The rejection was caught and
+      logged, the caller was told the fenced write succeeded, and every later
+      `:frontend-first` read returned the PRE-WRITE value indefinitely. Using the
+      fence created the incoherence it exists to prevent, in the one configuration
+      `-conditional-write-domain` explicitly advertises as supported."
+     [frontend-store backend-store]
+     (let [store (clojure.core.async/<!! (tiered/connect-tiered-store
+                                          frontend-store backend-store
+                                          {:write-policy :write-through
+                                           :read-policy  :frontend-first
+                                           :sync? false}))
+           opts  {:sync? true}]
+       (k/assoc store :fenced {:v 1} opts)
+       (is (= {:v 1} (k/get store :fenced nil opts)))
+       (let [r (k/revision store :fenced opts)]
+         (k/assoc store :fenced {:v 2} (assoc opts :expected-revision r))
+         (is (= {:v 2} (k/get store :fenced nil opts))
+             "the tiered read must not serve the pre-write value")
+         (is (= {:v 2} (k/get backend-store :fenced nil opts)) "backend")
+         ;; The revision-sensitive write invalidates rather than pretending the
+         ;; frontend participates in the backend's revision stream. The read
+         ;; above returns the backend value and warms asynchronously.
+         (is (contains? #{nil {:v 2}} (k/get frontend-store :fenced nil opts))
+             "frontend is invalidated or has already been warmed"))
+       (let [r (k/revision store :fenced opts)]
+         (k/update-in store [:fenced] (fn [v] (assoc v :v 3)) (assoc opts :expected-revision r))
+         (is (= {:v 3} (k/get store :fenced nil opts)) "same for update-in"))
+
+       (testing "a stale frontend cannot independently recompute a fenced update"
+         (k/assoc store :drift 0 opts)
+         (k/assoc backend-store :drift 10 opts) ; another process advances truth
+         (let [r (k/revision store :drift opts)]
+           (k/update store :drift inc (assoc opts :expected-revision r)))
+         (is (= 11 (k/get backend-store :drift nil opts)) "backend applied inc to 10")
+         (is (= 11 (k/get store :drift nil opts))
+             "tiered read cannot return the frontend's stale 0 incremented to 1"))
+
+       (testing "a nested fenced assoc does not retain stale outer fields"
+         (k/assoc store :nested {:v 0 :backend-generation 0} opts)
+         (k/assoc backend-store :nested {:v 10 :backend-generation 1} opts)
+         (let [r (k/revision store :nested opts)]
+           (k/assoc-in store [:nested :v] 11 (assoc opts :expected-revision r)))
+         (is (= {:v 11 :backend-generation 1}
+                (k/get store :nested nil opts))))
+
+       (testing "an older asynchronous cache fill cannot outlive a fenced write"
+         (k/assoc backend-store :fill-race {:v 1} opts)
+         (let [populate-started (promise)
+               allow-populate (promise)
+               delayed-frontend
+               (reify protocols/PEDNKeyValueStore
+                 (-exists? [_ key call-opts]
+                   (protocols/-exists? frontend-store key call-opts))
+                 (-get-meta [_ key call-opts]
+                   (protocols/-get-meta frontend-store key call-opts))
+                 (-get-in [_ key-vec not-found call-opts]
+                   (protocols/-get-in frontend-store key-vec not-found call-opts))
+                 (-update-in [_ key-vec meta-up-fn up-fn call-opts]
+                   (protocols/-update-in frontend-store key-vec meta-up-fn up-fn call-opts))
+                 (-assoc-in [_ key-vec meta-up-fn val call-opts]
+                   (when (and (= key-vec [:fill-race]) (= val {:v 1}))
+                     (deliver populate-started true)
+                     (when (= ::timeout (deref allow-populate 5000 ::timeout))
+                       (throw (ex-info "timed out waiting to release cache fill" {}))))
+                   (protocols/-assoc-in frontend-store key-vec meta-up-fn val call-opts))
+                 (-dissoc [_ key call-opts]
+                   (protocols/-dissoc frontend-store key call-opts)))
+               race-store (clojure.core.async/<!!
+                           (tiered/connect-tiered-store
+                            delayed-frontend backend-store
+                            {:write-policy :write-through
+                             :read-policy :frontend-first
+                             :sync? false}))]
+           (try
+             (is (= {:v 1} (k/get race-store :fill-race nil opts)))
+             (is (= true (deref populate-started 5000 false))
+                 "the old value is waiting to enter the frontend")
+             (let [revision (k/revision race-store :fill-race opts)
+                   write (future
+                           (k/assoc race-store :fill-race {:v 2}
+                                    (assoc opts :expected-revision revision)))]
+               ;; The backend commits before the tiered store repairs its cache.
+               ;; Release the deliberately delayed OLD fill only after that point.
+               (is (loop [attempts 500]
+                     (cond
+                       (= {:v 2} (k/get backend-store :fill-race nil opts)) true
+                       (zero? attempts) false
+                       :else (do (Thread/sleep 2) (recur (dec attempts)))))
+                   "the fenced backend write committed")
+               (deliver allow-populate true)
+               (is (not= ::timeout (deref write 5000 ::timeout))
+                   "the tiered write finishes repairing its cache")
+               (is (= 1 @(:cache-generation race-store)) "the write advances the cache generation")
+               (is (nil? (k/get frontend-store :fill-race nil opts)) "the old frontend value was invalidated")
+               (is (= {:v 2} (k/get race-store :fill-race nil opts))
+                   "the completed write cannot be followed by a stale cache fill"))
+             (finally
+               (deliver allow-populate true)))))
+
+       ;; The shared contract covers stale tokens, create-if-absent, update-in,
+       ;; with-revision result shapes, and refusal of conditional multi-assoc.
+       (ct/conditional-write-compliance-test store))))
 
 (defn test-tiered-deep-async
   "Tests the deep read miss scenario in a tiered store, ensuring that a value
