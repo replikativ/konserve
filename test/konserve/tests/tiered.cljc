@@ -37,10 +37,35 @@
          (is (= {:v 2} (k/get store :fenced nil opts))
              "the tiered read must not serve the pre-write value")
          (is (= {:v 2} (k/get backend-store :fenced nil opts)) "backend")
-         (is (= {:v 2} (k/get frontend-store :fenced nil opts)) "frontend"))
+         ;; The revision-sensitive write invalidates rather than pretending the
+         ;; frontend participates in the backend's revision stream. The read
+         ;; above returns the backend value and warms asynchronously.
+         (is (contains? #{nil {:v 2}} (k/get frontend-store :fenced nil opts))
+             "frontend is invalidated or has already been warmed"))
        (let [r (k/revision store :fenced opts)]
          (k/update-in store [:fenced] (fn [v] (assoc v :v 3)) (assoc opts :expected-revision r))
-         (is (= {:v 3} (k/get store :fenced nil opts)) "same for update-in")))))
+         (is (= {:v 3} (k/get store :fenced nil opts)) "same for update-in"))
+
+       (testing "a stale frontend cannot independently recompute a fenced update"
+         (k/assoc store :drift 0 opts)
+         (k/assoc backend-store :drift 10 opts) ; another process advances truth
+         (let [r (k/revision store :drift opts)]
+           (k/update store :drift inc (assoc opts :expected-revision r)))
+         (is (= 11 (k/get backend-store :drift nil opts)) "backend applied inc to 10")
+         (is (= 11 (k/get store :drift nil opts))
+             "tiered read cannot return the frontend's stale 0 incremented to 1"))
+
+       (testing "a nested fenced assoc does not retain stale outer fields"
+         (k/assoc store :nested {:v 0 :backend-generation 0} opts)
+         (k/assoc backend-store :nested {:v 10 :backend-generation 1} opts)
+         (let [r (k/revision store :nested opts)]
+           (k/assoc-in store [:nested :v] 11 (assoc opts :expected-revision r)))
+         (is (= {:v 11 :backend-generation 1}
+                (k/get store :nested nil opts))))
+
+       ;; The shared contract covers stale tokens, create-if-absent, update-in,
+       ;; with-revision result shapes, and refusal of conditional multi-assoc.
+       (ct/conditional-write-compliance-test store))))
 
 (defn test-tiered-deep-async
   "Tests the deep read miss scenario in a tiered store, ensuring that a value

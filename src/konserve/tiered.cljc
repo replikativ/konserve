@@ -189,6 +189,37 @@
   ;; .cljc file because there it is `cljs.core/dissoc`.
   (core-dissoc opts :expected-revision :with-revision?))
 
+(defn ^:private revision-sensitive?
+  "Does this write participate in the backend's revision stream?
+
+   `:expected-revision` is the conditional half; `:with-revision?` asks for the
+   revision produced by an otherwise unconditional write so the caller can chain
+   the next one. In both cases the backend is authoritative and the frontend must
+   not independently replay the operation."
+  [opts]
+  (or (contains? opts :expected-revision)
+      (:with-revision? opts)))
+
+(defn ^:private invalidate-frontend
+  "Synchronously evict `key` from the frontend after the backend committed.
+
+   A failed eviction is not a harmless cache error: a `:frontend-first` read
+   could otherwise return the pre-write value indefinitely after the caller was
+   told its durable write succeeded. Raise an explicit PARTIAL outcome instead
+   of claiming coherence; the backend write has already landed."
+  [frontend-store key opts]
+  (async+sync (:sync? opts)
+              *default-sync-translation*
+              (go-try-
+               (try
+                 (<?- (-dissoc frontend-store key (frontend-opts opts)))
+                 (catch #?(:clj Exception :cljs js/Error) e
+                   (throw (ex-info "The backend write committed, but the tiered frontend could not be invalidated."
+                                   {:type               :konserve/tiered-cache-invalidation-failed
+                                    :key                key
+                                    :backend-committed? true}
+                                   e)))))))
+
 (defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
   PConditionalWrite
   ;; Only `:write-through` can honour this, and only if the backend can.
@@ -292,10 +323,18 @@
                    :write-through
                    ;; Write to both stores - backend first for durability
                    (let [backend-result (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))]
-                     (try
-                       (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))
-                       (catch #?(:clj Exception :cljs js/Error) e
-                         (log/warn :konserve/tiered-frontend-update-failed {:key key-vec :error e})))
+                     (if (revision-sensitive? opts)
+                       ;; The backend evaluated `up-fn` against the value whose
+                       ;; revision the caller supplied. Re-running it against a
+                       ;; stale frontend can compute a DIFFERENT value (and runs
+                       ;; caller code twice). Evict the whole blob; the next read
+                       ;; refills it from the authoritative backend.
+                       (<?- (invalidate-frontend frontend-store (first key-vec) opts))
+                       (try
+                         (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))
+                         (catch #?(:clj Exception :cljs js/Error) e
+                           (log/warn :konserve/tiered-frontend-update-failed {:key key-vec :error e})
+                           (<?- (invalidate-frontend frontend-store (first key-vec) opts)))))
                      backend-result)
 
                    :write-behind
@@ -328,19 +367,17 @@
                  (case write-policy
                    :write-through
                    (let [backend-result (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))]
-                     (try
-                       ;; The FRONTEND IS NOT FENCED, and must not be handed the
-                       ;; caller's token. Revisions belong to the store that minted
-                       ;; them, and the two tiers mint their own — so forwarding
-                       ;; `:expected-revision` made the frontend reject a write the
-                       ;; backend had just accepted. The rejection was caught and
-                       ;; logged, the caller was told the fenced write succeeded,
-                       ;; and every later `:frontend-first` read returned the
-                       ;; PRE-WRITE value, indefinitely. Using the fence created
-                       ;; the incoherence it exists to prevent.
-                       (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))
-                       (catch #?(:clj Exception :cljs js/Error) e
-                         (log/warn :konserve/tiered-frontend-assoc-failed {:key key-vec :error e})))
+                     (if (revision-sensitive? opts)
+                       ;; The frontend is a cache, not a second participant in the
+                       ;; backend's revision stream. Eviction is also correct for a
+                       ;; nested assoc: replaying it against a stale outer value
+                       ;; would preserve fields the backend no longer has.
+                       (<?- (invalidate-frontend frontend-store (first key-vec) opts))
+                       (try
+                         (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))
+                         (catch #?(:clj Exception :cljs js/Error) e
+                           (log/warn :konserve/tiered-frontend-assoc-failed {:key key-vec :error e})
+                           (<?- (invalidate-frontend frontend-store (first key-vec) opts)))))
                      backend-result)
 
                    :write-behind
