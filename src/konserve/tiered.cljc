@@ -200,6 +200,67 @@
   (or (contains? opts :expected-revision)
       (:with-revision? opts)))
 
+(defn ^:private make-cache-lock []
+  (let [lock (async/chan 1)]
+    (async/put! lock :unlocked)
+    lock))
+
+(defn ^:private take-cache-lock-sync! [cache-lock]
+  #?(:clj
+     (async/<!! cache-lock)
+     :cljs
+     (or (async/poll! cache-lock)
+         (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
+                         {:type :konserve/tiered-sync-cache-contention})))))
+
+(defn ^:private populate-frontend
+  "Run a read-through cache fill unless a backend write completed since its read.
+
+   The generation check and the frontend mutation share `cache-lock` with
+   post-write invalidation. Without both, a fire-and-forget fill can land after
+   a newer backend write invalidated the frontend and resurrect the stale value."
+  [cache-lock cache-generation observed-generation populate-fn opts]
+  (if (:sync? opts)
+    (try
+      (take-cache-lock-sync! cache-lock)
+      (if (= observed-generation @cache-generation)
+        (do
+          (populate-fn)
+          true)
+        false)
+      (finally
+        (async/put! cache-lock :unlocked)))
+    (go-try-
+     (try
+       (<?- cache-lock)
+       (if (= observed-generation @cache-generation)
+         (do
+           (<?- (populate-fn))
+           true)
+         false)
+       (finally
+         (async/put! cache-lock :unlocked))))))
+
+(defn ^:private update-frontend-after-backend
+  "Order a frontend mutation after all older read-through cache fills."
+  [cache-lock cache-generation update-fn opts]
+  (if (:sync? opts)
+    (try
+      (take-cache-lock-sync! cache-lock)
+      ;; Invalidate every fill that observed the backend before this write
+      ;; committed, including fills still waiting for the lock.
+      (swap! cache-generation inc)
+      (update-fn)
+      (finally
+        (async/put! cache-lock :unlocked)))
+    (go-try-
+     (try
+       (<?- cache-lock)
+       (swap! cache-generation inc)
+       (<?- (update-fn))
+       (finally
+         (async/put! cache-lock :unlocked))))))
+
 (defn ^:private invalidate-frontend
   "Synchronously evict `key` from the frontend after the backend committed.
 
@@ -207,12 +268,15 @@
    could otherwise return the pre-write value indefinitely after the caller was
    told its durable write succeeded. Raise an explicit PARTIAL outcome instead
    of claiming coherence; the backend write has already landed."
-  [frontend-store key opts]
+  [frontend-store cache-lock cache-generation key opts]
   (async+sync (:sync? opts)
               *default-sync-translation*
               (go-try-
                (try
-                 (<?- (-dissoc frontend-store key (frontend-opts opts)))
+                 (<?- (update-frontend-after-backend
+                       cache-lock cache-generation
+                       #(-dissoc frontend-store key (frontend-opts opts))
+                       opts))
                  (catch #?(:clj Exception :cljs js/Error) e
                    (throw (ex-info "The backend write committed, but the tiered frontend could not be invalidated."
                                    {:type               :konserve/tiered-cache-invalidation-failed
@@ -220,7 +284,7 @@
                                     :backend-committed? true}
                                    e)))))))
 
-(defrecord TieredStore [frontend-store backend-store write-policy read-policy locks config]
+(defrecord TieredStore [frontend-store backend-store write-policy read-policy locks cache-lock cache-generation config]
   PConditionalWrite
   ;; Only `:write-through` can honour this, and only if the backend can.
   ;;
@@ -296,15 +360,19 @@
                      (let [frontend-result (<?- (-get-in frontend-store key-vec ::missing opts))]
                        (if (not= frontend-result ::missing)
                          frontend-result  ;; Cache hit
-                         (let [backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
+                         (let [observed-generation @cache-generation
+                               backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
                            (when (not= backend-result ::missing)
                            ;; Populate frontend asynchronously (fire-and-forget)
                              (go (try
-                                   (<?- (-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result (frontend-opts opts)))
-                                   (invoke-write-hooks! frontend-store {:api-op :assoc-in
-                                                                        :key (first key-vec)
-                                                                        :key-vec key-vec
-                                                                        :value backend-result})
+                                   (when (<?- (populate-frontend
+                                               cache-lock cache-generation observed-generation
+                                               #(-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result (frontend-opts opts))
+                                               opts))
+                                     (invoke-write-hooks! frontend-store {:api-op :assoc-in
+                                                                          :key (first key-vec)
+                                                                          :key-vec key-vec
+                                                                          :value backend-result}))
                                    (catch #?(:clj Exception :cljs js/Error) e
                                      (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
                            (if (not= backend-result ::missing)
@@ -329,12 +397,15 @@
                        ;; stale frontend can compute a DIFFERENT value (and runs
                        ;; caller code twice). Evict the whole blob; the next read
                        ;; refills it from the authoritative backend.
-                       (<?- (invalidate-frontend frontend-store (first key-vec) opts))
+                       (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts))
                        (try
-                         (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))
+                         (<?- (update-frontend-after-backend
+                               cache-lock cache-generation
+                               #(-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts))
+                               opts))
                          (catch #?(:clj Exception :cljs js/Error) e
                            (log/warn :konserve/tiered-frontend-update-failed {:key key-vec :error e})
-                           (<?- (invalidate-frontend frontend-store (first key-vec) opts)))))
+                           (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts)))))
                      backend-result)
 
                    :write-behind
@@ -372,12 +443,15 @@
                        ;; backend's revision stream. Eviction is also correct for a
                        ;; nested assoc: replaying it against a stale outer value
                        ;; would preserve fields the backend no longer has.
-                       (<?- (invalidate-frontend frontend-store (first key-vec) opts))
+                       (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts))
                        (try
-                         (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))
+                         (<?- (update-frontend-after-backend
+                               cache-lock cache-generation
+                               #(-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts))
+                               opts))
                          (catch #?(:clj Exception :cljs js/Error) e
                            (log/warn :konserve/tiered-frontend-assoc-failed {:key key-vec :error e})
-                           (<?- (invalidate-frontend frontend-store (first key-vec) opts)))))
+                           (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts)))))
                      backend-result)
 
                    :write-behind
@@ -570,13 +644,17 @@
                          missing-keys (remove (set (clojure.core/keys frontend-result)) keys)]
                      (if (seq missing-keys)
                        ;; Some keys missing from frontend, fetch from backend
-                       (let [backend-result (<?- (-multi-get backend-store missing-keys opts))]
+                       (let [observed-generation @cache-generation
+                             backend-result (<?- (-multi-get backend-store missing-keys opts))]
                          ;; Populate frontend asynchronously with found backend values (fire-and-forget)
                          (when (seq backend-result)
                            (go (try
-                                 (<?- (-multi-assoc frontend-store backend-result meta-update opts))
-                                 (invoke-write-hooks! frontend-store {:api-op :multi-assoc
-                                                                      :kvs backend-result})
+                                 (when (<?- (populate-frontend
+                                             cache-lock cache-generation observed-generation
+                                             #(-multi-assoc frontend-store backend-result meta-update opts)
+                                             opts))
+                                   (invoke-write-hooks! frontend-store {:api-op :multi-assoc
+                                                                        :kvs backend-result}))
                                  (catch #?(:clj Exception :cljs js/Error) e
                                    (log/debug :konserve/tiered-frontend-populate-failed {:keys (clojure.core/keys backend-result) :error e})))))
                          ;; Merge frontend and backend results
@@ -623,5 +701,7 @@
                 :write-policy write-policy
                 :read-policy read-policy
                 :locks (atom {})
+                :cache-lock (make-cache-lock)
+                :cache-generation (atom 0)
                 :config params})]
     (if (:sync? opts) store (go store))))

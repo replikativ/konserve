@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [go <! timeout alts! promise-chan put! close!]]
             [clojure.test :refer [is testing]]
             [konserve.core :as k]
+            [konserve.protocols :as protocols]
             [konserve.tiered :as tiered]
             [konserve.compliance-test :refer [async-compliance-test] :as ct]
             [superv.async :refer [<?-]]))
@@ -62,6 +63,60 @@
            (k/assoc-in store [:nested :v] 11 (assoc opts :expected-revision r)))
          (is (= {:v 11 :backend-generation 1}
                 (k/get store :nested nil opts))))
+
+       (testing "an older asynchronous cache fill cannot outlive a fenced write"
+         (k/assoc backend-store :fill-race {:v 1} opts)
+         (let [populate-started (promise)
+               allow-populate (promise)
+               delayed-frontend
+               (reify protocols/PEDNKeyValueStore
+                 (-exists? [_ key call-opts]
+                   (protocols/-exists? frontend-store key call-opts))
+                 (-get-meta [_ key call-opts]
+                   (protocols/-get-meta frontend-store key call-opts))
+                 (-get-in [_ key-vec not-found call-opts]
+                   (protocols/-get-in frontend-store key-vec not-found call-opts))
+                 (-update-in [_ key-vec meta-up-fn up-fn call-opts]
+                   (protocols/-update-in frontend-store key-vec meta-up-fn up-fn call-opts))
+                 (-assoc-in [_ key-vec meta-up-fn val call-opts]
+                   (when (and (= key-vec [:fill-race]) (= val {:v 1}))
+                     (deliver populate-started true)
+                     (when (= ::timeout (deref allow-populate 5000 ::timeout))
+                       (throw (ex-info "timed out waiting to release cache fill" {}))))
+                   (protocols/-assoc-in frontend-store key-vec meta-up-fn val call-opts))
+                 (-dissoc [_ key call-opts]
+                   (protocols/-dissoc frontend-store key call-opts)))
+               race-store (clojure.core.async/<!!
+                           (tiered/connect-tiered-store
+                            delayed-frontend backend-store
+                            {:write-policy :write-through
+                             :read-policy :frontend-first
+                             :sync? false}))]
+           (try
+             (is (= {:v 1} (k/get race-store :fill-race nil opts)))
+             (is (= true (deref populate-started 5000 false))
+                 "the old value is waiting to enter the frontend")
+             (let [revision (k/revision race-store :fill-race opts)
+                   write (future
+                           (k/assoc race-store :fill-race {:v 2}
+                                    (assoc opts :expected-revision revision)))]
+               ;; The backend commits before the tiered store repairs its cache.
+               ;; Release the deliberately delayed OLD fill only after that point.
+               (is (loop [attempts 500]
+                     (cond
+                       (= {:v 2} (k/get backend-store :fill-race nil opts)) true
+                       (zero? attempts) false
+                       :else (do (Thread/sleep 2) (recur (dec attempts)))))
+                   "the fenced backend write committed")
+               (deliver allow-populate true)
+               (is (not= ::timeout (deref write 5000 ::timeout))
+                   "the tiered write finishes repairing its cache")
+               (is (= 1 @(:cache-generation race-store)) "the write advances the cache generation")
+               (is (nil? (k/get frontend-store :fill-race nil opts)) "the old frontend value was invalidated")
+               (is (= {:v 2} (k/get race-store :fill-race nil opts))
+                   "the completed write cannot be followed by a stale cache fill"))
+             (finally
+               (deliver allow-populate true)))))
 
        ;; The shared contract covers stale tokens, create-if-absent, update-in,
        ;; with-revision result shapes, and refusal of conditional multi-assoc.
