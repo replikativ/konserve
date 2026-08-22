@@ -64,6 +64,41 @@
   (-set-write-hooks! [this hooks-atom]
     "Set the write-hooks atom. Returns the modified store."))
 
+(defprotocol PSelfConditionalWrite
+  "Marker: THIS backing evaluates the precondition itself.
+
+   REACH AND MECHANISM ARE DIFFERENT QUESTIONS, and `-conditional-write-domain`
+   answers only the first. How far a guarantee extends is a property of the
+   deployment; WHO compares the revision is a property of the implementation, and
+   one does not follow from the other. Implement this when your storage layer
+   evaluates the condition — a conditional PUT, `UPDATE ... WHERE revision = ?`,
+   a `ConditionExpression`, a write transaction — whatever its reach.
+
+   Without it, konserve's default backing provides the mechanism instead: it
+   compares and writes while holding a lock, on a sidecar blob (see
+   `konserve.impl.defaults/cas-lock-suffix`), because a filesystem offers no
+   compare-and-rename. Say so by NOT implementing this marker, which is what both
+   filestores do.
+
+   Why a marker and not an inference from the domain. konserve used to treat
+   `:process`/`:machine` as meaning it wants konserve's lock, and `:global` as
+   meaning it fences itself — sound in only one direction: no local lock
+   can reach across machines, but plenty of stores fence themselves WITHOUT
+   reaching that far. RocksDB is `:process` with a write batch; LMDB is
+   `:machine` with an ACID transaction; a JDBC backend is `:global` on Postgres
+   and `:machine` on SQLite with the SAME statement — so the inference would have
+   handed konserve's sidecar to half of them, writing a phantom `.cas` row into
+   the very table it is fencing.
+
+   It also asked a question the domain cannot answer. Inferring the mechanism
+   means assuming `-get-lock` really serializes; konserve's own IndexedDB backing
+   sets `:lock-blob?` and implements `-get-lock` as a no-op, so the inference
+   would have given it a compare-and-write with no exclusion at all — advertising
+   a domain it does not have, which is the failure this protocol exists to
+   prevent, produced by the machinery meant to prevent it."
+  ;; No methods: implementing it IS the statement.
+  )
+
 (defprotocol PConditionalWrite
   "Stores that can make a write conditional on the revision the caller read.
 

@@ -188,23 +188,50 @@
           "and the option is refused rather than silently ignored")
       (delete-store folder)))
 
-  (testing "but a :global claim does NOT rest on that lock — it is the storage
-            layer's own compare (konserve-s3: If-Match, evaluated by S3), and
-            konserve-s3's `-get-lock` is a no-op that passes today only because it
-            happens to set `:lock-blob?`. A flag about a lock nobody uses must not
-            silently turn the guarantee off.
+  (testing "but a claim that does NOT rest on that lock survives it, and which
+            claims those are is DECLARED, not inferred from the domain.
 
-            Stubbed rather than run against S3 so the RULE is tested here; the
-            behaviour it enables is covered by konserve-s3's own suite."
-    (let [folder "/tmp/konserve-fs-global-test"
+            konserve used to test the domain for `:global`, on the reasoning that
+            nothing local can reach that far. True, and useless in the other
+            direction: RocksDB fences itself with a write batch at `:process`,
+            LMDB with an ACID transaction at `:machine`, and a JDBC backend with
+            one statement that is `:global` on Postgres and `:machine` on SQLite.
+            The old test would have disarmed every one of them — and handed them
+            konserve's sidecar, writing a phantom `.cas` row into the table being
+            fenced."
+    (let [folder "/tmp/konserve-fs-selffence-test"
           _      (delete-store folder)
           store  (<!! (connect-fs-store folder :config {:lock-blob? false}))
-          ;; Same store, with a backing that fences in its own storage layer.
-          global (clojure.core/assoc store :backing
-                                     (reify konserve.protocols/PConditionalWrite
-                                       (-conditional-write-domain [_] :global)))]
-      (is (= :global (k/conditional-write-domain global))
-          "a storage-layer fencer keeps its domain without konserve's lock")
+          self   (fn [domain]
+                   (clojure.core/assoc store :backing
+                                       (reify konserve.protocols/PConditionalWrite
+                                         (-conditional-write-domain [_] domain)
+                                         konserve.protocols/PSelfConditionalWrite)))]
+      (doseq [d [:process :machine :global]]
+        (is (= d (k/conditional-write-domain (self d)))
+            (str "a self-fencing backing keeps " d " without konserve's lock")))
+      (delete-store folder)))
+
+  (testing "and a self-fencing backing is not handed the sidecar either, whatever
+            its reach — the storage layer already evaluates the condition, so the
+            extra blob and its round trips would buy nothing"
+    (let [folder "/tmp/konserve-fs-selffence-sidecar"
+          _      (delete-store folder)
+          store  (<!! (connect-fs-store folder))
+          cas-of #(filter (fn [f] (str/ends-with? f ".cas"))
+                          (map str (.list (java.io.File. folder))))]
+      ;; the real filestore does NOT self-fence, so it gets one
+      (k/assoc store :fenced {:v 1} {:sync? true})
+      (k/get store :fenced nil {:sync? true :with-revision? true})
+      (is (= 1 (count (cas-of))) "konserve-lock backing: sidecar")
+      ;; the same store with a self-fencing backing gets none
+      (let [self-store (clojure.core/assoc store :backing
+                                           (reify konserve.protocols/PConditionalWrite
+                                             (-conditional-write-domain [_] :machine)
+                                             konserve.protocols/PSelfConditionalWrite))]
+        (is (= :machine (k/conditional-write-domain self-store)))
+        (is (false? (boolean (#'konserve.impl.defaults/internal-artifact? "x.ksv")))
+            "sanity: a value blob is not an artifact"))
       (delete-store folder))))
 
 (deftest filestore-compliance-test

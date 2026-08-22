@@ -412,22 +412,26 @@
           store-key-exists? (when-not skip-exists?
                               (<?- (-blob-exists? backing store-key env)))
           max-retries (get-in config [:optimistic-locking-retries] 0)
-          ;; WHO NEEDS THE SIDECAR AT ALL. Only a backing whose fence IS konserve's
-          ;; lock — the compare-and-write in this function, which reaches
-          ;; `:process` or `:machine`. A backing that declares `:global` fences in
-          ;; its own storage layer (konserve-s3: If-Match, evaluated by S3) and its
-          ;; `-get-lock` is a no-op, so a sidecar would buy nothing; a backing that
-          ;; declares no domain refuses `:expected-revision` outright, so there is
-          ;; nothing to protect.
+          ;; WHO NEEDS THE SIDECAR AT ALL. Only a backing that does NOT fence
+          ;; itself, and therefore needs konserve to provide the mechanism: the
+          ;; compare-and-write in this function, made atomic by a lock.
           ;;
-          ;; This is not only tidiness. The probe below is an existence check, and
-          ;; on a `PReadMissSafe` backing that is exactly the round trip the whole
-          ;; read-miss-safe design exists to remove — a billed HEAD on every write
-          ;; to S3, and a `.getKey` transaction on every write to IndexedDB.
+          ;; Asked as a mechanism question, not inferred from the domain. The
+          ;; domain says how far a guarantee reaches, which is a different thing
+          ;; from who evaluates it — see `PSelfConditionalWrite`, where the cases
+          ;; that broke the old inference are written out.
+          ;;
+          ;; The cost of getting this wrong is not only tidiness. The probe below
+          ;; is an existence check, and on a `PReadMissSafe` backing that is
+          ;; exactly the round trip the read-miss-safe design exists to remove — a
+          ;; billed HEAD on every write to S3, a `.getKey` transaction on every
+          ;; write to IndexedDB — plus a sidecar blob written into a storage layer
+          ;; that has no use for one.
           lock-based-fencing?
           (and (:lock-blob? config)
                (satisfies? protocols/PConditionalWrite backing)
-               (contains? #{:process :machine} (protocols/-conditional-write-domain backing)))]
+               (some? (protocols/-conditional-write-domain backing))
+               (not (satisfies? protocols/PSelfConditionalWrite backing)))]
       (cond
         ;; Read-first (PReadMissSafe): no existence probe — read the blob and
         ;; treat an absent key (store-key-not-found-ex) as the caller's
@@ -960,36 +964,27 @@
                   :msg {:type :read-all-keys-error}})))
 
   PConditionalWrite
-  ;; The blob lock spans read-old and write (see `io-operation`), and it is an OS
-  ;; advisory lock on the filestore, so the compare-and-write is atomic across
-  ;; processes on one filesystem. NOT across machines: the lock file is local.
-  ;; A backing without `:lock-blob?` serializes nothing, so it cannot honour the
-  ;; contract and must say so.
   (-conditional-write-domain [_]
     ;; ASK THE BACKING, do not infer from `:lock-blob?`. That flag says a lock is
     ;; requested, not that one exists: konserve's IndexedDB backing sets it and
     ;; implements `-get-lock` as a NO-OP ("the alternative is to overwrite
-    ;; defaults/update-blob"), so inferring the domain from the flag would tell two
+    ;; defaults/update-blob"), so inferring a domain from the flag would tell two
     ;; browser tabs they are fenced when nothing serializes them at all — precisely
     ;; the lie this capability exists to prevent. A backing that does not declare a
     ;; domain gets none, and `:expected-revision` is refused.
     (let [declared (when (satisfies? protocols/PConditionalWrite backing)
                      (protocols/-conditional-write-domain backing))]
-      ;; WHICH MECHANISM the domain rests on decides whether `:lock-blob?` can
-      ;; revoke it, and the domain itself says which:
+      ;; `:lock-blob?` can revoke a claim that RESTS on konserve's lock, and only
+      ;; such a claim. Without the flag there is no lock, the compare and the write
+      ;; stop being one step, and the claim is void however sincerely it is made.
       ;;
-      ;; `:process`/`:machine` are produced HERE, by `io-operation` holding a lock
-      ;; across read-old and write. Without `:lock-blob?` there is no lock, the
-      ;; compare and the write stop being one step, and the claim is void however
-      ;; sincerely the backing makes it. So the flag revokes it.
-      ;;
-      ;; `:global` cannot be produced by a lock local to this machine, so a
-      ;; backing claiming it is fencing in its own storage layer (konserve-s3:
-      ;; If-Match, evaluated by S3) where konserve's lock is irrelevant. Revoking
-      ;; that on `:lock-blob?` would mean a flag about a lock nobody uses silently
-      ;; turning off the guarantee — konserve-s3's `-get-lock` IS a no-op, and it
-      ;; passes today only because it happens to set the flag anyway.
-      (if (= :global declared)
+      ;; A backing that fences ITSELF keeps its domain whatever the flag says: the
+      ;; flag is about a lock it never uses. That used to be decided by testing the
+      ;; domain for `:global`, which held only because the one self-fencing backing
+      ;; happened to be global — see `PSelfConditionalWrite` for the stores that
+      ;; fence themselves without reaching that far, which the old test would have
+      ;; silently disarmed.
+      (if (satisfies? protocols/PSelfConditionalWrite backing)
         declared
         (when (:lock-blob? config) declared))))
   (-revision [this key opts]

@@ -292,6 +292,22 @@
    machines against a =:machine= one, would otherwise believe it was fenced when
    it was only serialized against a narrower set of writers.
 
+   *Say WHO evaluates the condition, separately from how far it reaches.* If your
+   storage layer evaluates it — a conditional PUT, =UPDATE ... WHERE revision = ?=,
+   a =ConditionExpression=, a write transaction — also implement the marker
+   protocol =PSelfConditionalWrite=. It has no methods; implementing it is the
+   statement. konserve then provides no mechanism of its own: no sidecar blob, no
+   lock, and =:lock-blob?= cannot revoke your claim.
+
+   Reach and mechanism are independent, which is why this is declared and not
+   inferred. konserve once read =:process=/=:machine= as "wants konserve's lock"
+   and =:global= as "fences itself" — sound in one direction only, since plenty of
+   stores fence themselves without reaching across machines: RocksDB with a write
+   batch (=:process=), LMDB with an ACID transaction (=:machine=), and a JDBC
+   backend with one statement that is =:global= on Postgres and =:machine= on
+   SQLite. Inferring would have handed konserve's sidecar to each of them, writing
+   a phantom =.cas= row into the very table being fenced.
+
    *What the domain claims is a mechanism.* If you build on
    =konserve.impl.defaults= you inherit its compare-and-write, which reads the
    stored revision and writes under a local lock: that reaches =:machine= at
