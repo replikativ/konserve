@@ -984,8 +984,22 @@
       ;; happened to be global — see `PSelfConditionalWrite` for the stores that
       ;; fence themselves without reaching that far, which the old test would have
       ;; silently disarmed.
+      ;; `:in-place?` revokes a SELF-fenced claim, and only that kind. The
+      ;; storage layer evaluates the precondition inside `-sync`, but under
+      ;; `:in-place? false` `update-blob` syncs to `<store-key>.new` and then
+      ;; renames it into place — so the comparison is made against a key that by
+      ;; construction does not exist (every such write is a create, and creates
+      ;; succeed), and the `-atomic-move` that follows compares nothing at all. A
+      ;; caller would be told its conditional write landed while no condition was
+      ;; ever evaluated.
+      ;;
+      ;; A LOCK-based claim survives that layout, which is why this is not
+      ;; hoisted out of the branch: there konserve holds the lock and evaluates
+      ;; `check-revision!` itself, across the write AND the rename. The filestore
+      ;; is `:in-place? false` by default and is fenced correctly; moving this
+      ;; test above the `if` would silently disarm it.
       (if (satisfies? protocols/PSelfConditionalWrite backing)
-        declared
+        (when (:in-place? config) declared)
         (when (:lock-blob? config) declared))))
   (-revision [this key opts]
     (async+sync (:sync? opts) *default-sync-translation*

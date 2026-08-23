@@ -130,7 +130,23 @@
         (testing "multi-assoc refuses to be made conditional"
           (when (utils/multi-key-capable? store)
             (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
-                         (<!! (k/multi-assoc store {:cas-m1 1} (assoc opts :expected-revision :x)))))))))))
+                         (<!! (k/multi-assoc store {:cas-m1 1} (assoc opts :expected-revision :x)))))))
+
+        ;; The other two multi-key entry points, for the same reason and with a
+        ;; sharper edge on `multi-get`: a backing that fences itself must remember
+        ;; what its read saw for the duration of one conditional write, and an
+        ;; unlocked multi-read carrying this option could replace that memory with
+        ;; metadata that had already overtaken it — turning the fenced write into
+        ;; the silent overwrite the option exists to prevent.
+        (testing "multi-dissoc refuses to be made conditional"
+          (when (utils/multi-key-capable? store)
+            (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                         (<!! (k/multi-dissoc store [:cas-m1] (assoc opts :expected-revision :x)))))))
+
+        (testing "multi-get refuses to be made conditional"
+          (when (utils/multi-key-capable? store)
+            (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                         (<!! (k/multi-get store [:cas-m1] (assoc opts :expected-revision :x)))))))))))
 
 #?(:clj
    (defn compliance-test [store]

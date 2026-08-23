@@ -107,6 +107,36 @@ All notable, user-visible changes to konserve are documented here.
   being switched to the high one.
 
 ### Fixed
+- **`multi-get`, `multi-dissoc` and a copy-and-rename layout no longer drop
+  `:expected-revision` silently.** Three ways the option could be asked for and
+  not honoured, each of which now raises instead:
+
+  - `multi-get` forwarded it to the backing. A read cannot be fenced, so on its
+    own that is merely meaningless — but a backing that fences ITSELF has to
+    remember, for the duration of one conditional write, the metadata konserve
+    read under the lock, because `-sync` runs on a different blob record than the
+    read did. `multi-get` takes no per-key lock and closes no rows, so such a
+    read looked exactly like the read belonging to an in-flight fenced write and
+    replaced the metadata that write was about to compare against. Reproduced on
+    konserve-jdbc: the fenced write reported SUCCESS and overwrote the value that
+    had committed in between.
+  - `multi-dissoc` forwarded it into `-multi-delete-blobs`, where every backing
+    ignores it, so a caller asking for a fenced batch delete was told it
+    happened. `multi-assoc` has always refused; this is the same rule.
+  - A backing that declares `PSelfConditionalWrite` now LOSES its domain when the
+    store is configured `:in-place? false`. That layout writes `<store-key>.new`
+    and renames it into place, so the storage layer's precondition is evaluated
+    against a key that by construction does not exist — every such write is a
+    create, and creates succeed — while the rename that follows compares nothing.
+    A lock-based claim is unaffected and must be: there konserve holds the lock
+    and evaluates the revision itself, across the write and the rename, which is
+    how the filestore (`:in-place? false` by default) is fenced correctly.
+
+  Every released self-fencing backend sets `:in-place? true`, so no default
+  deployment was affected; `connect-default-store`'s own default is `false`, and
+  a caller's `:config` is merged over a backend's, so the guarantee rested on a
+  flag rather than on anything structural.
+
 - **Compression combined with encryption never worked.** The read path nested
   the wrappers the opposite way round from the write path, so it tried to
   *decompress ciphertext*: `zstd` + `aes` failed with "Unknown frame
