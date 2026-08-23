@@ -32,6 +32,89 @@
 ;; Read policies
 (def read-policies #{:frontend-first :frontend-only})
 
+(def ^:private core-dissoc
+  "`dissoc` from the host core, which this namespace shadows with the store op."
+  #?(:clj clojure.core/dissoc :cljs cljs.core/dissoc))
+
+(def ^:private write-behind-receipt-key ::write-behind-receipt)
+
+(defn with-write-behind-receipt
+  "Add an observable backend-completion receipt to a tiered write.
+
+   Returns `{:opts opts' :receipt ch}`. Pass `opts'` to one write on a tiered
+   store configured with `:write-policy :write-behind`. After that write has
+   returned successfully, `ch` delivers one outcome:
+
+   * `{:status :succeeded :result backend-result}` after the backend accepted
+     the write.
+   * `{:status :failed :error error}` when the asynchronous backend write
+     failed.
+
+   For example, a caller can await durability outside its latency-sensitive
+   path before publishing a reference to the value:
+
+   ```clojure
+   (let [{:keys [opts receipt]} (with-write-behind-receipt)]
+     (<! (konserve.core/bassoc store key bytes opts))
+     (when (= :succeeded (:status (<! receipt)))
+       (publish-reference! key)))
+   ```
+
+   The ordinary write still returns as soon as the frontend write completes;
+   awaiting the receipt therefore does not add backend latency to the write's
+   hot path. If the frontend write itself fails, the ordinary write reports
+   that failure and no backend operation (or receipt outcome) exists.
+
+   Receipts apply to the operations that are actually asynchronous under
+   `:write-behind`: `assoc`, `assoc-in`, `update`, `update-in`, `bassoc`, and
+   `multi-assoc`. A receipt must be used for exactly one write. Passing the
+   returned opts to another write policy is an error.
+
+   Arguments:
+   - `opts`: The ordinary Konserve operation options map.
+
+   Returns a map containing the augmented options and a core.async promise
+   channel."
+  ([]
+   (with-write-behind-receipt {:sync? false}))
+  ([opts]
+   (let [receipt (async/promise-chan)]
+     {:opts (clojure.core/assoc opts write-behind-receipt-key receipt)
+      :receipt receipt})))
+
+(defn- receipt [opts]
+  (clojure.core/get opts write-behind-receipt-key))
+
+(defn- store-opts [opts]
+  (core-dissoc opts write-behind-receipt-key))
+
+(defn- write-behind-opts [opts]
+  ;; The backend operation runs in `go` even when the caller selected Konserve's
+  ;; synchronous API for the frontend operation.
+  (clojure.core/assoc (store-opts opts) :sync? false))
+
+(defn- deliver-receipt! [receipt outcome]
+  (when receipt
+    (async/put! receipt outcome (fn [_] (async/close! receipt)))))
+
+(defn- start-write-behind! [operation log-data receipt backend-write]
+  (go
+    (try
+      (let [result (<?- (backend-write))]
+        (deliver-receipt! receipt {:status :succeeded
+                                   :result result}))
+      (catch #?(:clj Exception :cljs js/Error) e
+        (log/warn :konserve/tiered-backend-write-failed
+                  (clojure.core/assoc log-data :operation operation :error e))
+        (deliver-receipt! receipt {:status :failed
+                                   :error e})))))
+
+(defn- check-receipt-policy! [write-policy opts]
+  (when (and (receipt opts) (not= :write-behind write-policy))
+    (throw (ex-info "Write-behind receipts require :write-policy :write-behind."
+                    {:type :konserve/write-behind-receipt-unsupported
+                     :write-policy write-policy}))))
+
 (defn owns-backend?
   "Does a tiered store with this write-policy OWN its backend, or is it merely a CACHE over
    a backend that another peer owns?
@@ -166,10 +249,6 @@
                   :root-keys (count root-keys)
                   :reachable-keys (count reachable-keys)}))))
 
-(def ^:private core-dissoc
-  "`dissoc` from the host core, which this namespace shadows with the store op."
-  #?(:clj clojure.core/dissoc :cljs cljs.core/dissoc))
-
 (defn ^:private frontend-opts
   "`opts` with the fencing options removed, for a call to the FRONTEND store.
 
@@ -187,7 +266,7 @@
   ;; NOT `(dissoc opts ...)`: this namespace shadows `clojure.core/dissoc` with
   ;; the store operation, and `clojure.core/dissoc` cannot be written out in a
   ;; .cljc file because there it is `cljs.core/dissoc`.
-  (core-dissoc opts :expected-revision :with-revision?))
+  (core-dissoc opts :expected-revision :with-revision? write-behind-receipt-key))
 
 (defn ^:private revision-sensitive?
   "Does this write participate in the backend's revision stream?
@@ -384,6 +463,7 @@
 
   (-update-in [_this key-vec meta-up-fn up-fn opts]
     (log/trace :konserve/tiered-update-in {:key-vec key-vec})
+    (check-receipt-policy! write-policy opts)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -411,10 +491,9 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts)))]
-                     (go (try
-                           (<?- (-update-in backend-store key-vec meta-up-fn up-fn opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-backend-update-failed {:key key-vec :error e}))))
+                     (start-write-behind!
+                      :update-in {:key key-vec} (receipt opts)
+                      #(-update-in backend-store key-vec meta-up-fn up-fn (write-behind-opts opts)))
                      frontend-result)
 
                    :write-around
@@ -432,6 +511,7 @@
 
   (-assoc-in [_this key-vec meta-up-fn val opts]
     (log/trace :konserve/tiered-assoc-in {:key-vec key-vec})
+    (check-receipt-policy! write-policy opts)
     (async+sync (:sync? opts)
                 *default-sync-translation*
                 (go-try-
@@ -457,10 +537,9 @@
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
                    (let [frontend-result (<?- (-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts)))]
-                     (go (try
-                           (<?- (-assoc-in backend-store key-vec meta-up-fn val opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-backend-assoc-failed {:key key-vec :error e}))))
+                     (start-write-behind!
+                      :assoc-in {:key key-vec} (receipt opts)
+                      #(-assoc-in backend-store key-vec meta-up-fn val (write-behind-opts opts)))
                      frontend-result)
 
                    :write-around
@@ -505,6 +584,7 @@
 
   (-bassoc [_this key meta-up-fn val opts]
     (log/trace :konserve/tiered-bassoc {:key key})
+    (check-receipt-policy! write-policy opts)
     ;; Materialize ONCE, before fanning out. Both tiers receive the same `val`,
     ;; and an InputStream is exhausted by whichever writes first — the second
     ;; tier would then store nothing, silently. `bassoc` documents streams as
@@ -525,11 +605,10 @@
 
                      :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                     (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val opts))]
-                       (go (try
-                             (<?- (-bassoc backend-store key meta-up-fn val opts))
-                             (catch #?(:clj Exception :cljs js/Error) e
-                               (log/warn :konserve/tiered-backend-bassoc-failed {:key key :error e}))))
+                     (let [frontend-result (<?- (-bassoc frontend-store key meta-up-fn val (frontend-opts opts)))]
+                       (start-write-behind!
+                        :bassoc {:key key} (receipt opts)
+                        #(-bassoc backend-store key meta-up-fn val (write-behind-opts opts)))
                        frontend-result)
 
                      :write-around
@@ -568,6 +647,7 @@
   PMultiKeyEDNValueStore
   (-multi-assoc [_this kvs meta-up-fn opts]
     (log/trace :konserve/tiered-multi-assoc {:key-count (count kvs)})
+    (check-receipt-policy! write-policy opts)
     (when-not (and (multi-key-capable? frontend-store)
                    (multi-key-capable? backend-store))
       (throw (ex-info "Both stores must support multi-key operations for tiered multi-assoc"
@@ -587,11 +667,10 @@
 
                    :write-behind
                    ;; Write to frontend first, then backend asynchronously (standard write-behind)
-                   (let [frontend-result (<?- (-multi-assoc frontend-store kvs meta-up-fn opts))]
-                     (go (try
-                           (<?- (-multi-assoc backend-store kvs meta-up-fn opts))
-                           (catch #?(:clj Exception :cljs js/Error) e
-                             (log/warn :konserve/tiered-backend-multi-assoc-failed {:kvs-keys (kv-keys kvs) :error e}))))
+                   (let [frontend-result (<?- (-multi-assoc frontend-store kvs meta-up-fn (frontend-opts opts)))]
+                     (start-write-behind!
+                      :multi-assoc {:kvs-keys (kv-keys kvs)} (receipt opts)
+                      #(-multi-assoc backend-store kvs meta-up-fn (write-behind-opts opts)))
                      frontend-result)
 
                    :write-around

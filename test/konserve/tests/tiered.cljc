@@ -5,7 +5,22 @@
             [konserve.protocols :as protocols]
             [konserve.tiered :as tiered]
             [konserve.compliance-test :refer [async-compliance-test] :as ct]
-            [superv.async :refer [<?-]]))
+            [superv.async :refer [go-try- <?-]]))
+
+(defn- failing-assoc-store [backend-store failure]
+  (reify protocols/PEDNKeyValueStore
+    (-exists? [_ key opts]
+      (protocols/-exists? backend-store key opts))
+    (-get-meta [_ key opts]
+      (protocols/-get-meta backend-store key opts))
+    (-get-in [_ key-vec not-found opts]
+      (protocols/-get-in backend-store key-vec not-found opts))
+    (-update-in [_ key-vec meta-up-fn up-fn opts]
+      (protocols/-update-in backend-store key-vec meta-up-fn up-fn opts))
+    (-assoc-in [_ _key-vec _meta-up-fn _val _opts]
+      (go-try- (throw failure)))
+    (-dissoc [_ key opts]
+      (protocols/-dissoc backend-store key opts))))
 
 #?(:clj
    (defn test-tiered-compliance-sync [frontend-store backend-store]
@@ -172,6 +187,64 @@
         (is (nil? (<?- (k/get-in frontend-store [:test-key]))))
         (is (= {:value 44} (<?- (k/get-in backend-store [:test-key]))))
         (is (= {:value 44} (<?- (k/get-in store [:test-key]))))))))
+
+(defn test-write-behind-receipts-async [frontend-store backend-store]
+  (go
+    (testing "a receipt reports backend durability without changing the write result"
+      (let [store (<?- (tiered/connect-tiered-store frontend-store backend-store
+                                                    :write-policy :write-behind))
+            {:keys [opts receipt]} (tiered/with-write-behind-receipt)
+            write-result (<?- (k/assoc store :receipted {:value 45} opts))
+            outcome (<! receipt)]
+        (is (= [nil {:value 45}] write-result))
+        (is (= :succeeded (:status outcome)))
+        (is (= [nil {:value 45}] (:result outcome)))
+        (is (= {:value 45} (<?- (k/get backend-store :receipted))))))
+
+    (testing "receipts cover update, binary, and atomic multi-key writes"
+      (let [{update-opts :opts update-receipt :receipt}
+            (tiered/with-write-behind-receipt)
+            store (<?- (tiered/connect-tiered-store frontend-store backend-store
+                                                    :write-policy :write-behind))]
+        (<?- (k/update store :receipted #(update % :value inc) update-opts))
+        (is (= :succeeded (:status (<! update-receipt))))
+        (let [{binary-opts :opts binary-receipt :receipt}
+              (tiered/with-write-behind-receipt)
+              bytes #?(:clj (byte-array [1 2 3]) :cljs #js [1 2 3])]
+          (<?- (k/bassoc store :receipt-binary bytes binary-opts))
+          (is (= :succeeded (:status (<! binary-receipt)))))
+        (let [{multi-opts :opts multi-receipt :receipt}
+              (tiered/with-write-behind-receipt)]
+          (<?- (k/multi-assoc store {:receipt-a 1 :receipt-b 2} multi-opts))
+          (is (= :succeeded (:status (<! multi-receipt)))))))
+
+    (testing "a receipt exposes a detached backend failure"
+      (let [failure (ex-info "deliberate backend failure" {:test true})
+            failing-backend (failing-assoc-store backend-store failure)
+            store (<?- (tiered/connect-tiered-store frontend-store failing-backend
+                                                    :write-policy :write-behind))
+            {:keys [opts receipt]} (tiered/with-write-behind-receipt)
+            write-result (<?- (k/assoc store :receipt-failure {:value 46} opts))
+            outcome (<! receipt)]
+        (is (= [nil {:value 46}] write-result)
+            "the frontend write remains low latency and successful")
+        (is (= :failed (:status outcome)))
+        (is (= "deliberate backend failure" (ex-message (:error outcome))))
+        (is (= {:test true} (ex-data (:error outcome))))))
+
+    #?(:clj
+       (testing "a synchronous frontend write still has an asynchronous receipt"
+         (let [store (tiered/connect-tiered-store frontend-store backend-store
+                                                  :write-policy :write-behind
+                                                  :opts {:sync? true})
+               {:keys [opts receipt]}
+               (tiered/with-write-behind-receipt {:sync? true})
+               write-result (k/assoc store :sync-receipt {:value 47} opts)
+               outcome (<! receipt)]
+           (is (= [nil {:value 47}] write-result))
+           (is (= :succeeded (:status outcome)))
+           (is (= {:value 47}
+                  (k/get backend-store :sync-receipt nil {:sync? true}))))))))
 
 (defn test-frontend-only-async
   "Cache mode: :frontend-only writes + :frontend-first reads. Writes/deletes land in
