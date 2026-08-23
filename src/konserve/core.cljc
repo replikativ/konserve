@@ -664,9 +664,16 @@
                     {:type :konserve/conditional-multi-write-unsupported}))))
 
 (defn multi-assoc
-  "Associates multiple key-value pairs with flat keys, as one batch. Atomically where the
-  backend can (IndexedDB); ordered everywhere (see below), which is the weaker guarantee
-  that actually suffices.
+  "Associates multiple key-value pairs with flat keys, as ONE ATOMIC BATCH.
+
+  ONLY AVAILABLE WHERE THE BACKEND CAN APPLY IT ATOMICALLY. A store that cannot
+  refuses — `multi-key-capable?` is false and this throws — rather than degrading to
+  a sequence of individual writes. That is deliberate: a caller reaching for
+  `multi-assoc` is asking for all-or-nothing, and a partial batch presented as a
+  successful one is the kind of silent corruption no caller can detect afterwards.
+  Today that means IndexedDB (object-store transactions), DynamoDB
+  (`TransactWriteItems`), Redis (`MULTI`/`EXEC`) and JDBC (a database transaction);
+  object stores and filesystems cannot, so they do not offer it.
 
   `kvs` is either a map, or — preferred when the batch has internal dependencies — an
   ORDERED sequence of `[k v]` pairs. **Sequence order is apply order**, and it is preserved
@@ -674,24 +681,26 @@
   write-hook (so a sync layer can relay the batch in the same order). A map has no order,
   so a map batch makes no ordering promise.
 
-  Why that matters: not every backend can write multiple keys atomically (S3, filesystems
-  cannot; IndexedDB can). For a batch that writes a set of immutable, content-addressed
-  values plus a MUTABLE pointer that makes them reachable, you do not need atomicity — you
-  need order. Put the pointer LAST:
+  IF YOUR STORE CANNOT DO THIS, do not look for a weaker version of it here — write the
+  batch yourself with ordinary `assoc` calls, in order. For a batch of immutable,
+  content-addressed values plus a MUTABLE pointer that makes them reachable, ordering is
+  enough and atomicity is not needed. Put the pointer LAST:
 
   ```
   (multi-assoc store [[node-a v] [node-b v] [:root {:refs [node-a node-b]}]]
                (uniform-meta [node-a node-b] {:immutable? true}))
   ```
 
-  Then any prefix of the batch leaves the store consistent: the values are written but
-  unreachable (harmless orphans, collectable), and the pointer flips only once everything it
-  references exists. A torn batch can never produce a dangling pointer. This is the
-  write-the-leaves-then-flip-the-root discipline, and it is what lets non-atomic backends be
-  crash-safe.
+  Then any prefix leaves the store consistent: the values are written but unreachable
+  (harmless orphans, collectable), and the pointer flips only once everything it
+  references exists. A torn sequence can never produce a dangling pointer. This is the
+  write-the-leaves-then-flip-the-root discipline, and it is what lets a caller be
+  crash-safe on a backend with no atomic batch at all.
 
-  Atomic backends still apply the batch all-or-nothing, in which case the order is simply
-  redundant — passing an ordered seq is always safe.
+  That discipline is the CALLER'''s to apply, not a guarantee this function makes on a
+  non-atomic store. Order is still preserved here — sequence order is apply order, and it
+  reaches the write-hook verbatim — but on an atomic backend the ordering is simply
+  redundant.
 
   Returns a map of keys to results (typically true for each key).
 
