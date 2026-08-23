@@ -594,6 +594,21 @@
    (multi-get store keys {:sync? false}))
   ([store keys opts]
    (log/trace :konserve/multi-get {:key-count (count keys)})
+   ;; A READ cannot be fenced, and forwarding the option here is not merely
+   ;; useless — it is dangerous. A backing that fences itself has to remember, for
+   ;; the duration of one conditional write, the metadata konserve read under the
+   ;; lock, because `-sync` runs on a different blob record than the read did.
+   ;; `multi-get` takes no per-key lock and closes nothing, so a multi-read
+   ;; carrying `:expected-revision` looked to such a backing exactly like the read
+   ;; belonging to an in-flight fenced write — and replaced the metadata that
+   ;; write was about to compare against with metadata that had overtaken it.
+   ;; Reproduced on JDBC before this: the fenced write reported SUCCESS and
+   ;; overwrote the value that had committed in between.
+   ;;
+   ;; The backings can and do defend themselves by narrowing what may deposit,
+   ;; but the option has no meaning on this path at all, so refusing it here
+   ;; removes the whole class rather than one instance of it.
+   (refuse-conditional-unsupported! "multi-get" opts)
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)
@@ -827,6 +842,13 @@
    (multi-dissoc store keys {:sync? false}))
   ([store keys opts]
    (log/trace :konserve/multi-dissoc {:key-count (count keys)})
+   ;; `multi-assoc` has always refused this; `multi-dissoc` forwarded it into
+   ;; `-multi-delete-blobs`, where every backing ignores it — so a caller asking
+   ;; for a fenced batch delete was told it happened. Same reasoning as
+   ;; `refuse-conditional-multi!`: checking every key and then deleting every key
+   ;; is not one step, so the guarantee could not be honoured even by a backing
+   ;; that wanted to. Refusing is recoverable; silently dropping it is not.
+   (refuse-conditional-unsupported! "multi-dissoc" opts)
    (when-not (multi-key-capable? store)
      (throw (#?(:clj ex-info :cljs js/Error.) "Store does not support multi-key operations"
                                               #?(:clj {:store-type (type store)

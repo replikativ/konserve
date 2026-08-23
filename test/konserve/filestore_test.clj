@@ -202,8 +202,19 @@
     (let [folder "/tmp/konserve-fs-selffence-test"
           _      (delete-store folder)
           store  (<!! (connect-fs-store folder :config {:lock-blob? false}))
+          ;; `:in-place? true` alongside the swapped backing, because that is the
+          ;; configuration a self-fencing backend actually ships — and since
+          ;; konserve#176 it is part of what makes the claim valid. The filestore
+          ;; itself defaults to `:in-place? false`, which is fine for ITS fence
+          ;; (konserve holds the lock across the write and the rename) but not for
+          ;; a backing that evaluates the condition inside `-sync`: there the
+          ;; condition would be evaluated against `<key>.new` and the rename would
+          ;; compare nothing. What this test is about — `:lock-blob?` must not
+          ;; disarm a self-fencing backing — is unchanged.
           self   (fn [domain]
-                   (clojure.core/assoc store :backing
+                   (clojure.core/assoc store
+                                       :config (clojure.core/assoc (:config store) :in-place? true)
+                                       :backing
                                        (reify konserve.protocols/PConditionalWrite
                                          (-conditional-write-domain [_] domain)
                                          konserve.protocols/PSelfConditionalWrite)))]
@@ -225,7 +236,9 @@
       (k/get store :fenced nil {:sync? true :with-revision? true})
       (is (= 1 (count (cas-of))) "konserve-lock backing: sidecar")
       ;; the same store with a self-fencing backing gets none
-      (let [self-store (clojure.core/assoc store :backing
+      (let [self-store (clojure.core/assoc store
+                                           :config (clojure.core/assoc (:config store) :in-place? true)
+                                           :backing
                                            (reify konserve.protocols/PConditionalWrite
                                              (-conditional-write-domain [_] :machine)
                                              konserve.protocols/PSelfConditionalWrite))]

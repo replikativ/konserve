@@ -17,6 +17,8 @@
             [clojure.core.async :refer [<!!]]
             [konserve.core :as k]
             [konserve.memory :refer [new-mem-store]]
+            [konserve.filestore :refer [connect-fs-store delete-store]]
+            [konserve.impl.defaults :as defaults]
             [konserve.compliance-test :refer [conditional-write-compliance-test]]
             [konserve.protocols :as p]))
 
@@ -73,3 +75,54 @@
         (conditional-write-compliance-test honest))
       (is (zero? (count @reports))
           (str "an honest store must pass cleanly: " (pr-str (map :type @reports)))))))
+
+;; ---------------------------------------------------------------------------
+;; A claim the layout cannot support
+;; ---------------------------------------------------------------------------
+
+;; Only the two methods `-conditional-write-domain` reads are needed, so these
+;; are stubs rather than working backings: the question here is what a store
+;; PROMISES given a backing and a config, which is answered before any IO.
+(deftype SelfFencingBacking []
+  p/PSelfConditionalWrite
+  p/PConditionalWrite
+  (-conditional-write-domain [_] :global))
+
+(deftype LockFencingBacking []
+  p/PConditionalWrite
+  (-conditional-write-domain [_] :machine))
+
+(defn- domain-of [backing config]
+  (k/conditional-write-domain (defaults/map->DefaultStore {:backing backing :config config})))
+
+(deftest a-self-fenced-claim-does-not-survive-a-copy-and-rename-layout
+  (testing "`:in-place? false` revokes a SELF-fenced domain"
+    ;; Under that layout `update-blob` syncs to `<store-key>.new` and renames it
+    ;; into place. The storage layer's precondition is therefore evaluated
+    ;; against a key that cannot exist — so it always passes — and the rename
+    ;; compares nothing. The write would be reported as fenced with no condition
+    ;; ever evaluated, which is the one outcome the capability exists to prevent.
+    (is (= :global (domain-of (SelfFencingBacking.) {:in-place? true :lock-blob? true})))
+    (is (nil? (domain-of (SelfFencingBacking.) {:in-place? false :lock-blob? true}))
+        "a backing that fences itself cannot fence a key it is not writing to"))
+
+  (testing "but a LOCK-based claim survives it, which is the point of the branch"
+    ;; konserve holds the lock and evaluates `check-revision!` itself, across the
+    ;; write AND the rename, so the layout is irrelevant to that fence. The
+    ;; filestore ships `:in-place? false`; hoisting the test above the branch
+    ;; would silently disarm the one backend most likely to be run locally.
+    (is (= :machine (domain-of (LockFencingBacking.) {:in-place? false :lock-blob? true})))
+    (is (nil? (domain-of (LockFencingBacking.) {:in-place? false :lock-blob? false}))
+        "without the lock there is no mechanism left, whatever the backing claims")))
+
+(deftest the-filestore-still-declares-a-domain
+  ;; The end-to-end guard for the test above: a real filestore, with its real
+  ;; default config, must keep fencing.
+  (let [dir (str "/tmp/konserve-teeth-" (System/currentTimeMillis))
+        store (<!! (connect-fs-store dir))]
+    (try
+      (is (= false (:in-place? (:config store))) "the filestore is not in-place")
+      (is (some? (k/conditional-write-domain store))
+          "and is nevertheless fenced, by konserve's lock rather than by itself")
+      (conditional-write-compliance-test store)
+      (finally (delete-store dir)))))
