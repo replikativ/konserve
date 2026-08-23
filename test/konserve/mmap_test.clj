@@ -12,7 +12,8 @@
             [boring.nav :as nav]
             [konserve.store :as st]
             [konserve.compressor :refer [null-compressor lz4-compressor]])
-  (:import [java.io File FileInputStream FileOutputStream]))
+  (:import [java.io File FileInputStream FileOutputStream]
+           [java.nio ByteOrder]))
 
 (def ^:private ffm?
   (try ((requiring-resolve 'clojure.core/require) 'boring.mmap) true
@@ -47,6 +48,67 @@
                        ["customer-137" "name"]))))
       (testing "count is O(1) off the container head, not a walk"
         (is (= 200 (kmm/with-mmap-value [c store "customers"] (count c))))))))
+
+(defn- segment-buffer [segment]
+  (clojure.lang.Reflector/invokeInstanceMethod segment "asByteBuffer" (object-array 0)))
+
+(deftest maps-bulk-payloads-without-realising-them
+  (when ffm?
+    (let [dir (fresh-dir "payload")
+          store (boring-store dir)
+          bytes (byte-array [1 2 3 4])
+          floats (float-array [1.5 -2.25 3.0])
+          arrays {:shorts (short-array [-1 2])
+                  :ints (int-array [-1 2])
+                  :longs (long-array [-1 2])
+                  :floats floats
+                  :doubles (double-array [-1.0 2.0])}]
+      (k/assoc store :tensors (merge {:bytes bytes :scalar 42} arrays) {:sync? true})
+      (testing "a nested byte string is exposed as its raw mapped payload"
+        (kmm/with-mmap-payload [payload store :tensors [:bytes]]
+          (let [buffer (segment-buffer (:segment payload))
+                actual (byte-array (.remaining buffer))]
+            (.get buffer actual)
+            (is (= [1 2 3 4] (vec actual)))
+            (is (= {:byte-size 4 :element-count 4 :element-size 1
+                    :element-type :uint8 :byte-order nil :tag nil}
+                   (select-keys payload [:byte-size :element-count :element-size
+                                         :element-type :byte-order :tag])))
+            (is (pos? (:file-offset payload))))))
+      (testing "an RFC 8746 float array retains its dtype and endian contract"
+        (kmm/with-mmap-payload [payload store :tensors [:floats]]
+          (let [buffer (doto (segment-buffer (:segment payload))
+                         (.order ByteOrder/LITTLE_ENDIAN))
+                actual (float-array (:element-count payload))]
+            (.get (.asFloatBuffer buffer) actual)
+            (is (= [1.5 -2.25 3.0] (vec actual)))
+            (is (= {:byte-size 12 :element-count 3 :element-size 4
+                    :element-type :float32 :byte-order :little-endian :tag 85}
+                   (select-keys payload [:byte-size :element-count :element-size
+                                         :element-type :byte-order :tag]))))))
+      (testing "all primitive-array formats Boring emits have explicit metadata"
+        (doseq [[field element-count element-type element-size tag]
+                [[:shorts 2 :int16 2 77]
+                 [:ints 2 :int32 4 78]
+                 [:longs 2 :int64 8 79]
+                 [:floats 3 :float32 4 85]
+                 [:doubles 2 :float64 8 86]]]
+          (kmm/with-mmap-payload [payload store :tensors [field]]
+            (is (= {:element-count element-count :element-size element-size
+                    :element-type element-type :byte-order :little-endian :tag tag}
+                   (select-keys payload [:element-count :element-size :element-type
+                                         :byte-order :tag]))))))
+      (testing "the top-level value is addressed by the default empty path"
+        (k/assoc store :raw bytes {:sync? true})
+        (kmm/with-mmap-payload [payload store :raw]
+          (is (= 4 (:byte-size payload)))))
+      (testing "absence and scalar values fail rather than decoding or copying"
+        (is (= :konserve/payload-not-found
+               (:type (ex-data (try (kmm/mmap-payload store :tensors [:missing])
+                                    (catch Exception e e))))))
+        (is (= :konserve/not-a-bulk-payload
+               (:type (ex-data (try (kmm/mmap-payload store :tensors [:scalar])
+                                    (catch Exception e e))))))))))
 
 (deftest value-location-points-past-the-header-and-meta
   (let [dir   (fresh-dir "loc")
