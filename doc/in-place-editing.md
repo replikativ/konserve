@@ -11,6 +11,8 @@ Two halves, both here:
 
 - **Read** — navigate to a field and realise only that (`with-mmap-value`,
   `value-location`, `navigable?`).
+- **Bulk payload** — hand a byte string or primitive array to native code without
+  copying it (`with-mmap-payload`, `mmap-payload`).
 - **Write** — `update-in!` / `assoc-in!` / `dissoc-in!` edit a value in place or
   by splicing only the changed bytes.
 
@@ -94,6 +96,40 @@ engages.
 
 See [`boring`'s reading docs](https://github.com/replikativ/boring/blob/main/doc/INDEX.md)
 for how an offset index turns a walk into a jump.
+
+## Mapping a bulk payload without copying
+
+`with-mmap-value` gives you a navigable cursor. When the selected value is a
+large byte string or a primitive numeric array, `with-mmap-payload` instead
+gives you its raw payload as a read-only `MemorySegment`:
+
+```clojure
+(kmm/with-mmap-payload [payload store :checkpoint [:layers 0 :key]]
+  (gpu/upload! (:segment payload)
+               {:elements    (:element-count payload)
+                :dtype       (:element-type payload)
+                :byte-order  (:byte-order payload)}))
+```
+
+Nothing is decoded or copied. The descriptor also contains `:byte-size`,
+`:element-size`, the RFC 8746 `:tag`, the backing `:path`, and `:file-offset`.
+The segment is valid only inside the macro body.
+
+Plain CBOR byte strings are exposed as `:uint8`. Boring's five emitted RFC 8746
+arrays are exposed as little-endian `:int16`, `:int32`, `:int64`, `:float32`, or
+`:float64`. Other values throw rather than silently materialising. This makes
+the performance contract observable: callers that specifically request a
+no-copy tensor cannot accidentally pay for a heap decode.
+
+The function form returns `[payload arena]` for callers that must manage the
+lifetime explicitly:
+
+```clojure
+(let [[payload arena] (kmm/mmap-payload store :checkpoint [:raw])]
+  (try
+    (consume! (:segment payload))
+    (finally (.close arena))))
+```
 
 ---
 

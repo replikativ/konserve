@@ -4,7 +4,9 @@
   A konserve blob written by the boring serializer is ordinary CBOR sitting at
   a known offset in a file, so it can be memory-mapped and walked with
   `boring.nav` — reaching one key without materialising the rest, and without
-  faulting in the pages that hold the parts you skipped.
+  faulting in the pages that hold the parts you skipped. `with-mmap-payload`
+  exposes a selected byte string or primitive array as a read-only
+  `MemorySegment`, with no decode or payload copy.
 
       (require '[konserve.mmap :as kmm] '[boring.nav :as nav])
 
@@ -51,10 +53,12 @@
   question: konserve's read path already slices the value bytes out, so that
   one needs no offset at all, but it saves only decode and not IO."
   (:require [konserve.core :as k]
+            [boring.nav :as nav]
             [konserve.impl.defaults :refer [key->store-key]]
             [konserve.impl.storage-layout :refer [header-size]]
             [konserve.serializers :as ser])
   (:import [java.io File FileInputStream FileOutputStream]
+           [java.lang AutoCloseable Class]
            [java.nio.channels FileChannel]
            [java.nio.file Files Path StandardCopyOption CopyOption OpenOption]))
 
@@ -186,6 +190,165 @@
   `(let [[c# arena#] (mmap-value ~store ~key ~opts)]
      (with-open [a# arena#]
        (let [~binding c#]
+         ~@body))))
+
+;; ---------------------------------------------------------------------------
+;; No-copy bulk payload access (EXPERIMENTAL)
+
+(def ^:private typed-payloads
+  "The RFC 8746 arrays Boring itself emits. Their payload is always little-endian."
+  {77 {:element-type :int16 :element-size 2}
+   78 {:element-type :int32 :element-size 4}
+   79 {:element-type :int64 :element-size 8}
+   85 {:element-type :float32 :element-size 4}
+   86 {:element-type :float64 :element-size 8}})
+
+(defn- segment-slice
+  "Call MemorySegment.asSlice without naming the JDK 22 class at load time."
+  ([segment offset]
+   (.invoke (.getMethod (Class/forName "java.lang.foreign.MemorySegment")
+                        "asSlice" (into-array Class [Long/TYPE]))
+            segment (object-array [(long offset)])))
+  ([segment offset length]
+   (.invoke (.getMethod (Class/forName "java.lang.foreign.MemorySegment") "asSlice"
+                        (into-array Class [Long/TYPE Long/TYPE]))
+            segment (object-array [(long offset) (long length)]))))
+
+(defn- open-arena []
+  (let [arena-class (Class/forName "java.lang.foreign.Arena")]
+    (clojure.lang.Reflector/invokeStaticMethod arena-class "ofShared" (object-array 0))))
+
+(defn- unsigned-byte ^long [source ^long offset]
+  (bit-and (long (.at ^org.replikativ.boring.ByteSource source offset)) 0xff))
+
+(defn- cbor-head
+  "The definite CBOR head at `offset`, as {:major :argument :next}."
+  [source ^long offset]
+  (let [size (.size ^org.replikativ.boring.ByteSource source)]
+    (when-not (< offset size)
+      (throw (ex-info "konserve.mmap: payload head is outside the stored value"
+                      {:type :konserve/malformed-payload :offset offset :size size})))
+    (let [initial (unsigned-byte source offset)
+          major (unsigned-bit-shift-right initial 5)
+          info (bit-and initial 0x1f)
+          width (case info 24 1, 25 2, 26 4, 27 8, 0)
+          next (+ offset 1 width)]
+      (when (or (#{28 29 30 31} info) (> next size))
+        (throw (ex-info "konserve.mmap: payload has an indefinite, reserved or truncated CBOR head"
+                        {:type :konserve/malformed-payload :offset offset :info info :size size})))
+      (let [argument
+            (case info
+              24 (unsigned-byte source (inc offset))
+              25 (bit-and (long (.i16 ^org.replikativ.boring.ByteSource source (inc offset)))
+                          0xffff)
+              26 (bit-and (long (.i32 ^org.replikativ.boring.ByteSource source (inc offset)))
+                          0xffffffff)
+              27 (let [n (.i64 ^org.replikativ.boring.ByteSource source (inc offset))]
+                   (when (neg? n)
+                     (throw (ex-info "konserve.mmap: payload length does not fit in a signed long"
+                                     {:type :konserve/payload-too-large :offset offset})))
+                   n)
+              info)]
+        {:major major :argument argument :next next}))))
+
+(defn- payload-span
+  "Locate the raw bytes addressed by `cursor`, without realising the value."
+  [source cursor]
+  (when-not (nav/cursor? cursor)
+    (throw (ex-info "konserve.mmap: path does not address a navigable value"
+                    {:type :konserve/payload-not-found})))
+  (let [offset (nav/offset cursor)
+        first-head (cbor-head source offset)
+        [tag bytes-head]
+        (if (= 6 (:major first-head))
+          [(:argument first-head) (cbor-head source (:next first-head))]
+          [nil first-head])
+        spec (when tag (get typed-payloads tag))]
+    (when (and tag (nil? spec))
+      (throw (ex-info (str "konserve.mmap: CBOR tag " tag
+                           " is not a Boring-emitted primitive array")
+                      {:type :konserve/not-a-bulk-payload :tag tag})))
+    (when-not (= 2 (:major bytes-head))
+      (throw (ex-info "konserve.mmap: value is not a byte string or primitive array"
+                      {:type :konserve/not-a-bulk-payload :major (:major bytes-head)
+                       :tag tag})))
+    (let [byte-size (long (:argument bytes-head))
+          data-offset (long (:next bytes-head))
+          end (+ data-offset byte-size)
+          source-size (.size ^org.replikativ.boring.ByteSource source)
+          element-size (long (or (:element-size spec) 1))]
+      (when (or (< end data-offset) (> end source-size))
+        (throw (ex-info "konserve.mmap: bulk payload extends past the stored value"
+                        {:type :konserve/malformed-payload :offset data-offset
+                         :byte-size byte-size :size source-size})))
+      (when-not (zero? (rem byte-size element-size))
+        (throw (ex-info "konserve.mmap: primitive-array payload has a partial element"
+                        {:type :konserve/malformed-payload :tag tag
+                         :byte-size byte-size :element-size element-size})))
+      {:offset data-offset
+       :byte-size byte-size
+       :element-count (quot byte-size element-size)
+       :element-size element-size
+       :element-type (or (:element-type spec) :uint8)
+       :byte-order (when spec :little-endian)
+       :tag tag})))
+
+(defn mmap-payload
+  "Map a byte string or Boring primitive array without copying its payload.
+
+  `path` addresses a nested value inside the Konserve value. It defaults to
+  `[]`, which addresses the value itself. The supported tagged values are the
+  five RFC 8746 arrays Boring emits: int16/int32/int64/float32/float64,
+  little-endian. Plain byte strings are reported as `:uint8`.
+
+  Returns `[payload arena]`, where `payload` contains `:segment`, `:byte-size`,
+  `:element-count`, `:element-size`, `:element-type`, `:byte-order` and `:tag`.
+  The segment points directly into the filestore's read-only mapping and is
+  valid only until the caller closes `arena`. Prefer `with-mmap-payload`.
+
+  Throws rather than decoding when the path is absent, the value is not a bulk
+  payload, or the blob is not mmap-compatible. Requires JDK 22+."
+  ([store key] (mmap-payload store key [] nil))
+  ([store key path] (mmap-payload store key path nil))
+  ([store key path opts]
+   (let [[file value-offset] (value-location store key)
+         arena (try (open-arena)
+                    (catch Throwable t
+                      (throw (ex-info (str "konserve.mmap needs JDK 22+ for no-copy payload access. "
+                                           "This JVM is " (.feature (Runtime/version)) ".")
+                                      {:type :konserve/mmap-unavailable
+                                       :jdk (.feature (Runtime/version))}
+                                      t))))]
+     (try
+       (let [map-file! (requiring-resolve 'boring.mmap/mmap-segment)
+             segment-source (requiring-resolve 'boring.mmap/segment-source)
+             segment (map-file! file arena)
+             value-segment (segment-slice segment value-offset)
+             source (segment-source value-segment)
+             root (nav/root source opts)
+             cursor (if (seq path) (get-in root path) root)
+             span (payload-span source cursor)
+             payload-segment (segment-slice value-segment (:offset span) (:byte-size span))]
+         [(assoc span :segment payload-segment :path file
+                 :file-offset (+ value-offset (:offset span)))
+          arena])
+       (catch Throwable t
+         (.close ^AutoCloseable arena)
+         (throw t))))))
+
+(defmacro with-mmap-payload
+  "Bind `binding` to a no-copy bulk-payload descriptor and close its mapping.
+
+      (with-mmap-payload [p store :weights [:layers 0 :key]]
+        ;; (:segment p) is a MemorySegment valid only in this body
+        (consume! (:segment p)))
+
+  An optional final options map is passed to Boring navigation. Nothing derived
+  from `:segment` may escape the body."
+  [[binding store key & [path opts]] & body]
+  `(let [[payload# arena#] (mmap-payload ~store ~key ~(or path []) ~opts)]
+     (with-open [a# ^AutoCloseable arena#]
+       (let [~binding payload#]
          ~@body))))
 
 ;; ---------------------------------------------------------------------------
