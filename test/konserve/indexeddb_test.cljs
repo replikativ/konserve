@@ -345,3 +345,30 @@
                                         idb/connect-idb-store
                                         idb/delete-idb))
            (done))))
+(deftest ^:browser reconnect-existing-store-opens-its-handle-test
+  ;; Connect no longer writes for an existing store — it must still OPEN it.
+  ;; Before PBackingOpen, the second connect below skipped -create-store (which
+  ;; is where IndexedDB opens its database) and the first access failed with
+  ;; "Cannot read properties of null (reading 'transaction')".
+  (if ^boolean userAgent.GECKO
+    (is (true? true))
+    (async done
+           (go
+             (let [db-name "reconnect-existing-db"]
+               (<! (idb/delete-idb db-name))
+               (let [first-store (<! (idb/connect-idb-store db-name))]
+                 (is (not (instance? js/Error first-store)))
+                 (<! (konserve.core/assoc first-store :answer 42 {:sync? false}))
+                 (is (true? (<! (idb/db-exists? db-name))) "precondition: the store exists now")
+                 (testing "a second connect to the EXISTING store can read through it"
+                   (let [again (<! (idb/connect-idb-store db-name))]
+                     (is (not (instance? js/Error again))
+                         (str "reconnect failed: " again))
+                     (when-not (instance? js/Error again)
+                       (is (= 42 (<! (konserve.core/get again :answer nil {:sync? false})))
+                           "the handle is open: the value written before is readable")
+                       ;; deleteDatabase blocks while any connection is open.
+                       (some-> again :backing .-db .close))))
+                 (some-> first-store :backing .-db .close))
+               (<! (idb/delete-idb db-name))
+               (done))))))

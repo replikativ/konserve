@@ -17,6 +17,7 @@
                                              PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
    [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store -store-exists?
+                                         PBackingOpen -open-store
                                          -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
                                          -migratable -migrate -handle-foreign-key
@@ -1320,7 +1321,13 @@
               ;; write a marker whose content is constant, and `-create-store`
               ;; has always had to be idempotent — until this change it ran on
               ;; EVERY connect.
-              _                  (when-not (<?- (-store-exists? backing opts))
+              ;; A backing whose create IS its open (IndexedDB sets its db
+              ;; handle in -create-store) still has to open an existing store:
+              ;; skipping create there left the handle nil and every later
+              ;; transaction failed. `PBackingOpen` is the read-only half.
+              _                  (if (<?- (-store-exists? backing opts))
+                                   (when (satisfies? PBackingOpen backing)
+                                     (<?- (-open-store backing opts)))
                                    (<?- (-create-store backing opts)))
               store              (map->DefaultStore {:backing             backing
                                                      :default-serializer  default-serializer

@@ -5,6 +5,17 @@ All notable, user-visible changes to konserve are documented here.
 ## Unreleased
 
 ### Fixed
+- **Connecting to an existing IndexedDB store opens it again.** The previous
+  fix (connect no longer writes) skipped `-create-store` for a store that
+  already exists — and for the IndexedDB backing, `-create-store` *is* the open:
+  `indexedDB.open` both creates and opens, and the handle it yields is what
+  every later transaction needs. A reconnect to an existing store therefore
+  left the handle nil, and the first access failed with "Cannot read properties
+  of null (reading 'transaction')" — every datahike-in-the-browser reconnect.
+  Backings whose create is also their open now implement the optional
+  `PBackingOpen` (`-open-store`), which connect calls for an existing store;
+  `-create-store` still runs only for a missing one, so the read-only
+  existing-store path is preserved for object-store backings.
 - **Connecting to an existing store no longer writes.** `connect-default-store`
   called `-create-store` unconditionally on every connect — "auto-create on
   connect" implemented as "create on connect". On an object-store backing that

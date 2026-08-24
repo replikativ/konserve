@@ -175,6 +175,16 @@
   (-keys [this env] "List all the keys representing blobs in the store.")
   (-handle-foreign-key [this migration-key serializer read-handlers write-handlers env] "Handle keys not recognized by the current konserve version."))
 
+(defprotocol PBackingOpen
+  "OPTIONAL. A backing whose `-create-store` also OPENS a handle — IndexedDB
+   sets its database object there — implements this so that connecting to an
+   EXISTING store can open without creating. `connect-default-store` probes
+   `-store-exists?` first and, for a store that exists, calls `-open-store`
+   when the backing provides it and nothing otherwise; `-create-store` runs
+   only for a missing store. Backings whose create is a pure creation (a
+   directory, a marker object) need not implement this."
+  (-open-store [this env] "Open the underlying store's handle without creating anything."))
+
 (defprotocol PMultiWriteBackingStore
   "Protocol for backing stores that support atomic multi-key writes."
   (-multi-write-blobs [this store-key-values env]
