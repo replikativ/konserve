@@ -6,6 +6,7 @@
             [konserve.impl.defaults :as defaults]
             [konserve.impl.storage-layout :as storage-layout
              :refer [PMultiWriteBackingStore PMultiReadBackingStore PReadMissSafe
+                     PBackingOpen -open-store
                      store-key-not-found-ex store-key-not-found?]]
             [konserve.serializers]
             [konserve.protocols :as protocols]
@@ -388,18 +389,16 @@
                                                {:cause ?err
                                                 :caller 'konserve.indexeddb/-copy}))
                             (close! out)))))))))
+  ;; For IndexedDB, opening and creating are ONE operation: `indexedDB.open`
+  ;; creates a missing database and opens an existing one, and the handle it
+  ;; yields is what every later transaction needs. So -create-store is
+  ;; -open-store, and connect calls the latter for an existing store (see
+  ;; PBackingOpen): before that, an existing store was probed, create was
+  ;; skipped, and `db` stayed nil — "Cannot read properties of null (reading
+  ;; 'transaction')" on the first access after a reconnect.
   (-create-store [this env]
     (assert (not (:sync? env)) (str "-create-store requires async, got env: " (pr-str env)))
-    (with-promise out
-      (take! (connect-to-idb db-name)
-             (fn [res]
-               (if (instance? js/Error res)
-                 (put! out (ex-info "error connecting to database"
-                                    {:cause res
-                                     :caller 'konserve.indexeddb/-create-store}))
-                 (do
-                   (set! (.-db this) res)
-                   (put! out this)))))))
+    (-open-store this env))
   (-delete-store [_this env]
     (assert (not (:sync? env)))
     (with-promise out
@@ -415,6 +414,20 @@
     (assert (not (:sync? env)))
     (db-exists? db-name))
   (-sync-store [_this env] (when-not (:sync? env) (go)))
+
+  PBackingOpen
+  (-open-store [this env]
+    (assert (not (:sync? env)) (str "-open-store requires async, got env: " (pr-str env)))
+    (with-promise out
+      (take! (connect-to-idb db-name)
+             (fn [res]
+               (if (instance? js/Error res)
+                 (put! out (ex-info "error connecting to database"
+                                    {:cause res
+                                     :caller 'konserve.indexeddb/-open-store}))
+                 (do
+                   (set! (.-db this) res)
+                   (put! out this)))))))
 
   ;; Implementation for atomic multi-key operations
   PMultiWriteBackingStore
