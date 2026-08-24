@@ -4,6 +4,21 @@ All notable, user-visible changes to konserve are documented here.
 
 ## Unreleased
 
+### Fixed
+- **Connecting to an existing store no longer writes.** `connect-default-store`
+  called `-create-store` unconditionally on every connect — "auto-create on
+  connect" implemented as "create on connect". On an object-store backing that
+  is a PUT of the store marker, so every connect to an EXISTING store performed
+  a write it had no reason to perform: a reader holding read-only credentials
+  could not connect at all, and (measured against S3 in
+  replikativ/datahike-serverless#6) a cold datahike tenant open cost 2 PUTs —
+  it probes and then connects, writing the marker twice — where the correct
+  number is zero. Connect now probes `-store-exists?` first and creates only
+  what is missing: the existing-store path is a HEAD/stat, read-only
+  credentials work, and auto-create is untouched for a missing store. The
+  first-connect race is benign and no worse than before — `-create-store` has
+  always had to be idempotent, since until now it ran on every connect.
+
 ### Added
 - **Conditional writes (`:expected-revision`), with an explicit capability.** A
   write can now be made conditional on the revision the caller read: it lands
