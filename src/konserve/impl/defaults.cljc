@@ -16,7 +16,7 @@
                                              PMultiKeyEDNValueStore
                                              PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
-   [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store
+   [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store -store-exists?
                                          -copy -create-blob -delete-blob -blob-exists?
                                          -keys -sync-store
                                          -migratable -migrate -handle-foreign-key
@@ -1303,7 +1303,25 @@
         (throw (ex-info "You need to activate file-locking for in-place mode."
                         {:type :store-configuration-error
                          :config complete-config}))
-        (let [_                  (<?- (-create-store backing opts))
+        (let [;; ENSURE means make-it-so, not write-regardless. This used to
+              ;; call `-create-store` unconditionally on every connect, which on
+              ;; an object-store backing is a PUT of the store marker — so every
+              ;; connect to an EXISTING store performed a write it had no reason
+              ;; to perform. Two practical consequences, both measured against
+              ;; S3 (replikativ/datahike-serverless#6): a reader holding
+              ;; read-only credentials could not connect at all, and a cold
+              ;; open cost 2 PUTs (datahike probes and then connects, so the
+              ;; marker was written twice) where the correct number is zero.
+              ;;
+              ;; Probing first makes the existing-store path READ-ONLY — a
+              ;; HEAD/stat instead of a write — while auto-create semantics are
+              ;; untouched for a missing store. The first-connect race is
+              ;; benign and no worse than before: two concurrent creators both
+              ;; write a marker whose content is constant, and `-create-store`
+              ;; has always had to be idempotent — until this change it ran on
+              ;; EVERY connect.
+              _                  (when-not (<?- (-store-exists? backing opts))
+                                   (<?- (-create-store backing opts)))
               store              (map->DefaultStore {:backing             backing
                                                      :default-serializer  default-serializer
                                                      :serializers         (merge key->serializer serializers)
