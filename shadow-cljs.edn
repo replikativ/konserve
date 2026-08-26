@@ -18,6 +18,7 @@
    :output-to "out/node-tests.js"
    :ns-regexp "^(?!konserve.indexeddb-test|konserve.electron-test)"
    :compiler-options {:infer-externs true
+                      :warnings-as-errors true
                       :externs ["cljs_node_io/externs.js"]
                       :closure-warnings   {:useless-code :off}}}
 
@@ -28,6 +29,7 @@
    :test-dir "out/browser-tests"
    :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore|konserve.electron-test)"
    :compiler-options {:infer-externs true
+                      :warnings-as-errors true
                       :closure-warnings {:useless-code :off}}}
 
   :ci
@@ -35,5 +37,5 @@
    :output-to  "target/ci.js"
    :ns-regexp "^(?!konserve.node-filestore-test|konserve.node-filestore|konserve.electron-test)"
    :compiler-options {:infer-externs true
-                      :compiler-options {:optimizations :advanced}
+                      :warnings-as-errors true
                       :closure-warnings {:useless-code :off}}}}}

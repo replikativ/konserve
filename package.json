@@ -2,6 +2,9 @@
   "name": "CITests",
   "version": "1.0.0",
   "description": "Testing",
+  "scripts": {
+    "ci-test": "npx shadow-cljs release ci && npx karma start --single-run"
+  },
   "devDependencies": {
     "karma": "^6.4.2",
     "karma-chrome-launcher": "^2.2.0",
