@@ -22,6 +22,32 @@
     (-dissoc [_ key opts]
       (protocols/-dissoc backend-store key opts))))
 
+(defn test-awaited-read-through-async
+  "An awaited miss is not complete until its frontend is populated, and a fill
+   failure is reported to that caller instead of being detached and logged."
+  [frontend-store backend-store]
+  (go
+    (<?- (k/dissoc frontend-store :awaited-read))
+    (<?- (k/assoc backend-store :awaited-read {:v 1}))
+    (let [store (<?- (tiered/connect-tiered-store frontend-store backend-store
+                                                  :read-policy :frontend-first))]
+      (is (= {:v 1}
+             (<?- (k/get store :awaited-read nil
+                         {:sync? false :await-read-through? true}))))
+      (is (= {:v 1} (<?- (k/get frontend-store :awaited-read)))
+          "the awaited read returns only after the frontend contains the value"))
+
+    (testing "an awaited cache-fill failure belongs to the read"
+      (<?- (k/dissoc frontend-store :awaited-read))
+      (let [failure (ex-info "deliberate awaited fill failure" {:test true})
+            broken-frontend (failing-assoc-store frontend-store failure)
+            store (<?- (tiered/connect-tiered-store broken-frontend backend-store
+                                                    :read-policy :frontend-first))
+            result (<! (k/get store :awaited-read nil
+                              {:sync? false :await-read-through? true}))]
+        (is (= "deliberate awaited fill failure" (ex-message result)))
+        (is (= {:test true} (ex-data result)))))))
+
 #?(:clj
    (defn test-tiered-compliance-sync [frontend-store backend-store]
      (let [store (clojure.core.async/<!! (tiered/connect-tiered-store frontend-store backend-store))]
@@ -152,7 +178,9 @@
          (is (= [nil "found-it"] (<! (k/assoc-in deepest-store [:deep-secret] "found-it"))))
          (is (false? (<! (k/exists? middle-store :deep-secret))) "Should not be in middle tier yet")
          (is (false? (<! (k/exists? frontend-store :deep-secret))) "Should not be in frontend yet")
-         (is (= "found-it" (<! (k/get-in top-store [:deep-secret]))) "Should retrieve value from deepest store")
+         (is (= "found-it" (<! (k/get-in top-store [:deep-secret]
+                                         nil {:sync? false :await-read-through? true})))
+             "Should retrieve and completely hydrate from the deepest store")
          (is (true? (<! (k/exists? frontend-store :deep-secret))) "Value should now be in frontend store")
          ;; Verify write hook on middle tier
          (let [[val port] (alts! [hook-promise (timeout 2000)])]
