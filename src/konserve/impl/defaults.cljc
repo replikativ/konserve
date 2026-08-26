@@ -459,26 +459,36 @@
               ;; flag itself, so testing the operation is both correct and the only
               ;; thing available here.
               cas-blob (when (and (= :read-edn-meta operation) lock-based-fencing?)
-                         (<?- (-create-blob backing cas-store-key env)))
-              cas-lock (when cas-blob
-                         (log/trace :konserve/acquiring-cas-lock {:key key})
-                         (<?- (get-lock cas-blob (first key-vec) env)))
-              blob (<?- (-create-blob backing store-key env))
-              lock (when (:lock-blob? config)
-                     (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                     (<?- (get-lock blob (first key-vec) env)))]
+                         (<?- (-create-blob backing cas-store-key env)))]
+          ;; Keep each acquisition INSIDE the try that releases the preceding
+          ;; resource. A failure opening or locking the value blob must not strand
+          ;; the sidecar's JVM-wide FileLock; one leaked revision read otherwise
+          ;; wedges every later read and write of this key until the JVM exits.
           (try
-            (<?- (read-blob blob read-handlers serializers env))
-            (catch #?(:clj Exception :cljs js/Error) e
-              (if (store-key-not-found? e) (:not-found env) (throw e)))
+            (let [cas-lock (when cas-blob
+                             (log/trace :konserve/acquiring-cas-lock {:key key})
+                             (<?- (get-lock cas-blob (first key-vec) env)))]
+              (try
+                (let [blob (<?- (-create-blob backing store-key env))]
+                  (try
+                    (let [lock (when (:lock-blob? config)
+                                 (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
+                                 (<?- (get-lock blob (first key-vec) env)))]
+                      (try
+                        (<?- (read-blob blob read-handlers serializers env))
+                        (catch #?(:clj Exception :cljs js/Error) e
+                          (if (store-key-not-found? e) (:not-found env) (throw e)))
+                        (finally
+                          (when lock
+                            (log/trace :konserve/releasing-blob-lock
+                                       {:key (first key-vec) :blob (str blob)})
+                            (<?- (-release lock env))))))
+                    (finally
+                      (<?- (-close blob env)))))
+                (finally
+                  (when cas-lock (<?- (-release cas-lock env))))))
             (finally
-              (when (:lock-blob? config)
-                (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                (<?- (-release lock env)))
-              (<?- (-close blob env))
-              (when cas-lock
-                (<?- (-release cas-lock env))
-                (<?- (-close cas-blob env))))))
+              (when cas-blob (<?- (-close cas-blob env))))))
 
         (and (not store-key-exists?) migration-key)
         (<?- (-migrate backing migration-key key-vec serializer read-handlers write-handlers env))
