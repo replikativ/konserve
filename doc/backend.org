@@ -269,6 +269,31 @@
    your store allows atomic transactions over both objects, e.g. using two
    columns in a SQL database.
 
+** Multi-key operations
+   :PROPERTIES:
+   :CUSTOM_ID: h:8c3d1a54-6f21-4b90-8d77-2e5f9a0c3b18
+   :END:
+   =PMultiWriteBackingStore= and =PMultiReadBackingStore= are for backends that can
+   apply a batch ATOMICALLY. Implement them only if your storage layer gives you
+   all-or-nothing across the whole batch — an object-store "batch request" that
+   reports per-item success is NOT that, and neither is a loop over single writes.
+
+   A store that cannot is not second-class: =multi-key-capable?= is false, the
+   multi-key API refuses, and callers write the batch themselves with ordinary
+   ordered =assoc= calls (values first, the pointer that makes them reachable
+   LAST). That discipline is crash-safe without atomicity, which is why offering a
+   weaker "batched" version here would be a bad trade — the caller would lose the
+   all-or-nothing they asked for and gain nothing they could not already do.
+
+   Today: IndexedDB (object-store transactions), DynamoDB (=TransactWriteItems=,
+   which refuses above its 100-item limit rather than splitting), Redis
+   (=MULTI=/=EXEC=) and JDBC (a database transaction). The filestore, S3 and GCS do
+   not implement them.
+
+   Note that =-supports-multi-key?= requires BOTH protocols, while =-multi-dissoc=
+   needs only the write one — so a backend that can batch deletes but not batch
+   reads cannot currently expose that alone.
+
 ** Conditional writes
    :PROPERTIES:
    :CUSTOM_ID: h:1f4a0c62-3b7a-4f0e-9a5a-7a6c0d2b41e2
