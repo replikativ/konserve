@@ -320,6 +320,41 @@
        (finally
          (async/put! cache-lock :unlocked))))))
 
+(defn- complete-read-through
+  "Populate one frontend read and run its write hook.
+
+   Kept as an async+sync operation so a caller that needs a COMPLETE cache can
+   await exactly the same generation-fenced fill that ordinary reads launch in
+   the background. In a nested tier, `opts` reaches the backend read first, so
+   `:await-read-through?` fills deepest-to-outermost."
+  [frontend-store cache-lock cache-generation observed-generation
+   populate-fn hook-event opts]
+  (async+sync (:sync? opts)
+              *default-sync-translation*
+              (go-try-
+               (when (<?- (populate-frontend cache-lock cache-generation
+                                             observed-generation populate-fn opts))
+                 (invoke-write-hooks! frontend-store hook-event)))))
+
+(defn- start-read-through!
+  "Await a cache fill when requested; otherwise preserve fire-and-forget reads."
+  [frontend-store cache-lock cache-generation observed-generation
+   populate-fn hook-event opts]
+  (let [fill #(complete-read-through frontend-store cache-lock cache-generation
+                                     observed-generation populate-fn hook-event opts)]
+    (if (:await-read-through? opts)
+      (fill)
+      (do
+        (go
+          (try
+            (<?- (fill))
+            (catch #?(:clj Exception :cljs js/Error) e
+              (log/debug :konserve/tiered-frontend-populate-failed
+                         {:event hook-event :error e}))))
+        ;; The caller uniformly awaits this function. Deliver an immediate
+        ;; completion in ordinary mode while the detached fill continues.
+        (async+sync (:sync? opts) *default-sync-translation* (go-try- true))))))
+
 (defn ^:private update-frontend-after-backend
   "Order a frontend mutation after all older read-through cache fills."
   [cache-lock cache-generation update-fn opts]
@@ -442,18 +477,16 @@
                          (let [observed-generation @cache-generation
                                backend-result (<?- (-get-in backend-store key-vec ::missing opts))]
                            (when (not= backend-result ::missing)
-                           ;; Populate frontend asynchronously (fire-and-forget)
-                             (go (try
-                                   (when (<?- (populate-frontend
-                                               cache-lock cache-generation observed-generation
-                                               #(-assoc-in frontend-store key-vec (partial meta-update (first key-vec) :edn) backend-result (frontend-opts opts))
-                                               opts))
-                                     (invoke-write-hooks! frontend-store {:api-op :assoc-in
-                                                                          :key (first key-vec)
-                                                                          :key-vec key-vec
-                                                                          :value backend-result}))
-                                   (catch #?(:clj Exception :cljs js/Error) e
-                                     (log/debug :konserve/tiered-frontend-populate-failed {:key key-vec :error e})))))
+                             (<?- (start-read-through!
+                                   frontend-store cache-lock cache-generation observed-generation
+                                   #(-assoc-in frontend-store key-vec
+                                               (partial meta-update (first key-vec) :edn)
+                                               backend-result (frontend-opts opts))
+                                   {:api-op :assoc-in
+                                    :key (first key-vec)
+                                    :key-vec key-vec
+                                    :value backend-result}
+                                   opts)))
                            (if (not= backend-result ::missing)
                              backend-result
                              not-found))))
@@ -725,17 +758,13 @@
                        ;; Some keys missing from frontend, fetch from backend
                        (let [observed-generation @cache-generation
                              backend-result (<?- (-multi-get backend-store missing-keys opts))]
-                         ;; Populate frontend asynchronously with found backend values (fire-and-forget)
                          (when (seq backend-result)
-                           (go (try
-                                 (when (<?- (populate-frontend
-                                             cache-lock cache-generation observed-generation
-                                             #(-multi-assoc frontend-store backend-result meta-update opts)
-                                             opts))
-                                   (invoke-write-hooks! frontend-store {:api-op :multi-assoc
-                                                                        :kvs backend-result}))
-                                 (catch #?(:clj Exception :cljs js/Error) e
-                                   (log/debug :konserve/tiered-frontend-populate-failed {:keys (clojure.core/keys backend-result) :error e})))))
+                           (<?- (start-read-through!
+                                 frontend-store cache-lock cache-generation observed-generation
+                                 #(-multi-assoc frontend-store backend-result meta-update
+                                                (frontend-opts opts))
+                                 {:api-op :multi-assoc :kvs backend-result}
+                                 opts)))
                          ;; Merge frontend and backend results
                          (merge frontend-result backend-result))
                        ;; All keys found in frontend
