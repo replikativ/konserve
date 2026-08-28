@@ -3,7 +3,12 @@
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         mvxcvi/clj-cbor {:mvn/version "1.1.1"} ;; legacy: serializer byte 2, JVM-only
         org.replikativ/boring {:mvn/version "0.1.27"} ;; serializer byte 3, portable; in-place edit API + container-type path dispatch
-        org.replikativ/incognito {:mvn/version "0.3.69"}
+        ;; 0.3.71: incognito.transit's write handler no longer resolves its two
+        ;; super calls reflectively (incognito#23). We ship that namespace even
+        ;; though serializers.cljc only uses fressian and edn, and konserve is
+        ;; compiled into datahike's `dthk` native image, where a reflective call
+        ;; works only if it was registered at build time.
+        org.replikativ/incognito {:mvn/version "0.3.71"}
         org.replikativ/hasch {:mvn/version "0.3.96"}
         org.replikativ/superv.async {:mvn/version "0.3.50"}
         org.replikativ/geheimnis {:mvn/version "0.1.25"}
