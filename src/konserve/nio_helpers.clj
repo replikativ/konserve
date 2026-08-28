@@ -41,7 +41,13 @@
   (blob->channel [input buffer-size]
     [input
      (fn [bis nio-buffer]
-       (let [char-array (make-array Character/TYPE buffer-size)
+       ;; At most a QUARTER of the buffer in chars: UTF-8 spends up to four
+       ;; bytes on one, so `buffer-size` chars of anything outside ASCII
+       ;; overflowed the `buffer-size`-byte ByteBuffer they were encoded into.
+       (let [_ (when (< buffer-size 4)
+                 (throw (ex-info "Reader input needs a buffer-size of at least 4: one UTF-8 character can take four bytes."
+                                 {:type :konserve/buffer-too-small :buffer-size buffer-size})))
+             char-array (make-array Character/TYPE (quot buffer-size 4))
              size (.read ^StringReader bis ^chars char-array)]
          (try
            (when-not (= size -1)

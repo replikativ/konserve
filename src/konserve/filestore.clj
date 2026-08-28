@@ -91,16 +91,15 @@
    ;; "target\\native-image-tests" — the PARENT path, since the parent is what
    ;; gets synced after an entry is removed — which was diagnosable only by
    ;; reading the exception class datahike's CLI did not print.
+   ;; Only the OPEN is tolerated, and only its Windows shape. A `force` that
+   ;; fails on a directory that did open (EIO on POSIX) is the durability loss
+   ;; this sync exists to surface, and propagates; `with-open` closes the
+   ;; channel either way.
    (when-not filesystem
-     (try
-       (let [p (get-path filesystem base)
-             fc (FileChannel/open p (into-array OpenOption []))]
-         (.force fc true)
-         (.close fc))
-       ;; Only the Windows shape — opening the DIRECTORY is refused. A real
-       ;; fsync failure on a directory that did open (EIO on POSIX) is the
-       ;; durability loss this sync exists to surface, and must propagate.
-       (catch java.nio.file.AccessDeniedException _ nil)))))
+     (when-let [fc (try (FileChannel/open (get-path filesystem base) (into-array OpenOption []))
+                        (catch java.nio.file.AccessDeniedException _ nil))]
+       (with-open [^FileChannel fc fc]
+         (.force fc true))))))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"

@@ -49,16 +49,13 @@
 (defn store-key->uuid-key [^String store-key]
   (cond
     (.endsWith store-key ".ksv") (subs store-key 0 (- (.length store-key) 4))
-    ;; Write artifacts carry the key as a prefix: `<uuid>.ksv.<nonce>.new` for a
-    ;; staging file (the nonce is per writer — see `update-blob`), and
-    ;; `<uuid>.ksv.backup`. Everything up to the first `.ksv` is the key.
-    (or (.endsWith store-key ".new") (.endsWith store-key ".backup"))
-    (let [i (.indexOf store-key ".ksv")]
-      (if (pos? i)
-        (subs store-key 0 i)
-        (throw (ex-info (str "Invalid konserve store key: " store-key) {:key store-key}))))
-    :else (throw (ex-info (str "Invalid konserve store key: " store-key)
-                          {:key store-key}))))
+    ;; The two write artifacts, exactly: `<key>.ksv.<nonce>.new` — a staging
+    ;; file, nonce per writer, see `update-blob` — and `<key>.ksv.backup`.
+    :else
+    (if-let [[_ k] (re-matches #"(.+)\.ksv(?:\.[^.]+\.new|\.backup)" store-key)]
+      k
+      (throw (ex-info (str "Invalid konserve store key: " store-key)
+                      {:key store-key})))))
 
 #?(:cljs (extend-type js/Uint8Array ICounted (-count [this] (alength this))))
 
@@ -139,8 +136,10 @@
         (when (:sync-blob? config)
           (log/trace :konserve/syncing-blob {:key key})
           (<?- (-sync new-blob env)))
-        (<?- (-close new-blob env))
+        ;; Marked before the call: a close that throws after releasing the
+        ;; resource must not be closed again from the `finally`.
         (reset! new-blob-closed? true)
+        (<?- (-close new-blob env))
 
         (when-not (:in-place? config)
           (log/trace :konserve/moving-blob {:key key})
@@ -312,18 +311,18 @@
           cas-store-key (str store-key cas-lock-suffix)
           cas-blob      (when (and (needs-sidecar-lock? backing config)
                                    (<?- (-blob-exists? backing cas-store-key env)))
-                          (<?- (-create-blob backing cas-store-key env)))]
+                          (<?- (-create-blob backing cas-store-key env)))
+          delete!       (fn [] (go-try-
+                                (try (<?- (-delete-blob backing store-key env)) true
+                                     (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))))]
       (try
         (let [cas-lock (when cas-blob (<?- (get-lock cas-blob key env)))]
           (try
-            (if (and ignore-existence? (satisfies? PReadMissSafe backing))
+            (cond
               ;; opt-in fast path: no existed? boolean needed, idempotent delete.
-              (try (<?- (-delete-blob backing store-key env)) true
-                   (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
-              (if (<?- (-blob-exists? backing store-key env))
-                (try (<?- (-delete-blob backing store-key env)) true
-                     (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
-                false))
+              (and ignore-existence? (satisfies? PReadMissSafe backing)) (<?- (delete!))
+              (<?- (-blob-exists? backing store-key env))                 (<?- (delete!))
+              :else                                                      false)
             (finally
               (when cas-lock (<?- (-release cas-lock env))))))
         (finally
@@ -480,6 +479,14 @@
           read-op?      (or (= :read-edn operation) (= :read-binary operation) (= :read-meta operation)
                             (= :read-edn-meta operation))
           write-op?     (or (= :write-edn operation) (= :write-binary operation))
+          ;; A read that hands the caller a revision token makes the key
+          ;; FENCEABLE — it gets a sidecar from here on, so the fenced write
+          ;; that follows is ordered against every other writer and deleter.
+          ;; Both token sources: `-get-in` with `:with-revision?` selects
+          ;; `:read-edn-meta`; `k/revision` goes through `:read-meta` and
+          ;; says so with `:revision-read?`. Computed ONCE and used by both
+          ;; sidecar sites below — they had drifted, and the drift was a hole.
+          revision-bearing? (or (= :read-edn-meta operation) (:revision-read? env))
           ;; A PReadMissSafe backing reports an absent key cleanly from the read
           ;; itself (an absent key throws store-key-not-found-ex), so the
           ;; -blob-exists? probe is a wasted round-trip (an S3 HEAD) whenever we
@@ -540,11 +547,7 @@
         ;; place before it ever issues a conditional write, so unconditional
         ;; writers are excluded from that point on.
         (let [cas-store-key (str store-key cas-lock-suffix)
-              ;; `:read-edn-meta` IS the revision-bearing read — `-get-in` selects
-              ;; that operation for `:with-revision? true` and does not forward the
-              ;; flag itself, so testing the operation is both correct and the only
-              ;; thing available here.
-              cas-blob (when (and (= :read-edn-meta operation) lock-based-fencing?)
+              cas-blob (when (and lock-based-fencing? revision-bearing?)
                          (<?- (-create-blob backing cas-store-key env)))]
           ;; Keep each acquisition INSIDE the try that releases the preceding
           ;; resource. A failure opening or locking the value blob must not strand
@@ -644,7 +647,7 @@
                         ;; first write.
                         cas-blob (when (and lock-based-fencing?
                                             (or (some? expected-revision)
-                                                (= :read-edn-meta operation)
+                                                revision-bearing?
                                                 (<?- (-blob-exists? backing cas-store-key env))))
                                    (<?- (-create-blob backing cas-store-key env)))]
                     ;; THREE NESTED try/finally, one per thing acquired, because a
@@ -951,10 +954,11 @@
               not-found
               (clojure.core/get-in a (rest key-vec)))))))))
   (-get-meta [this key opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? revision-read?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
                      :operation :read-meta
+                     :revision-read? revision-read?
                      :compressor compressor
                      :encryptor encryptor
                      :default-serializer default-serializer
@@ -1118,7 +1122,7 @@
         (when (:lock-blob? config) declared))))
   (-revision [this key opts]
     (async+sync (:sync? opts) *default-sync-translation*
-                (go-try- (let [m (<?- (protocols/-get-meta this key opts))]
+                (go-try- (let [m (<?- (protocols/-get-meta this key (assoc opts :revision-read? true)))]
                            (cond
                              (nil? m) absent
                              ;; A KEY WITH NO REVISION MUST NOT ANSWER nil. Every

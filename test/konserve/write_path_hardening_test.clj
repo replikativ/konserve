@@ -5,7 +5,8 @@
             [clojure.core.async :refer [<!!]]
             [konserve.binary :as kb]
             [konserve.core :as k]
-            [konserve.filestore :refer [connect-fs-store delete-store]])
+            [konserve.filestore :refer [connect-fs-store delete-store]]
+            [konserve.impl.defaults :as d])
   (:import [java.io InputStream ByteArrayInputStream]
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
@@ -45,32 +46,54 @@
         (delete-store path)))))
 
 (deftest shorter-write-does-not-keep-the-old-tail
-  (testing "a shorter value over a longer one is exactly the shorter value"
-    (doseq [in-place? [false true]]
+  (testing "in-place mode: a shorter value over a longer one is exactly the shorter value"
+    ;; In-place only — a rename-mode write always lands in a fresh staging
+    ;; file, so it cannot keep a tail and would pass this without truncating.
+    (doseq [sync? [true false]]
       (let [path  (fresh-path)
-            store (connect-fs-store path :config {:in-place? in-place?} :opts {:sync? true})]
-        (k/bassoc store :k (byte-array 100 (byte 1)) {:sync? true})
-        (k/bassoc store :k (byte-array 3 (byte 2)) {:sync? true})
-        (is (= [2 2 2] (seq (read-bytes store :k {:sync? true})))
-            (str "in-place? " in-place? ": the file must be truncated to the new value"))
+            store (connect-fs-store path :config {:in-place? true} :opts {:sync? true})
+            opts  {:sync? sync?}
+            run   (fn [op] (if sync? (op) (<!! (op))))]
+        (run #(k/bassoc store :bin (byte-array 100 (byte 1)) opts))
+        (run #(k/bassoc store :bin (byte-array 3 (byte 2)) opts))
+        (is (= [2 2 2] (seq (read-bytes store :bin opts)))
+            (str "sync? " sync? ": binary — the file must be truncated to the new value"))
+        (run #(k/assoc-in store [:edn] (apply str (repeat 5000 "x")) opts))
+        (run #(k/assoc-in store [:edn] "short" opts))
+        (is (= "short" (run #(k/get-in store [:edn] nil opts)))
+            (str "sync? " sync? ": edn — the value segment is truncated too"))
         (delete-store path)))))
 
 (deftest dissoc-is-ordered-against-a-fenced-write
   (testing "a delete on a fenceable key takes the sidecar lock, so it cannot slip inside a fenced write"
-    (let [path (fresh-path)
+    ;; Both ways a caller obtains a token. `k/revision` is the one that used to
+    ;; hand it out WITHOUT creating the sidecar, so the delete found nothing to
+    ;; lock and slipped inside the fenced write.
+    (doseq [[token-source token] [[:with-revision? #(second (k/get-in % [:k] nil {:sync? true :with-revision? true}))]
+                                  [:k/revision      #(k/revision % :k {:sync? true})]]]
+      (let [path (fresh-path)
           ;; Two stores on one path: separate lock registries, like two processes.
-          a    (connect-fs-store path :opts {:sync? true})
-          b    (connect-fs-store path :opts {:sync? true})]
-      (k/assoc-in a [:k] :v0 {:sync? true})
-      (let [[_ rev] (k/get-in a [:k] nil {:sync? true :with-revision? true})
-            writer  (future
-                      ;; Holds the sidecar lock for the whole fenced write.
-                      (k/update-in a [:k] (fn [_] (Thread/sleep 400) :from-a)
-                                   {:sync? true :expected-revision rev}))]
-        (Thread/sleep 100)
-        ;; Arrives while A is mid-write. Must WAIT for A, then delete.
-        (k/dissoc b :k {:sync? true})
-        @writer
-        (is (nil? (k/get-in a [:k] nil {:sync? true}))
-            "the delete ran after the fenced write it was ordered behind; the key must not reappear"))
-      (delete-store path))))
+            a    (connect-fs-store path :opts {:sync? true})
+            b    (connect-fs-store path :opts {:sync? true})]
+        (k/assoc-in a [:k] :v0 {:sync? true})
+        (let [rev      (token a)
+              _        (is (.exists (java.io.File. path (str (d/key->store-key :k) d/cas-lock-suffix)))
+                           (str token-source ": handing out a revision token makes the key fenceable — "
+                                "the sidecar must exist before any fenced write, or an unconditional "
+                                "writer or delete that probes first finds nothing to be ordered by"))
+              entered  (promise)   ; the writer is inside its locked update
+              proceed  (promise)   ; ... and stays there until we say so
+              writer   (future
+                         (k/update-in a [:k] (fn [_] (deliver entered true) @proceed :from-a)
+                                      {:sync? true :expected-revision rev}))]
+          @entered
+        ;; A is provably inside the fenced write, holding the sidecar lock.
+          (let [deleter (future (k/dissoc b :k {:sync? true}) :deleted)]
+            (is (= ::blocked (deref deleter 200 ::blocked))
+                (str token-source ": the delete must wait for the fenced write, not slip inside it"))
+            (deliver proceed true)
+            (is (= :from-a (second @writer)) "the fenced write completes: update-in yields [old new]")
+            (is (= :deleted (deref deleter 5000 ::stuck)) "then the delete runs")
+            (is (nil? (k/get-in a [:k] nil {:sync? true}))
+                (str token-source ": delete after write — the key is gone and does not reappear"))))
+        (delete-store path)))))

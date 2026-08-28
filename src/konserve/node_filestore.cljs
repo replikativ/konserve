@@ -103,12 +103,15 @@
     (let [buffer (js/Buffer.from value-arr)
           pos (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
-      (verify-write-size (alength buffer) bytes-written)))
+      (verify-write-size (alength buffer) bytes-written)
+      ;; The value is the last segment, so the file ends here.
+      (fs.ftruncateSync fd (+ pos (alength buffer)))))
   (-write-binary [_this meta-size blob _env]
     (let [buffer  (js/Buffer.from blob)
           pos     (+ storage-layout/header-size meta-size)
           bytes-written (iofs/write fd buffer {:position pos})]
-      (verify-write-size (alength buffer) bytes-written)))
+      (verify-write-size (alength buffer) bytes-written)
+      (fs.ftruncateSync fd (+ pos (alength buffer)))))
   Object
   (force [_this _] (fs.fsyncSync fd))
   (close [this]
@@ -192,17 +195,32 @@
                    (put! out buf)))))))
 
 (defn- afwrite
-  "Write buffer to the fd. yields ?err"
+  "Write ALL of `buf` at `pos`. yields ?err
+
+   A short write is re-issued from where it stopped. `?byte-count` used to be
+   ignored, so a short `fs.write` published a truncated staging blob as a
+   success — the async twin of what the sync path's `verify-write-size` catches."
   [fd buf pos]
   (let [buf (js/Buffer.from buf)
-        offset 0
         len (alength buf)]
     (with-promise out
-      (fs.write fd buf offset len pos
-                (fn [?err ?byte-count _]
-                  (if ?err
-                    (put! out ?err)
-                    (close! out)))))))
+      (letfn [(step [offset p]
+                (if (< offset len)
+                  (fs.write fd buf offset (- len offset) p
+                            (fn [?err ?n _]
+                              (if ?err
+                                (put! out ?err)
+                                (step (+ offset ?n) (+ p ?n)))))
+                  (close! out)))]
+        (step 0 pos)))))
+
+(defn- aftruncate
+  "Cut the file at `size`. yields ?err"
+  [fd size]
+  (with-promise out
+    (fs.ftruncate fd size
+                  (fn [?err]
+                    (if ?err (put! out ?err) (close! out))))))
 
 (defn- afsize
   "The size of the file in bytes. yields ;=> [?err ?size]"
@@ -254,7 +272,10 @@
                          (fn [?err]
                            (if (some? ?err)
                              (put! out ?err)
-                             (close! out)))))
+                             ;; See -write-value: the file ends where the stream did.
+                             (fs.ftruncate fd (+ pos (.-bytesWritten wstream))
+                                           (fn [?err]
+                                             (if ?err (put! out ?err) (close! out))))))))
       (catch js/Error e
         (put! out e)))))
 
@@ -287,7 +308,10 @@
   (-write-value [_this value-arr meta-size _env] ;=> ch<?err>
     (let [buffer (js/Buffer.from value-arr)
           pos (+ storage-layout/header-size meta-size)]
-      (afwrite fd buffer pos)))
+      ;; The value is the last segment, so the file ends here — in `:in-place?`
+      ;; mode the file is reused, and a shorter value kept the old tail.
+      (go (or (<! (afwrite fd buffer pos))
+              (<! (aftruncate fd (+ pos (alength buffer))))))))
   (-write-binary [_this meta-size blob env]
     (afwrite-binary fd meta-size blob env)) ;=> ch<?err>
   Object
@@ -541,10 +565,12 @@
     (if (:sync? env)
       (list-files base (.-ephemeral? this))
       (list-files-async base (.-ephemeral? this))))
-  (-copy [this from to env]
+  (-copy [_this from to env]
+    ;; `base`, as `-atomic-move` passes: `this` is the record, and every
+    ;; in-place write (which copies a `.backup` first) died on it.
     (if (:sync? env)
-      (copy this from to env)
-      (copy-async this from to env)))
+      (copy base from to env)
+      (copy-async base from to env)))
   (-atomic-move [_this from to env]
     (if (:sync? env)
       (atomic-move base from to env)
