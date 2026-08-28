@@ -325,6 +325,7 @@ After requiring a backend module, it automatically registers with the multimetho
 *** Available External Backends
 
 - =:s3= - AWS S3 ([[https://github.com/replikativ/konserve-s3][konserve-s3]])
+- =:azure-blob= - Azure Blob Storage ([[https://github.com/replikativ/konserve-azure-blob][konserve-azure-blob]])
 - =:dynamodb= - AWS DynamoDB ([[https://github.com/replikativ/konserve-dynamodb][konserve-dynamodb]])
 - =:redis= - Redis ([[https://github.com/replikativ/konserve-redis][konserve-redis]])
 - =:lmdb= - LMDB ([[https://github.com/replikativ/konserve-lmdb][konserve-lmdb]])
