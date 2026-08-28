@@ -351,7 +351,7 @@
        ;; The value is the last segment, so the file ends here. Without this a
        ;; shorter value written over a longer one keeps the old tail — reachable
        ;; in `:in-place?` mode, where the file is reused.
-       (.truncate this end)
+       (.truncate this (long end))
        nil)))
   (-write-binary [this meta-size blob env]
     (let [{:keys [msg buffer-size]} env
@@ -365,7 +365,7 @@
          (let [size (read bis buffer)]
            (.flip buffer)
            (if (= size -1)
-             (.truncate this pos)
+             (.truncate this (long pos))
              (let [n (.remaining buffer)]
                (<?- (write-fully-async this buffer pos msg))
                (.clear buffer)
@@ -460,7 +460,7 @@
     (let [start (+ header-size meta-size)]
       (write-fully! this (ByteBuffer/wrap value-arr) start)
       ;; See the async twin: the value is the last segment.
-      (.truncate this (+ start (alength ^bytes value-arr)))
+      (.truncate this (long (+ start (alength ^bytes value-arr))))
       nil))
   (-write-binary [this meta-size blob env]
     (let [{:keys [buffer-size]} env
@@ -472,7 +472,7 @@
           (let [size (read bis buffer)]
             (.flip buffer)
             (if (= size -1)
-              (.truncate this pos)
+              (.truncate this (long pos))
               (let [n (.remaining buffer)]
                 (write-fully! this buffer pos)
                 (.clear buffer)
