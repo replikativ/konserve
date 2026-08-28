@@ -1,6 +1,6 @@
 (ns konserve.filestore
   (:require
-   [clojure.core.async :refer [go <!! chan close! put!]]
+   [clojure.core.async :refer [go <! <!! chan close! put! timeout]]
    [clojure.java.io :as io]
    [clojure.string :refer [includes? ends-with?]]
    [konserve.impl.defaults :as kd :refer [update-blob connect-default-store key->store-key store-key->uuid-key normalize-store-config]]
@@ -191,6 +191,11 @@
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
 
+(def ^:private max-move-attempts
+  "Upper bound on `-atomic-move` retries against a Windows AccessDenied — about
+   a second of jittered waiting, the same budget `get-lock` gives contention."
+  60)
+
 (defrecord BackingFilestore [base detected-old-blobs ephemeral? filesystem]
   konserve.protocols/PConditionalWrite
   ;; :machine. `-get-lock` takes a java.nio FileLock, which the OS holds on behalf
@@ -257,10 +262,28 @@
   (-atomic-move [_this from to env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
-                 (Files/move (get-path filesystem base from)
-                             (get-path filesystem base to)
-                             (into-array [StandardCopyOption/ATOMIC_MOVE
-                                          StandardCopyOption/REPLACE_EXISTING])))))
+                 (let [src  (get-path filesystem base from)
+                       dst  (get-path filesystem base to)
+                       opts (into-array [StandardCopyOption/ATOMIC_MOVE
+                                         StandardCopyOption/REPLACE_EXISTING])]
+                   ;; Retried on AccessDeniedException, for Windows. POSIX renames
+                   ;; over a file that another process still has open; Windows
+                   ;; refuses until every handle on the target is gone. Our own
+                   ;; handle is closed before this is called (see the write path
+                   ;; in impl.defaults), so what remains is a READER in another
+                   ;; process, which is short-lived — hence a bounded wait rather
+                   ;; than an immediate failure. Bounded, because a handle held
+                   ;; indefinitely should surface as the error it is.
+                   (loop [attempt 0]
+                     (let [denied (try (Files/move src dst opts) nil
+                                       (catch java.nio.file.AccessDeniedException e e))]
+                       (when denied
+                         (if (< attempt max-move-attempts)
+                           (do (if (:sync? env)
+                                 (Thread/sleep (long (+ 5 (rand-int 20))))
+                                 (<! (timeout (+ 5 (rand-int 20)))))
+                               (recur (inc attempt)))
+                           (throw denied)))))))))
   (-create-store [_this env]
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-

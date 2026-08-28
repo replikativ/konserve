@@ -338,6 +338,31 @@
                        :expected expected
                        :actual   actual})))))
 
+(defn- release-held-lock!
+  "Release the lock in `held` (an atom) once; later calls are no-ops.
+
+   A function, not inline code: `io-operation`'s go block sits close to the
+   JVM's 64KB method limit, and the early release below is a second call site
+   for what the `finally` already does. Each call is one park on this channel
+   rather than the whole body expanded into the state machine."
+  [held key env]
+  (async+sync (:sync? env) *default-sync-translation*
+              (go-try-
+               (when-let [l @held]
+                 (reset! held nil)
+                 (log/trace :konserve/releasing-blob-lock {:key key})
+                 (<?- (-release l env))))))
+
+(defn- close-held-blob!
+  "Close the blob in `held` (an atom) once; later calls are no-ops. See
+   `release-held-lock!` for why this is a function."
+  [held env]
+  (async+sync (:sync? env) *default-sync-translation*
+              (go-try-
+               (when-let [b @held]
+                 (reset! held nil)
+                 (<?- (-close b env))))))
+
 (defn get-lock [this store-key env]
   (async+sync
    (:sync? env)
@@ -609,7 +634,11 @@
                                 ;; the race in the cleanup together.
                                 skip-blob? (and expected-revision (not exists-under-lock?))
                                 blob (when-not skip-blob?
-                                       (<?- (-create-blob backing store-key env)))]
+                                       (<?- (-create-blob backing store-key env)))
+                                ;; In an atom, not a plain binding: the target is
+                                ;; handed back EARLY in rename mode (below), and
+                                ;; the `finally` must then find nothing to close.
+                                held-blob (atom blob)]
                             ;; The value blob gets the same treatment as the
                             ;; sidecar, one level down, and for the same reason: it
                             ;; was opened in a `let` binding and closed in a
@@ -622,7 +651,8 @@
                             (try
                               (let [lock (when (and blob (:lock-blob? config))
                                            (log/trace :konserve/acquiring-blob-lock {:key key :blob (str blob)})
-                                           (<?- (get-lock blob (first key-vec) env)))]
+                                           (<?- (get-lock blob (first key-vec) env)))
+                                    held-lock (atom lock)]
                                 (try
                                   (let [old (cond
                                           ;; A FENCED write decides from the existence
@@ -646,6 +676,21 @@
                                               :else [nil nil])]
                                     (when expected-revision
                                       (check-revision! key expected-revision (first old)))
+                                    ;; RENAME MODE: hand the target back BEFORE `update-blob`
+                                    ;; moves `.new` over it. Everything the target was
+                                    ;; opened for is done — `old` is read, the revision
+                                    ;; checked. Holding it across the move is what made
+                                    ;; the write fail on Windows, which refuses to replace
+                                    ;; a file that has any open handle (POSIX renames
+                                    ;; underneath one). And the lock released here never
+                                    ;; guarded the move: it lives on the inode the rename
+                                    ;; detaches — see `cas-lock-suffix` — which is why the
+                                    ;; sidecar exists for the writes that need serializing,
+                                    ;; and that sidecar's lock stays held. In-place mode
+                                    ;; edits this very file and keeps both.
+                                    (when (and write-op? (not (:in-place? config)))
+                                      (<?- (release-held-lock! held-lock (first key-vec) env))
+                                      (<?- (close-held-blob! held-blob env)))
                                     (if write-op?
                                   ;; The meta is computed ONCE and the same value is both
                                   ;; written and reported. Calling the meta-fn a second time
@@ -664,11 +709,9 @@
                                           res))
                                       old))
                                   (finally
-                                    (when lock
-                                      (log/trace :konserve/releasing-blob-lock {:key (first key-vec) :blob (str blob)})
-                                      (<?- (-release lock env))))))
+                                    (<?- (release-held-lock! held-lock (first key-vec) env)))))
                               (finally
-                                (when blob (<?- (-close blob env))))))
+                                (<?- (close-held-blob! held-blob env)))))
                           (finally
                             (when cas-lock (<?- (-release cas-lock env))))))
                       (finally
