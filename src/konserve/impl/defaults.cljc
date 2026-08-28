@@ -49,8 +49,14 @@
 (defn store-key->uuid-key [^String store-key]
   (cond
     (.endsWith store-key ".ksv") (subs store-key 0 (- (.length store-key) 4))
-    (.endsWith store-key ".ksv.new") (subs store-key 0 (- (.length store-key) 8))
-    (.endsWith store-key ".ksv.backup") (subs store-key 0 (- (.length store-key) 11))
+    ;; Write artifacts carry the key as a prefix: `<uuid>.ksv.<nonce>.new` for a
+    ;; staging file (the nonce is per writer — see `update-blob`), and
+    ;; `<uuid>.ksv.backup`. Everything up to the first `.ksv` is the key.
+    (or (.endsWith store-key ".new") (.endsWith store-key ".backup"))
+    (let [i (.indexOf store-key ".ksv")]
+      (if (pos? i)
+        (subs store-key 0 i)
+        (throw (ex-info (str "Invalid konserve store key: " store-key) {:key store-key}))))
     :else (throw (ex-info (str "Invalid konserve store key: " store-key)
                           {:key store-key}))))
 
@@ -84,9 +90,22 @@
                   (if-not (empty? rkey)
                     (update-in old-value rkey up-fn)
                     (up-fn old-value)))
+          ;; The staging file is PER WRITER. A fixed `<key>.new` is a shared
+          ;; path with no exclusion around it: two writers to one key — two
+          ;; processes, or two stores connected to one path in one JVM —
+          ;; interleave header, meta and value writes into the same file, and
+          ;; whichever moves first can be overwritten in place by the other's
+          ;; remaining positional writes, AFTER it has reported success. That
+          ;; is a torn value, not the last-writer-wins lost update the design
+          ;; accepts for unfenced writes. The target's FileLock used to narrow
+          ;; that window incidentally; it is released before the move now (it
+          ;; never guarded the move — see `cas-lock-suffix`), so the staging
+          ;; file has to be exclusive on its own terms. It also makes the
+          ;; filestore's move retry unambiguous: it retries OUR file by name.
           new-store-key (if (:in-place? config)
                           store-key
-                          (str store-key ".new"))
+                          (str store-key "." (random-uuid) ".new"))
+          moved?        (atom false)
           backup-store-key (str store-key ".backup")
           _ (when (and (:in-place? config) (not (:no-backup? config))) ;; let's back things up before writing then
               (log/trace :konserve/backup-blob {:backup-store-key backup-store-key :key key})
@@ -95,7 +114,8 @@
           meta-size            (count meta-arr)
           header               (create-header version
                                               serializer compressor encryptor meta-size)
-          new-blob             (<?- (-create-blob backing new-store-key env))]
+          new-blob             (<?- (-create-blob backing new-store-key env))
+          new-blob-closed?     (atom false)]
       (try
         (<?- (-write-header new-blob header env))
         (<?- (-write-meta new-blob meta-arr env))
@@ -120,10 +140,12 @@
           (log/trace :konserve/syncing-blob {:key key})
           (<?- (-sync new-blob env)))
         (<?- (-close new-blob env))
+        (reset! new-blob-closed? true)
 
         (when-not (:in-place? config)
           (log/trace :konserve/moving-blob {:key key})
-          (<?- (-atomic-move backing new-store-key store-key env)))
+          (<?- (-atomic-move backing new-store-key store-key env))
+          (reset! moved? true))
 
         (when (:sync-blob? config)
           (log/trace :konserve/syncing-store {:key key})
@@ -136,7 +158,18 @@
 
         (if (= operation :write-edn) [old-value value] true)
         (finally
-          (<?- (-close new-blob env))))))))
+          ;; Once. `-close` is idempotent on a FileChannel by spec, but that is
+          ;; the filestore's property, not the protocol's.
+          (when-not @new-blob-closed?
+            (<?- (-close new-blob env)))
+          ;; A staging file that never got moved is ours to remove: with a
+          ;; per-writer name nothing later overwrites it, so a failed write
+          ;; would otherwise leave a complete-looking `.new` behind for good.
+          ;; Best effort — this runs while an exception may be propagating,
+          ;; and a cleanup failure must not replace it.
+          (when (and (not (:in-place? config)) (not @moved?))
+            (try (<?- (-delete-blob backing new-store-key env))
+                 (catch #?(:clj Exception :cljs js/Error) _ nil)))))))))
 
 (defn read-header [ac serializers env]
   (let [{:keys [sync? store-key]} env]
@@ -235,6 +268,21 @@
                             [meta value]))
         :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
+(declare get-lock cas-lock-suffix)
+
+(defn- needs-sidecar-lock?
+  "Does konserve itself have to serialize conditional writes on this backing?
+
+   Only a backing that does NOT fence its own writes, and so relies on the
+   compare-and-write in `io-operation` being made atomic by a lock. Asked as a
+   mechanism question, not inferred from the domain — the domain says how far
+   a guarantee reaches, not who evaluates it; see `PSelfConditionalWrite`."
+  [backing config]
+  (and (:lock-blob? config)
+       (satisfies? protocols/PConditionalWrite backing)
+       (some? (protocols/-conditional-write-domain backing))
+       (not (satisfies? protocols/PSelfConditionalWrite backing))))
+
 (defn delete-blob
   "Remove/Delete key-value pair of backing store by given key. Returns true if the
    key existed and was deleted, false if it was absent.
@@ -250,19 +298,36 @@
   (async+sync
    (:sync? env) *default-sync-translation*
    (go-try-
-    (let [{:keys [key-vec base ignore-existence?]} env
+    (let [{:keys [key-vec base ignore-existence? config]} env
           key          (first key-vec)
           store-key    (key->store-key key)
           on-error     (fn [e] (ex-info "Could not delete key."
-                                        {:key key :base base :exception e}))]
-      (if (and ignore-existence? (satisfies? PReadMissSafe backing))
-        ;; opt-in fast path: no existed? boolean needed, idempotent delete.
-        (try (<?- (-delete-blob backing store-key env)) true
-             (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
-        (if (<?- (-blob-exists? backing store-key env))
-          (try (<?- (-delete-blob backing store-key env)) true
-               (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
-          false))))))
+                                        {:key key :base base :exception e}))
+          ;; A delete is a write. On a FENCEABLE key — one with a sidecar — it
+          ;; has to take the sidecar's lock like every other writer, or a fenced
+          ;; write can pass `check-revision!`, this delete can land, and the
+          ;; fenced value can then land on top: both report success and a
+          ;; deleted key reappears, with no serialization consistent with the
+          ;; revision the writer was promised. Same probe the write path pays.
+          cas-store-key (str store-key cas-lock-suffix)
+          cas-blob      (when (and (needs-sidecar-lock? backing config)
+                                   (<?- (-blob-exists? backing cas-store-key env)))
+                          (<?- (-create-blob backing cas-store-key env)))]
+      (try
+        (let [cas-lock (when cas-blob (<?- (get-lock cas-blob key env)))]
+          (try
+            (if (and ignore-existence? (satisfies? PReadMissSafe backing))
+              ;; opt-in fast path: no existed? boolean needed, idempotent delete.
+              (try (<?- (-delete-blob backing store-key env)) true
+                   (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
+              (if (<?- (-blob-exists? backing store-key env))
+                (try (<?- (-delete-blob backing store-key env)) true
+                     (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))
+                false))
+            (finally
+              (when cas-lock (<?- (-release cas-lock env))))))
+        (finally
+          (when cas-blob (<?- (-close cas-blob env)))))))))
 
 (def ^:const max-lock-attempts 100)
 
@@ -453,11 +518,7 @@
           ;; billed HEAD on every write to S3, a `.getKey` transaction on every
           ;; write to IndexedDB — plus a sidecar blob written into a storage layer
           ;; that has no use for one.
-          lock-based-fencing?
-          (and (:lock-blob? config)
-               (satisfies? protocols/PConditionalWrite backing)
-               (some? (protocols/-conditional-write-domain backing))
-               (not (satisfies? protocols/PSelfConditionalWrite backing)))]
+          lock-based-fencing? (needs-sidecar-lock? backing config)]
       (cond
         ;; Read-first (PReadMissSafe): no existence probe — read the blob and
         ;; treat an absent key (store-key-not-found-ex) as the caller's

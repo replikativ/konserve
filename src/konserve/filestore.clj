@@ -97,7 +97,10 @@
              fc (FileChannel/open p (into-array OpenOption []))]
          (.force fc true)
          (.close fc))
-       (catch java.io.IOException _ nil)))))
+       ;; Only the Windows shape — opening the DIRECTORY is refused. A real
+       ;; fsync failure on a directory that did open (EIO on POSIX) is the
+       ;; durability loss this sync exists to surface, and must propagate.
+       (catch java.nio.file.AccessDeniedException _ nil)))))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
@@ -190,6 +193,37 @@
            false)))))
 
 (declare migrate-old-files migrate-file-v2 migrate-file-v1)
+
+(defn- write-fully!
+  "Write every remaining byte of `buffer` at `pos`.
+
+   A positional write may return short — the count it returns is the only
+   thing that says so — and a write that stops early leaves the tail of the
+   region unwritten. Every caller here used to ignore that count."
+  [^FileChannel ch ^ByteBuffer buffer ^long pos]
+  (loop [p pos]
+    (when (.hasRemaining buffer)
+      (recur (+ p (long (.write ch buffer p)))))))
+
+(defn- write-fully-async
+  "`write-fully!` for an AsynchronousFileChannel: a channel that closes once
+   every remaining byte is written, or carries the error. Re-issues from the
+   completed count, which is what the three hand-written completion handlers
+   this replaces never looked at."
+  [^AsynchronousFileChannel ch ^ByteBuffer buffer ^long pos msg]
+  (let [out (chan)]
+    (letfn [(step [^long p]
+              (if (.hasRemaining buffer)
+                (.write ch buffer p nil
+                        (proxy [CompletionHandler] []
+                          (completed [n _] (step (+ p (long n))))
+                          (failed [t _]
+                            (put! out (ex-info "Could not write key file."
+                                               (assoc msg :exception t)))
+                            (close! out))))
+                (close! out)))]
+      (step pos))
+    out))
 
 (def ^:private max-move-attempts
   "Upper bound on `-atomic-move` retries against a Windows AccessDenied — about
@@ -307,70 +341,36 @@
   (-close [this _env] (go-try- (.close this)))
   (-get-lock [this _env] (go-try- (.get (.lock this))))
   (-write-header [this header env]
-    (let [{:keys [msg]} env
-          ch (chan)
-          buffer (ByteBuffer/wrap header)]
-      (.write this buffer 0 header-size
-              (proxy [CompletionHandler] []
-                (completed [_res _att]
-                  (close! ch))
-                (failed [t _att]
-                  (put! ch (ex-info "Could not write key file."
-                                    (assoc msg :exception t)))
-                  (close! ch))))
-      ch))
+    (write-fully-async this (ByteBuffer/wrap header) 0 (:msg env)))
   (-write-meta [this meta-arr env]
-    (let [{:keys [msg]} env
-          ch (chan)
-          meta-size (alength ^bytes meta-arr)
-          buffer (ByteBuffer/wrap meta-arr)]
-      (.write this buffer header-size (+ header-size meta-size)
-              (proxy [CompletionHandler] []
-                (completed [_res _att]
-                  (close! ch))
-                (failed [t _att]
-                  (put! ch (ex-info "Could not write key file."
-                                    (assoc msg :exception t)))
-                  (close! ch))))
-      ch))
+    (write-fully-async this (ByteBuffer/wrap meta-arr) header-size (:msg env)))
   (-write-value [this value-arr meta-size env]
-    (let [{:keys [msg]} env
-          ch (chan)
-          total-size (.size this)
-          buffer (ByteBuffer/wrap value-arr)]
-      (.write this buffer (+ header-size meta-size) total-size
-              (proxy [CompletionHandler] []
-                (completed [_res _att]
-                  (close! ch))
-                (failed [t _att]
-                  (put! ch (ex-info "Could not write key file."
-                                    (assoc msg :exception t)))
-                  (close! ch))))
-      ch))
+    (let [start (+ header-size meta-size)
+          end   (+ start (alength ^bytes value-arr))]
+      (go-try-
+       (<?- (write-fully-async this (ByteBuffer/wrap value-arr) start (:msg env)))
+       ;; The value is the last segment, so the file ends here. Without this a
+       ;; shorter value written over a longer one keeps the old tail — reachable
+       ;; in `:in-place?` mode, where the file is reused.
+       (.truncate this end)
+       nil)))
   (-write-binary [this meta-size blob env]
     (let [{:keys [msg buffer-size]} env
           [bis read] (blob->channel blob buffer-size)
-          buffer     (ByteBuffer/allocate buffer-size)
-          start      (+ header-size meta-size)
-          stop       (+ buffer-size start)]
+          buffer     (ByteBuffer/allocate buffer-size)]
       (go-try-
-       (loop [start-byte start
-              stop-byte  stop]
-         (let [size   (read bis buffer)
-               _      (.flip buffer)
-               ch (chan)]
-           (when-not (= size -1)
-             (.write this buffer start-byte stop-byte
-                     (proxy [CompletionHandler] []
-                       (completed [_res _att]
-                         (.clear buffer)
-                         (close! ch))
-                       (failed [t _att]
-                         (put! ch (ex-info "Could not write key file."
-                                           (assoc msg :exception t)))
-                         (close! ch))))
-             (<?- ch)
-             (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
+       ;; Advance by what the read actually PUT in the buffer, not by its
+       ;; capacity: a channel read may return short at any point, and a fixed
+       ;; stride then leaves a hole and shifts everything after it.
+       (loop [pos (+ header-size meta-size)]
+         (let [size (read bis buffer)]
+           (.flip buffer)
+           (if (= size -1)
+             (.truncate this pos)
+             (let [n (.remaining buffer)]
+               (<?- (write-fully-async this buffer pos msg))
+               (.clear buffer)
+               (recur (+ pos n))))))
        (catch Exception e
          (log/trace :konserve/write-binary-error {:error e})
          e)
@@ -454,29 +454,30 @@
   (-close [this _env] (.close this))
   (-get-lock [this _env] (.lock this))
   (-write-header [this header _env]
-    (let [buffer (ByteBuffer/wrap header)]
-      (.write this buffer 0)))
+    (write-fully! this (ByteBuffer/wrap header) 0))
   (-write-meta [this meta-arr _env]
-    (let [buffer (ByteBuffer/wrap meta-arr)]
-      (.write this buffer header-size)))
+    (write-fully! this (ByteBuffer/wrap meta-arr) header-size))
   (-write-value [this value-arr meta-size _env]
-    (let [buffer (ByteBuffer/wrap value-arr)]
-      (.write this buffer (+ header-size meta-size))))
+    (let [start (+ header-size meta-size)]
+      (write-fully! this (ByteBuffer/wrap value-arr) start)
+      ;; See the async twin: the value is the last segment.
+      (.truncate this (+ start (alength ^bytes value-arr)))
+      nil))
   (-write-binary [this meta-size blob env]
     (let [{:keys [buffer-size]} env
           [bis read] (blob->channel blob buffer-size)
-          buffer     (ByteBuffer/allocate buffer-size)
-          start      (+ header-size meta-size)
-          stop       (+ buffer-size start)]
+          buffer     (ByteBuffer/allocate buffer-size)]
       (try
-        (loop [start-byte start
-               stop-byte  stop]
-          (let [size   (read bis buffer)
-                _      (.flip buffer)]
-            (when-not (= size -1)
-              (.write this buffer start-byte)
-              (.clear buffer)
-              (recur (+ buffer-size start-byte) (+ buffer-size stop-byte)))))
+        ;; See the async twin: advance by what was buffered, not the capacity.
+        (loop [pos (+ header-size meta-size)]
+          (let [size (read bis buffer)]
+            (.flip buffer)
+            (if (= size -1)
+              (.truncate this pos)
+              (let [n (.remaining buffer)]
+                (write-fully! this buffer pos)
+                (.clear buffer)
+                (recur (+ pos n))))))
         (finally
           (.close ^Closeable bis)))))
   (-read-header [this _env]
