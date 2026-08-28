@@ -63,18 +63,25 @@
           ;; chars encode to at most 6 bytes, which the byte buffer may not
           ;; hold at the smallest sizes — the encoder then reports OVERFLOW,
           ;; keeps the rest, and the next call makes progress.
-          chars   (CharBuffer/allocate (max 2 (quot buffer-size 4)))]
+          chars   (CharBuffer/allocate (max 2 (quot buffer-size 4)))
+          ;; Set once EOF has been encoded and flushed. The caller stops on
+          ;; -1, but the EOF call can still hand over bytes (a held-back char,
+          ;; the flush), and a caller that received bytes calls again — an
+          ;; encoder used after `flush` throws IllegalStateException.
+          done    (volatile! false)]
       [input
        (fn [^Reader bis ^ByteBuffer nio-buffer]
-         (let [n   (.read bis chars)
-               eof (neg? n)]
-           (.flip chars)
-           (.encode encoder chars nio-buffer eof)
-           (.compact chars)
-           (when eof (.flush encoder nio-buffer))
-           ;; -1 only once nothing is left to hand over: at EOF a held-back
-           ;; char can still produce bytes, and the caller stops on -1.
-           (if (and eof (zero? (.position nio-buffer))) -1 (.position nio-buffer))))])))
+         (if @done
+           -1
+           (let [n   (.read bis chars)
+                 eof (neg? n)]
+             (.flip chars)
+             (.encode encoder chars nio-buffer eof)
+             (.compact chars)
+             (when eof
+               (.flush encoder nio-buffer)
+               (vreset! done true))
+             (if (and eof (zero? (.position nio-buffer))) -1 (.position nio-buffer)))))])))
 
 (extend
  byte-array-type

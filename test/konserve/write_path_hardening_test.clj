@@ -66,16 +66,21 @@
 
 (deftest reader-input-keeps-surrogate-pairs
   (testing "a Reader whose chunks split UTF-16 surrogate pairs still encodes them as UTF-8"
-    ;; Tiny buffers force one char per chunk, so every emoji straddles a
-    ;; boundary; 8 gives two, 1024 the ordinary case.
-    (doseq [buffer-size [4 5 8 1024]]
+    ;; Tiny buffers force one or two chars per chunk, so every emoji straddles
+    ;; a boundary; 8 gives two chars, 1024 the ordinary case. Three inputs:
+    ;; pairs on boundaries; "€€", whose second 3-byte char OVERFLOWS a 4- or
+    ;; 5-byte buffer and is handed over on the EOF call — after which the
+    ;; caller calls once more, and an encoder used after its flush throws;
+    ;; and a trailing lone high surrogate, which is malformed and must
+    ;; become the same replacement `String.getBytes` produces.
+    (doseq [buffer-size [4 5 8 1024]
+            s           [(apply str (repeat 40 "a😀b")) "€€" (str "ab" (char 0xD83D))]]
       (let [path  (fresh-path)
-            store (connect-fs-store path :buffer-size buffer-size :opts {:sync? true})
-            s     (apply str (repeat 40 "a😀b"))]
+            store (connect-fs-store path :buffer-size buffer-size :opts {:sync? true})]
         (is (= buffer-size (:buffer-size store)) "the buffer size under test took effect")
         (k/bassoc store :k (java.io.StringReader. s) {:sync? true})
         (is (= (seq (.getBytes s "UTF-8")) (seq (read-bytes store :k {:sync? true})))
-            (str "buffer-size " buffer-size ": pairs split across chunks must not become replacement bytes"))
+            (str "buffer-size " buffer-size ", input " (pr-str s)))
         (delete-store path)))))
 
 (deftest dissoc-is-ordered-against-a-fenced-write
