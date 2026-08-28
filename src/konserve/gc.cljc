@@ -1,6 +1,7 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
+            [konserve.gc-coordination :as coord]
             #?(:clj [konserve.utils :as utils :refer [async+sync *default-sync-translation*]]
                :cljs [konserve.utils :as utils :refer [*default-sync-translation*]
                       :refer-macros [async+sync]])
@@ -83,7 +84,12 @@
    after the caller's mark — the broken order above, wearing the appearance of
    safety. Only the caller is in a position to interleave the two correctly.
 
-   Passing a raw `(utils/now)` is correct only on a store no writer guards."
+   Passing a raw `(utils/now)` is correct only on a store no writer guards.
+
+   `opts :coordination-token` may carry the exclusive token from
+   `konserve.gc-coordination/begin-collection!`. `sweep!` checks it before
+   enumeration and every destructive batch. The durable coordination key is
+   always preserved, whether or not a token is supplied."
   ([store whitelist cutoff]
    (sweep! store whitelist cutoff 1000 {}))
   ([store whitelist cutoff batch-size]
@@ -94,10 +100,15 @@
     *default-sync-translation*
     (go-try-
      (let [sync? (:sync? opts)
+           coordination-token (:coordination-token opts)
+           _ (when coordination-token
+               (<?- (coord/assert-collection! store coordination-token
+                                              (select-keys opts [:sync?]))))
            to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
                           (filter (fn [{:keys [key last-write] :as meta}]
                                     (not
-                                     (or (contains? whitelist key)
+                                     (or (contains? coord/coordination-root-keys key)
+                                         (contains? whitelist key)
                                          (<= (epoch-ms cutoff)
                                              (epoch-ms (if last-write
                                                          last-write
@@ -108,6 +119,9 @@
         (reduce<?-
          (fn [deleted-files batch]
            (go-try-
+            (when coordination-token
+              (<?- (coord/assert-collection! store coordination-token
+                                             (select-keys opts [:sync?]))))
             (if (utils/multi-key-capable? store)
               ;; one round trip for the whole batch where the backing allows it
               (let [keys-to-delete (mapv :key batch)]
