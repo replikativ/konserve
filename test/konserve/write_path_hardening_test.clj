@@ -64,6 +64,20 @@
             (str "sync? " sync? ": edn — the value segment is truncated too"))
         (delete-store path)))))
 
+(deftest reader-input-keeps-surrogate-pairs
+  (testing "a Reader whose chunks split UTF-16 surrogate pairs still encodes them as UTF-8"
+    ;; Tiny buffers force one char per chunk, so every emoji straddles a
+    ;; boundary; 8 gives two, 1024 the ordinary case.
+    (doseq [buffer-size [4 5 8 1024]]
+      (let [path  (fresh-path)
+            store (connect-fs-store path :buffer-size buffer-size :opts {:sync? true})
+            s     (apply str (repeat 40 "a😀b"))]
+        (is (= buffer-size (:buffer-size store)) "the buffer size under test took effect")
+        (k/bassoc store :k (java.io.StringReader. s) {:sync? true})
+        (is (= (seq (.getBytes s "UTF-8")) (seq (read-bytes store :k {:sync? true})))
+            (str "buffer-size " buffer-size ": pairs split across chunks must not become replacement bytes"))
+        (delete-store path)))))
+
 (deftest dissoc-is-ordered-against-a-fenced-write
   (testing "a delete on a fenceable key takes the sidecar lock, so it cannot slip inside a fenced write"
     ;; Both ways a caller obtains a token. `k/revision` is the one that used to
