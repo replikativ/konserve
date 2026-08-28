@@ -140,14 +140,14 @@
         (if (compare-and-set! lock-atom nil lock-id)
           (->CrashAwareLock lock-atom lock-id)
           (do
-            (Thread/sleep (rand-int 10))
+            (Thread/sleep (long (rand-int 10)))
             (recur))))
       (go-try-
        (loop []
          (if (compare-and-set! lock-atom nil lock-id)
            (->CrashAwareLock lock-atom lock-id)
            (do
-             (Thread/sleep (rand-int 10))
+             (Thread/sleep (long (rand-int 10)))
              (recur))))))))
 
 ;; =============================================================================

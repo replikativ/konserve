@@ -7,6 +7,17 @@
             [superv.async :refer [go-try- <?- reduce<?-]])
   #?(:clj (:import [java.util Date])))
 
+(defn- epoch-ms
+  "Epoch millis of a timestamp.
+
+  A function rather than an inline `.getTime` with a `^Date` hint: the call
+  sites sit inside `go-try-`, and the go macro rewrites locals into its
+  state-machine array, dropping their hints and leaving a reflective call
+  behind. A parameter hint on an ordinary function survives."
+  ^long [d]
+  #?(:clj  (.getTime ^Date d)
+     :cljs (.getTime d)))
+
 (defn- delete-batch!
   "Delete one batch of keys, concurrently where the platform allows it.
 
@@ -87,11 +98,11 @@
                           (filter (fn [{:keys [key last-write] :as meta}]
                                     (not
                                      (or (contains? whitelist key)
-                                         (<= (.getTime ^Date cutoff)
-                                             (.getTime (if last-write
-                                                         ^Date last-write
+                                         (<= (epoch-ms cutoff)
+                                             (epoch-ms (if last-write
+                                                         last-write
                                                          ;; old name
-                                                         ^Date (:konserve.core/timestamp meta))))))))
+                                                         (:konserve.core/timestamp meta))))))))
                           (partition-all batch-size))]
        (<?-
         (reduce<?-

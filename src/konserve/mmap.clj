@@ -104,11 +104,11 @@
                                      " at " (.getPath f))
                                 {:type :konserve/key-not-found :key key
                                  :path (.getPath f)})))
-        hdr   (or (read-header f)
-                  (throw (ex-info (str "konserve.mmap: " (.getPath f) " is shorter "
-                                       "than a " header-size "-byte header")
-                                  {:type :konserve/malformed-blob
-                                   :path (.getPath f) :size (.length f)})))
+        ^bytes hdr (or (read-header f)
+                       (throw (ex-info (str "konserve.mmap: " (.getPath f) " is shorter "
+                                            "than a " header-size "-byte header")
+                                       {:type :konserve/malformed-blob
+                                        :path (.getPath f) :size (.length f)})))
         [_ sb cb eb] (map #(bit-and (aget hdr (int %)) 0xff) (range 4))]
     ;; All three are refused rather than worked around -- see the namespace
     ;; docstring on why a silent fallback would be worse than an error.

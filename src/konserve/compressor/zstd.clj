@@ -23,7 +23,8 @@
   is zstd's own default and the right default here; the higher levels trade
   encode time for a few percent."
   (:require [konserve.protocols :refer [PStoreSerializer -serialize -deserialize]])
-  (:import [com.github.luben.zstd ZstdInputStream ZstdOutputStream]))
+  (:import [com.github.luben.zstd ZstdInputStream ZstdOutputStream]
+           [java.io OutputStream]))
 
 (defrecord ZstdCompressor [serializer level]
   PStoreSerializer
@@ -35,7 +36,7 @@
     ;; The wrapper owns the wrapper stream, not the caller's stream -- closing a
     ;; ZstdOutputStream does close the underlying one, which is why konserve's
     ;; callers hand this a fresh per-blob stream.
-    (let [^ZstdOutputStream o (ZstdOutputStream. bytes (int level))]
+    (let [^ZstdOutputStream o (ZstdOutputStream. ^OutputStream bytes (int level))]
       (-serialize serializer o write-handlers val)
       (.close o))))
 
