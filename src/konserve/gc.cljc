@@ -86,10 +86,13 @@
 
    Passing a raw `(utils/now)` is correct only on a store no writer guards.
 
-   `opts :coordination-token` may carry the exclusive token from
-   `konserve.gc-coordination/begin-collection!`. `sweep!` checks it before
-   enumeration and every destructive batch. The durable coordination key is
-   always preserved, whether or not a token is supplied."
+   `opts :coordination-token` carries the exclusive token from
+   `konserve.gc-coordination/begin-collection!`. Once durable coordination has
+   been activated for a store, a token is mandatory; an independent tokenless
+   collector fails closed instead of bypassing publishers. A legacy store with
+   no coordination record retains tokenless behavior. `sweep!` checks authority
+   before enumeration and every destructive batch. The durable coordination key
+   is always preserved."
   ([store whitelist cutoff]
    (sweep! store whitelist cutoff 1000 {}))
   ([store whitelist cutoff batch-size]
@@ -101,9 +104,8 @@
     (go-try-
      (let [sync? (:sync? opts)
            coordination-token (:coordination-token opts)
-           _ (when coordination-token
-               (<?- (coord/assert-collection! store coordination-token
-                                              (select-keys opts [:sync?]))))
+           _ (<?- (coord/assert-sweep-authorized! store coordination-token
+                                                  (select-keys opts [:sync?])))
            to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
                           (filter (fn [{:keys [key last-write] :as meta}]
                                     (not
@@ -119,15 +121,24 @@
         (reduce<?-
          (fn [deleted-files batch]
            (go-try-
-            (when coordination-token
-              (<?- (coord/assert-collection! store coordination-token
-                                             (select-keys opts [:sync?]))))
+            (<?- (coord/assert-sweep-authorized! store coordination-token
+                                                 (select-keys opts [:sync?])))
             (if (utils/multi-key-capable? store)
               ;; one round trip for the whole batch where the backing allows it
               (let [keys-to-delete (mapv :key batch)]
                 (<?- (k/multi-dissoc store keys-to-delete (select-keys opts [:sync?])))
                 (into deleted-files keys-to-delete))
-              (do (<?- (delete-batch! store batch sync?))
-                  (into deleted-files (map :key batch))))))
+              (let [results (<?- (delete-batch! store batch sync?))]
+                ;; In async mode `async/merge` transports a per-key failure as
+                ;; an element inside the result vector. `<?-` only sees the
+                ;; vector itself, so surface the nested failure explicitly
+                ;; instead of claiming every key was deleted.
+                (when-let [error (some #(when (instance?
+                                               #?(:clj Throwable :cljs js/Error)
+                                               %)
+                                          %)
+                                       results)]
+                  (throw error))
+                (into deleted-files (map :key batch))))))
          #{}
          to-delete)))))))
