@@ -1,5 +1,7 @@
 (ns konserve.nio-helpers
   (:import [java.nio.channels Channels ReadableByteChannel]
+           [java.nio CharBuffer]
+           [java.nio.charset StandardCharsets CodingErrorAction]
            [java.io Reader File InputStream
             ByteArrayInputStream FileInputStream StringReader]
            (java.util Arrays)
@@ -39,17 +41,47 @@
 
   Reader
   (blob->channel [input buffer-size]
-    [input
-     (fn [bis nio-buffer]
-       (let [char-array (make-array Character/TYPE buffer-size)
-             size (.read ^StringReader bis ^chars char-array)]
-         (try
-           (when-not (= size -1)
-             (let [char-array-copy (Arrays/copyOf ^chars char-array size)]
-               (.put ^ByteBuffer nio-buffer (.getBytes (String. char-array-copy)))))
-           size
-           (catch Exception e
-             (throw e)))))]))
+    ;; A STATEFUL encoder, not `String.getBytes` per chunk. Chunking a Reader
+    ;; by chars splits UTF-16 surrogate pairs at chunk boundaries, and each
+    ;; half then encoded as a replacement — an emoji on a boundary came out
+    ;; as `??`. The encoder keeps an unpaired high surrogate (`compact`) until
+    ;; its partner arrives in the next chunk. REPLACE matches what
+    ;; `String.getBytes` did for input that is genuinely malformed.
+    ;;
+    ;; At most a QUARTER of the buffer in chars: UTF-8 spends up to four
+    ;; bytes on a pair (two chars) and three on any other char, so the
+    ;; encoded chunk always fits the `buffer-size`-byte ByteBuffer.
+    (when (< buffer-size 4)
+      (throw (ex-info "Reader input needs a buffer-size of at least 4: one UTF-8 character can take four bytes."
+                      {:type :konserve/buffer-too-small :buffer-size buffer-size})))
+    (let [encoder (doto (.newEncoder StandardCharsets/UTF_8)
+                    (.onMalformedInput CodingErrorAction/REPLACE)
+                    (.onUnmappableCharacter CodingErrorAction/REPLACE))
+          ;; Never fewer than TWO chars: a held-back high surrogate must leave
+          ;; room for its partner, or the buffer is full of one unencodable
+          ;; char, every read returns 0, and the writer loops forever. Two
+          ;; chars encode to at most 6 bytes, which the byte buffer may not
+          ;; hold at the smallest sizes — the encoder then reports OVERFLOW,
+          ;; keeps the rest, and the next call makes progress.
+          chars   (CharBuffer/allocate (max 2 (quot buffer-size 4)))
+          ;; Set once EOF has been encoded and flushed. The caller stops on
+          ;; -1, but the EOF call can still hand over bytes (a held-back char,
+          ;; the flush), and a caller that received bytes calls again — an
+          ;; encoder used after `flush` throws IllegalStateException.
+          done    (volatile! false)]
+      [input
+       (fn [^Reader bis ^ByteBuffer nio-buffer]
+         (if @done
+           -1
+           (let [n   (.read bis chars)
+                 eof (neg? n)]
+             (.flip chars)
+             (.encode encoder chars nio-buffer eof)
+             (.compact chars)
+             (when eof
+               (.flush encoder nio-buffer)
+               (vreset! done true))
+             (if (and eof (zero? (.position nio-buffer))) -1 (.position nio-buffer)))))])))
 
 (extend
  byte-array-type

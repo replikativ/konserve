@@ -162,9 +162,13 @@
            #"Simulated crash at after-sync"
            (sync-assoc! store :key {:new-value true})))
 
-      ;; At this point, .new file exists but original is unchanged
-      (is (seq (crash/get-pending-new-files state-atom))
-          "Pending .new file should exist")
+      ;; The simulated crash is a THROWN exception, and a throw is not a process
+      ;; death: `update-blob`'s finally still runs and removes the staging file
+      ;; it never moved (a per-writer `.new` that nothing later overwrites). So
+      ;; nothing is pending here — only a real crash, where no finally runs,
+      ;; leaves one behind. The original is unchanged either way.
+      (is (empty? (crash/get-pending-new-files state-atom))
+          "A failed write cleans up its own staging file")
 
       (crash/simulate-crash! state-atom)
       (crash/clear-crash-point! crash-point-atom)
