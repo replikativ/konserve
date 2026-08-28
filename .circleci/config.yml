@@ -3,9 +3,42 @@ version: 2.1
 orbs:
   tools: replikativ/clj-tools@0
 
+# Reflection is a latency cost on the JVM and a correctness cost under
+# native-image, where a reflective call resolves at run time and so works only
+# if the target was registered when the image was built. Datahike compiles
+# konserve into its `dthk` binary, so a reflective call added here becomes a
+# runtime failure in a shipped artifact. Gate on our own namespaces only — a
+# dependency's warnings are real but are not fixable from here.
+#
+# Runs with :zstd so the optional compressor is checked too; without it that
+# namespace fails to load and would be skipped silently.
+jobs:
+  reflection:
+    docker:
+      - image: clojure:temurin-21-tools-deps
+    steps:
+      - checkout
+      - run:
+          name: fail on reflective calls
+          command: |
+            NSES=$(find src -name '*.clj' -o -name '*.cljc' \
+                     | sed 's|^src/||; s|\.cljc\?$||; s|/|.|g; s|_|-|g' \
+                     | sort -u | sed "s/^/'/" | tr '\n' ' ')
+            clojure -M:zstd -e "(set! *warn-on-reflection* true)(doseq [n [$NSES]] (require n))(println :loaded)" \
+              > /tmp/refl.out 2> /tmp/refl.err || { cat /tmp/refl.err; exit 1; }
+            if grep -q '^Reflection warning.*konserve/' /tmp/refl.err; then
+              echo "Reflective calls in konserve sources:"
+              grep '^Reflection warning.*konserve/' /tmp/refl.err
+              echo
+              echo "Add a type hint. Under native-image these fail at run time."
+              exit 1
+            fi
+            echo "No reflective calls in konserve sources."
+
 workflows:
   build-test-and-deploy:
     jobs:
+      - reflection
       - tools/setup:
           context: docker-deploy
           setup_cljs: true
