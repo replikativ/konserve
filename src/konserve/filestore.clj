@@ -80,12 +80,24 @@
    Note: Jimfs doesn't support directory sync via FileChannel, so we skip it."
   ([base] (sync-base nil base))
   ([filesystem base]
-   ;; Only sync directories on the default filesystem (Jimfs doesn't support this)
+   ;; Only sync directories on the default filesystem (Jimfs doesn't support this).
+   ;;
+   ;; Tolerant of a directory that cannot be opened. fsync-ing a DIRECTORY is a
+   ;; POSIX durability step for a just-renamed entry; Windows has no such
+   ;; operation, and `FileChannel/open` on a directory there throws
+   ;; AccessDeniedException whose whole message is the path. NTFS journals its
+   ;; metadata, so skipping the sync loses nothing that was available. Before
+   ;; this, `delete-store` on Windows failed with a bare
+   ;; "target\\native-image-tests" — the PARENT path, since the parent is what
+   ;; gets synced after an entry is removed — which was diagnosable only by
+   ;; reading the exception class datahike's CLI did not print.
    (when-not filesystem
-     (let [p (get-path filesystem base)
-           fc (FileChannel/open p (into-array OpenOption []))]
-       (.force fc true)
-       (.close fc)))))
+     (try
+       (let [p (get-path filesystem base)
+             fc (FileChannel/open p (into-array OpenOption []))]
+         (.force fc true)
+         (.close fc))
+       (catch java.io.IOException _ nil)))))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"
@@ -124,18 +136,23 @@
            (.close ds))
          (Files/delete base-path))
        (when parent-path
+         ;; Return nil, not the exception: a Throwable returned as a VALUE is
+         ;; put on the go-try- channel and re-thrown by the caller's <?-, so
+         ;; this catch never swallowed anything. sync-base is tolerant now
+         ;; anyway; the guard stays against anything else it could raise.
          (try
            (sync-base filesystem (str parent-path))
-           (catch Exception e e))))
+           (catch Exception _ nil))))
      ;; For default filesystem, use io/file
      (let [f           (io/file base)
            parent-base (.getParent f)]
        (doseq [c (.list (io/file base))]
          (.delete (io/file (str base "/" c))))
        (.delete f)
+       ;; nil, not e — see the custom-filesystem branch above.
        (try
          (sync-base parent-base)
-         (catch Exception e e))))))
+         (catch Exception _ nil))))))
 
 (defn list-files
   "Lists all files on the first level of a directory."
