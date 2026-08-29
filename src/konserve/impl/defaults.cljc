@@ -60,7 +60,7 @@
 
 #?(:cljs (extend-type js/Uint8Array ICounted (-count [this] (alength this))))
 
-(defn update-blob
+(defn update-blob*
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."
   [backing store-key serializer write-handlers
@@ -114,11 +114,10 @@
                                               serializer compressor encryptor meta-size)
           new-blob             (<?- (-create-blob backing new-store-key env))
           new-blob-closed?     (atom false)]
-      (let [t0 (metrics/start)
-            r (try
-                (<?- (-write-header new-blob header env))
-                (<?- (-write-meta new-blob meta-arr env))
-                (if (= operation :write-binary)
+      (try
+        (<?- (-write-header new-blob header env))
+        (<?- (-write-meta new-blob meta-arr env))
+        (if (= operation :write-binary)
           ;; Normalize here so no backing has to. `bassoc` documents five input
           ;; shapes; before this, only the filestore handled any but bytes, and
           ;; every other backing silently mishandled the rest — konserve-s3
@@ -127,53 +126,53 @@
           ;; the caller's input untouched, which is what lets a value larger
           ;; than the heap be written at all: Lucene's DEFAULT merge policy
           ;; tops out at 5 GB per segment, and a byte array at 2 GB.
-                  (<?- (-write-binary new-blob meta-size
-                                      (if (-streaming-binary-write? new-blob)
-                                        input
-                                        #?(:clj (nio/blob->bytes input) :cljs input))
-                                      env))
-                  (let [value-arr (to-array value)]
-                    (metrics/bytes! {:config config} operation (+ meta-size (count value-arr)))
-                    (<?- (-write-value new-blob value-arr meta-size env))))
+          (let [input (if (-streaming-binary-write? new-blob)
+                        input
+                        #?(:clj (nio/blob->bytes input) :cljs input))]
+            (when-let [n #?(:clj (when (bytes? input) (alength ^bytes input))
+                            :cljs (when (instance? js/Uint8Array input) (.-length input)))]
+              (metrics/bytes! config operation (+ meta-size n)))
+            (<?- (-write-binary new-blob meta-size input env)))
+          (let [value-arr (to-array value)]
+            (metrics/bytes! config operation (+ meta-size (count value-arr)))
+            (<?- (-write-value new-blob value-arr meta-size env))))
 
-                (when (:sync-blob? config)
-                  (log/trace :konserve/syncing-blob {:key key})
-                  (<?- (-sync new-blob env)))
+        (when (:sync-blob? config)
+          (log/trace :konserve/syncing-blob {:key key})
+          (<?- (-sync new-blob env)))
         ;; Marked before the call: a close that throws after releasing the
         ;; resource must not be closed again from the `finally`.
-                (reset! new-blob-closed? true)
-                (<?- (-close new-blob env))
+        (reset! new-blob-closed? true)
+        (<?- (-close new-blob env))
 
-                (when-not (:in-place? config)
-                  (log/trace :konserve/moving-blob {:key key})
-                  (<?- (-atomic-move backing new-store-key store-key env))
-                  (reset! moved? true))
+        (when-not (:in-place? config)
+          (log/trace :konserve/moving-blob {:key key})
+          (<?- (-atomic-move backing new-store-key store-key env))
+          (reset! moved? true))
 
-                (when (:sync-blob? config)
-                  (log/trace :konserve/syncing-store {:key key})
-                  (<?- (-sync-store backing env)))
+        (when (:sync-blob? config)
+          (log/trace :konserve/syncing-store {:key key})
+          (<?- (-sync-store backing env)))
 
         ;; Clean up backup after successful write
-                (when (and (:in-place? config) (not (:no-backup? config)))
-                  (log/trace :konserve/deleting-backup-blob {:backup-store-key backup-store-key :key key})
-                  (<?- (-delete-blob backing backup-store-key env)))
+        (when (and (:in-place? config) (not (:no-backup? config)))
+          (log/trace :konserve/deleting-backup-blob {:backup-store-key backup-store-key :key key})
+          (<?- (-delete-blob backing backup-store-key env)))
 
-                (if (= operation :write-edn) [old-value value] true)
-                (finally
+        (if (= operation :write-edn) [old-value value] true)
+        (finally
           ;; Once. `-close` is idempotent on a FileChannel by spec, but that is
           ;; the filestore's property, not the protocol's.
-                  (when-not @new-blob-closed?
-                    (<?- (-close new-blob env)))
+          (when-not @new-blob-closed?
+            (<?- (-close new-blob env)))
           ;; A staging file that never got moved is ours to remove: with a
           ;; per-writer name nothing later overwrites it, so a failed write
           ;; would otherwise leave a complete-looking `.new` behind for good.
           ;; Best effort — this runs while an exception may be propagating,
           ;; and a cleanup failure must not replace it.
-                  (when (and (not (:in-place? config)) (not @moved?))
-                    (try (<?- (-delete-blob backing new-store-key env))
-                         (catch #?(:clj Exception :cljs js/Error) _ nil)))))]
-        (metrics/finish! {:config config} operation :io t0)
-        r)))))
+          (when (and (not (:in-place? config)) (not @moved?))
+            (try (<?- (-delete-blob backing new-store-key env))
+                 (catch #?(:clj Exception :cljs js/Error) _ nil)))))))))
 
 (defn read-header [ac serializers env]
   (let [{:keys [sync? store-key]} env]
@@ -188,7 +187,7 @@
                                         :store-key store-key
                                         :arr (seq arr)})))))))))
 
-(defn read-blob
+(defn read-blob*
   "Read meta, edn or binary from blob."
   [blob read-handlers serializers {:keys [sync? operation locked-cb config _store-key] :as env}]
   (async+sync
@@ -211,45 +210,44 @@
                            ;; default and is what the tests used.
                            ((encryptor (:encryptor config)) (compressor serializer))
                            read-handlers)]
-      (let [t0 (metrics/start)
-            r       (case operation
-                      :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
-                                    :clj
-                                    (let [bais-read (ByteArrayInputStream.
-                                                     (<?- (-read-meta blob meta-size env)))
-                                          value     (fn-read bais-read)
-                                          _         (.close bais-read)]
-                                      value))
-                      :read-edn #?(:cljs (fn-read (<?- (-read-value blob meta-size env)))
-                                   :clj
-                                   (let [bais-read (ByteArrayInputStream.
-                                                    (<?- (-read-value blob meta-size env)))
-                                         value     (fn-read bais-read)
-                                         _         (.close bais-read)]
-                                     value))
-                      :write-binary #?(:cljs
-                                       (let [meta (fn-read (<?- (-read-meta blob meta-size env)))]
-                                         [meta nil])
-                                       :clj
-                                       (let [bais-read (ByteArrayInputStream.
-                                                        (<?- (-read-meta blob meta-size env)))
-                                             meta      (fn-read bais-read)
-                                             _         (.close bais-read)]
-                                         [meta nil]))
-                      :write-edn #?(:cljs
-                                    (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
-                                          value (fn-read (<?- (-read-value blob meta-size env)))]
-                                      [meta value])
-                                    :clj
-                                    (let [bais-meta  (ByteArrayInputStream.
-                                                      (<?- (-read-meta blob meta-size env)))
-                                          meta       (fn-read bais-meta)
-                                          _          (.close bais-meta)
-                                          bais-value (ByteArrayInputStream.
-                                                      (<?- (-read-value blob meta-size env)))
-                                          value     (fn-read bais-value)
-                                          _          (.close bais-value)]
-                                      [meta value]))
+      (case operation
+        :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
+                      :clj
+                      (let [bais-read (ByteArrayInputStream.
+                                       (<?- (-read-meta blob meta-size env)))
+                            value     (fn-read bais-read)
+                            _         (.close bais-read)]
+                        value))
+        :read-edn #?(:cljs (fn-read (<?- (-read-value blob meta-size env)))
+                     :clj
+                     (let [bais-read (ByteArrayInputStream.
+                                      (<?- (-read-value blob meta-size env)))
+                           value     (fn-read bais-read)
+                           _         (.close bais-read)]
+                       value))
+        :write-binary #?(:cljs
+                         (let [meta (fn-read (<?- (-read-meta blob meta-size env)))]
+                           [meta nil])
+                         :clj
+                         (let [bais-read (ByteArrayInputStream.
+                                          (<?- (-read-meta blob meta-size env)))
+                               meta      (fn-read bais-read)
+                               _         (.close bais-read)]
+                           [meta nil]))
+        :write-edn #?(:cljs
+                      (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
+                            value (fn-read (<?- (-read-value blob meta-size env)))]
+                        [meta value])
+                      :clj
+                      (let [bais-meta  (ByteArrayInputStream.
+                                        (<?- (-read-meta blob meta-size env)))
+                            meta       (fn-read bais-meta)
+                            _          (.close bais-meta)
+                            bais-value (ByteArrayInputStream.
+                                        (<?- (-read-value blob meta-size env)))
+                            value     (fn-read bais-value)
+                            _          (.close bais-value)]
+                        [meta value]))
         ;; Both segments, from the one pass the blob is already open for. The
         ;; write path has always done this (`:write-edn` below); a READ needs it
         ;; so a caller can obtain a value AND the revision it is at without a
@@ -257,23 +255,21 @@
         ;; is RACY: between reading the value and reading its revision another
         ;; writer can move both, and the caller would fence against a revision
         ;; that never belonged to the value it computed from.
-                      :read-edn-meta #?(:cljs
-                                        (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
-                                              value (fn-read (<?- (-read-value blob meta-size env)))]
-                                          [meta value])
-                                        :clj
-                                        (let [bais-meta  (ByteArrayInputStream.
-                                                          (<?- (-read-meta blob meta-size env)))
-                                              meta       (fn-read bais-meta)
-                                              _          (.close bais-meta)
-                                              bais-value (ByteArrayInputStream.
-                                                          (<?- (-read-value blob meta-size env)))
-                                              value      (fn-read bais-value)
-                                              _          (.close bais-value)]
-                                          [meta value]))
-                      :read-binary (<?- (-read-binary blob meta-size locked-cb env)))]
-        (metrics/finish! {:config config} operation :io t0)
-        r)))))
+        :read-edn-meta #?(:cljs
+                          (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
+                                value (fn-read (<?- (-read-value blob meta-size env)))]
+                            [meta value])
+                          :clj
+                          (let [bais-meta  (ByteArrayInputStream.
+                                            (<?- (-read-meta blob meta-size env)))
+                                meta       (fn-read bais-meta)
+                                _          (.close bais-meta)
+                                bais-value (ByteArrayInputStream.
+                                            (<?- (-read-value blob meta-size env)))
+                                value      (fn-read bais-value)
+                                _          (.close bais-value)]
+                            [meta value]))
+        :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (declare get-lock cas-lock-suffix)
 
@@ -290,7 +286,7 @@
        (some? (protocols/-conditional-write-domain backing))
        (not (satisfies? protocols/PSelfConditionalWrite backing))))
 
-(defn delete-blob
+(defn delete-blob*
   "Remove/Delete key-value pair of backing store by given key. Returns true if the
    key existed and was deleted, false if it was absent.
 
@@ -305,39 +301,106 @@
   (async+sync
    (:sync? env) *default-sync-translation*
    (go-try-
-    (let [t0 (metrics/start)
-          r (let [{:keys [key-vec base ignore-existence? config]} env
-                  key          (first key-vec)
-                  store-key    (key->store-key key)
-                  on-error     (fn [e] (ex-info "Could not delete key."
-                                                {:key key :base base :exception e}))
+    (let [{:keys [key-vec base ignore-existence? config]} env
+          key          (first key-vec)
+          store-key    (key->store-key key)
+          on-error     (fn [e] (ex-info "Could not delete key."
+                                        {:key key :base base :exception e}))
           ;; A delete is a write. On a FENCEABLE key — one with a sidecar — it
           ;; has to take the sidecar's lock like every other writer, or a fenced
           ;; write can pass `check-revision!`, this delete can land, and the
           ;; fenced value can then land on top: both report success and a
           ;; deleted key reappears, with no serialization consistent with the
           ;; revision the writer was promised. Same probe the write path pays.
-                  cas-store-key (str store-key cas-lock-suffix)
-                  cas-blob      (when (and (needs-sidecar-lock? backing config)
-                                           (<?- (-blob-exists? backing cas-store-key env)))
-                                  (<?- (-create-blob backing cas-store-key env)))
-                  delete!       (fn [] (go-try-
-                                        (try (<?- (-delete-blob backing store-key env)) true
-                                             (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))))]
-              (try
-                (let [cas-lock (when cas-blob (<?- (get-lock cas-blob key env)))]
-                  (try
-                    (cond
+          cas-store-key (str store-key cas-lock-suffix)
+          cas-blob      (when (and (needs-sidecar-lock? backing config)
+                                   (<?- (-blob-exists? backing cas-store-key env)))
+                          (<?- (-create-blob backing cas-store-key env)))
+          delete!       (fn [] (go-try-
+                                (try (<?- (-delete-blob backing store-key env)) true
+                                     (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))))]
+      (try
+        (let [cas-lock (when cas-blob (<?- (get-lock cas-blob key env)))]
+          (try
+            (cond
               ;; opt-in fast path: no existed? boolean needed, idempotent delete.
-                      (and ignore-existence? (satisfies? PReadMissSafe backing)) (<?- (delete!))
-                      (<?- (-blob-exists? backing store-key env))                 (<?- (delete!))
-                      :else                                                      false)
-                    (finally
-                      (when cas-lock (<?- (-release cas-lock env))))))
-                (finally
-                  (when cas-blob (<?- (-close cas-blob env))))))]
-      (metrics/finish! {:config (:config env)} :delete :io t0)
-      r))))
+              (and ignore-existence? (satisfies? PReadMissSafe backing)) (<?- (delete!))
+              (<?- (-blob-exists? backing store-key env))                 (<?- (delete!))
+              :else                                                      false)
+            (finally
+              (when cas-lock (<?- (-release cas-lock env))))))
+        (finally
+          (when cas-blob (<?- (-close cas-blob env)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Timed blob operations
+;; ---------------------------------------------------------------------------
+;;
+;; The `*` functions above do the work; these report it to `konserve.metrics`
+;; — the whole operation, from a backup copy or header read to the final
+;; move, with the exception's class when it threw. With no sink installed the
+;; inner channel (or value) is returned as it is: nothing added. Timing lives
+;; here, in a function of its own, rather than inside the operation's go
+;; block: a try/catch around a parking body is fine, but not one more closure
+;; inside `io-operation`, whose state machine already closes over more locals
+;; than the JVM lets a constructor take.
+
+(defn- preceding-write? [operation] (contains? #{:write-edn :write-binary} operation))
+
+(defn read-blob
+  "Read meta, edn or binary from blob — timed: the read of the old value that
+   precedes a write reports as `:read-old`, every other read as its operation."
+  [blob read-handlers serializers {:keys [sync? operation config] :as env}]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (read-blob* blob read-handlers serializers env)
+      (let [op (if (preceding-write? operation) :read-old operation)]
+        (async+sync
+         sync? *default-sync-translation*
+         (go-try-
+          (try
+            (let [r (<?- (read-blob* blob read-handlers serializers env))]
+              (metrics/finish! config op :io t0)
+              r)
+            (catch #?(:clj Exception :cljs js/Error) e
+              ;; A miss is not a failure of the backend.
+              (metrics/finish! config op :io t0 (when-not (store-key-not-found? e) e))
+              (throw e)))))))))
+
+(defn update-blob
+  "Write the meta and the updated value into the backing store — timed as one
+   `:write-edn`/`:write-binary` operation, backup copy and move included."
+  [backing store-key serializer write-handlers {:keys [sync? operation config] :as env} old]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (update-blob* backing store-key serializer write-handlers env old)
+      (async+sync
+       sync? *default-sync-translation*
+       (go-try-
+        (try
+          (let [r (<?- (update-blob* backing store-key serializer write-handlers env old))]
+            (metrics/finish! config operation :io t0)
+            r)
+          (catch #?(:clj Exception :cljs js/Error) e
+            (metrics/finish! config operation :io t0 e)
+            (throw e))))))))
+
+(defn delete-blob
+  "Remove the key's blob from the backing store — timed as `:delete`."
+  [backing env]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (delete-blob* backing env)
+      (async+sync
+       (:sync? env) *default-sync-translation*
+       (go-try-
+        (try
+          (let [r (<?- (delete-blob* backing env))]
+            (metrics/finish! (:config env) :delete :io t0)
+            r)
+          (catch #?(:clj Exception :cljs js/Error) e
+            (metrics/finish! (:config env) :delete :io t0 e)
+            (throw e))))))))
 
 (def ^:const max-lock-attempts 100)
 
@@ -1192,7 +1255,9 @@
                 {:keys [store-key-values processed-pairs]} prepared-data
 
                 ;; 2. Use the backing store's multi-write capability
-                multi-result (<?- (-multi-write-blobs backing store-key-values env))]
+                t0 (metrics/start)
+                multi-result (<?- (-multi-write-blobs backing store-key-values env))
+                _ (metrics/finish! config :multi-write :io t0)]
 
             ;; 3. Map the results back to original keys
             (into {} (map (fn [{:keys [key store-key]}]
@@ -1215,7 +1280,9 @@
               env (merge opts {:sync? sync?})
 
               ;; Use backing store's multi-delete capability
-              result (<?- (-multi-delete-blobs backing store-keys env))]
+              t0 (metrics/start)
+              result (<?- (-multi-delete-blobs backing store-keys env))
+              _ (metrics/finish! config :multi-delete :io t0)]
 
           ;; Map results back from store-keys to original keys
           (into {} (map (fn [key store-key]
@@ -1239,7 +1306,9 @@
               env (merge opts {:sync? sync?})
 
               ;; Use backing store's multi-read capability to get blobs
-              store-key-to-blob (<?- (-multi-read-blobs backing store-keys env))]
+              t0 (metrics/start)
+              store-key-to-blob (<?- (-multi-read-blobs backing store-keys env))
+              _ (metrics/finish! config :multi-read :io t0)]
 
           ;; Deserialize each blob and build result map (sparse - only found keys)
           (loop [result {}

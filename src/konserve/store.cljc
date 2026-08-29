@@ -116,8 +116,11 @@
       ;; A DefaultStore hands its :config map to every blob operation as the
       ;; `env`, so the store's identity travels with it: that is how
       ;; `konserve.metrics` labels the backend's own work without any store
-      ;; being wrapped. Two keys, no credentials.
-      (map? (:config store)) (update :config assoc :backend (:backend config) :id (:id config)))
+      ;; being wrapped. Two NAMESPACED keys, so nothing a backend keeps in that
+      ;; map is touched; no credentials.
+      (map? (:config store)) (update :config assoc
+                                     :konserve.metrics/backend  (:backend config)
+                                     :konserve.metrics/store-id (:id config)))
     store))
 
 (defn- with-store-config
