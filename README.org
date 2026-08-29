@@ -450,6 +450,40 @@ like store synchronization, change logging, or triggering side effects.
 Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
 across all store backends. Stores must implement the =PWriteHookStore= protocol.
 
+*** Metrics
+
+Every store operation reports to one process-wide sink, with no store wrapped
+and no store changing identity: the labels come from the store's own config.
+Install a sink — any =(fn [event])= — and every backend on =DefaultStore=
+(file, S3, GCS, JDBC, …) reports at three levels:
+
+#+BEGIN_SRC clojure
+  (require '[konserve.metrics :as metrics])
+
+  (metrics/set-sink! (fn [event] (println event)))
+  ;; {:backend :file :store-id #uuid "…" :op :assoc-in  :level :api  :nanos 812345}
+  ;; {:backend :file :store-id #uuid "…" :op :lock      :level :lock :nanos 2100}
+  ;; {:backend :file :store-id #uuid "…" :op :write-edn :level :io   :bytes 4096}
+  ;; {:backend :file :store-id #uuid "…" :op :write-edn :level :io   :nanos 640000}
+
+  (metrics/set-sink! nil)   ; off again; without a sink the cost is one deref per op
+#+END_SRC
+
+- =:api= is what a caller waits for — lock wait, serialization and I/O
+  together — one event per =get-in=, =assoc-in=, =bget=, =multi-assoc=, …,
+  with =:error= (the exception's class name) when the call threw.
+- =:io= is the backend alone, below the lock, per blob operation
+  (=:read-edn=, =:write-edn=, =:write-binary=, =:delete=) — the S3 round trip,
+  the fsync — plus a =:bytes= event for what a write serialized.
+- =:lock= is the wait for the in-process key lock, the number that explains
+  contention between writers.
+
+The =:backend= and =:store-id= labels are the =:backend= and =:id= of the
+config passed to =connect-store= / =create-store=; a store opened through a
+backend's own connect function has no id and is labelled by its backing's type.
+A sink aggregates as it likes — per =[backend store-id op]= histograms for
+Prometheus, or an atom in a test.
+
 *** Garbage Collection
 
 Konserve has a garbage collector that can be called manually when the store gets

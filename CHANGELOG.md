@@ -4,6 +4,18 @@ All notable, user-visible changes to konserve are documented here.
 
 ## Unreleased
 
+### Added
+- **Metrics, without wrapping a store.** `konserve.metrics` reports every
+  operation to one process-wide sink — `(konserve.metrics/set-sink! f)`, a
+  `(fn [event])` — at three levels: `:api` (what a caller waits for, per
+  `get-in`/`assoc-in`/…), `:io` (the backend's own work per blob operation,
+  below the lock — the S3 round trip, the fsync — with bytes written), and
+  `:lock` (the wait for the in-process key lock). Events carry the store's
+  `:backend` and `:store-id`, which `connect-store`/`create-store` now also
+  stamp into a `DefaultStore`'s `:config`. No store changes identity or type,
+  every backend on `DefaultStore` is covered, and with no sink the cost is one
+  deref per operation.
+
 ### Fixed
 - **Connecting to an existing IndexedDB store opens it again.** The previous
   fix (connect no longer writes) skipped `-create-store` for a store that
