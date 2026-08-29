@@ -91,7 +91,10 @@
   [x]
   (let [cfg  (or (:config x) x)
         spec (get x p/store-config-key)]
-    {:backend  (or (::backend cfg) (:backend spec) (type-label (:backing x)) :unknown)
+    {:backend  (or (::backend cfg) (:backend spec)
+                   (type-label (:backing x))
+                   (when (record? x) (type-label x))
+                   :unknown)
      :store-id (or (::store-id cfg) (:id spec))}))
 
 (defn- emit!

@@ -1256,8 +1256,12 @@
 
                 ;; 2. Use the backing store's multi-write capability
                 t0 (metrics/start)
-                multi-result (<?- (-multi-write-blobs backing store-key-values env))
-                _ (metrics/finish! config :multi-write :io t0)]
+                multi-result (try (let [r (<?- (-multi-write-blobs backing store-key-values env))]
+                                    (metrics/finish! config :multi-write :io t0)
+                                    r)
+                                  (catch #?(:clj Throwable :cljs :default) e
+                                    (metrics/finish! config :multi-write :io t0 e)
+                                    (throw e)))]
 
             ;; 3. Map the results back to original keys
             (into {} (map (fn [{:keys [key store-key]}]
@@ -1281,8 +1285,12 @@
 
               ;; Use backing store's multi-delete capability
               t0 (metrics/start)
-              result (<?- (-multi-delete-blobs backing store-keys env))
-              _ (metrics/finish! config :multi-delete :io t0)]
+              result (try (let [r (<?- (-multi-delete-blobs backing store-keys env))]
+                            (metrics/finish! config :multi-delete :io t0)
+                            r)
+                          (catch #?(:clj Throwable :cljs :default) e
+                            (metrics/finish! config :multi-delete :io t0 e)
+                            (throw e)))]
 
           ;; Map results back from store-keys to original keys
           (into {} (map (fn [key store-key]
@@ -1307,8 +1315,12 @@
 
               ;; Use backing store's multi-read capability to get blobs
               t0 (metrics/start)
-              store-key-to-blob (<?- (-multi-read-blobs backing store-keys env))
-              _ (metrics/finish! config :multi-read :io t0)]
+              store-key-to-blob (try (let [r (<?- (-multi-read-blobs backing store-keys env))]
+                                       (metrics/finish! config :multi-read :io t0)
+                                       r)
+                                     (catch #?(:clj Throwable :cljs :default) e
+                                       (metrics/finish! config :multi-read :io t0 e)
+                                       (throw e)))]
 
           ;; Deserialize each blob and build result map (sparse - only found keys)
           (loop [result {}

@@ -597,6 +597,11 @@
                                              :encryptor  encryptor
                                              :store-key  store-key
                                              :buffer-size buffer-size
+                                             ;; The store's config and mode travel
+                                             ;; with the env: `update-blob` picks
+                                             ;; its arm and its metrics labels there.
+                                             :config     (:config env)
+                                             :sync?      sync?
                                              :base base
                                              :key-vec [nkey]
                                              :up-fn-meta (fn [_] meta)}
@@ -669,6 +674,8 @@
                                             :compressor compressor
                                             :encryptor  encryptor
                                             :buffer-size buffer-size
+                                            :config     (:config env)
+                                            :sync?      sync?
                                             :base base
                                             :store-key  store-key
                                             :key-vec [key]
