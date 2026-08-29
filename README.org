@@ -450,6 +450,53 @@ like store synchronization, change logging, or triggering side effects.
 Hooks are invoked at the API layer (in =konserve.core=), so they work consistently
 across all store backends. Stores must implement the =PWriteHookStore= protocol.
 
+*** Metrics
+
+Every store operation reports to a process-wide registry of named sinks, with
+no store wrapped and no store changing identity: the labels come from the
+config the store was connected with. Register a sink — any =(fn [event])= —
+and every backend on =DefaultStore= (file, S3, GCS, JDBC, …) reports at three
+levels:
+
+#+BEGIN_SRC clojure
+  (require '[konserve.metrics :as metrics])
+
+  (metrics/add-sink! ::log (fn [event] (println event)))
+  ;; {:backend :file :store-id #uuid "…" :op :lock      :level :lock :nanos 2100}
+  ;; {:backend :file :store-id #uuid "…" :op :write-edn :level :io   :bytes 4096}
+  ;; {:backend :file :store-id #uuid "…" :op :write-edn :level :io   :nanos 640000}
+  ;; {:backend :file :store-id #uuid "…" :op :assoc-in  :level :api  :nanos 812345}
+
+  (metrics/remove-sink! ::log)
+#+END_SRC
+
+- =:api= is what a caller waits for — lock wait, serialization and I/O
+  together — one event per public function (=get-in=, =assoc-in=, =bget=,
+  =multi-assoc=, =keys=, …), with =:error= (the exception's class name) when
+  it threw. A call rejected before it reaches the store produces none; a
+  function that delegates (=get= to =get-in=) reports as what it delegates to.
+- =:io= is the backend alone, below the lock, per blob operation
+  (=:read-edn=, =:write-edn=, =:write-binary=, =:delete=, =:multi-read=, …)
+  from the first byte of a backup copy or header read to the end of the move,
+  with the read of the old value before a write as =:read-old=; plus a
+  =:bytes= event for what a write serialized (metadata and value; not the
+  header, not a streamed binary).
+- =:lock= is the wait for the in-process key lock, the number that explains
+  contention between writers; a lock-free store has no wait and no event.
+
+Two rules for a sink, because it runs on the operation's own thread: it must
+be thread-safe (events from concurrent operations interleave; each is
+self-contained, so aggregation needs no ordering) and non-blocking — count
+into atomics, or hand events to a buffered channel drained elsewhere. A sink
+that throws is logged and skipped; it never fails the operation it observed.
+
+The =:backend= and =:store-id= labels are the =:backend= and =:id= of the
+config passed to =connect-store= / =create-store=; a store opened through a
+backend's own connect function has no id and is labelled by its backing's
+type. With no sink registered the cost is one deref per measurement site and
+nothing else. A sink aggregates as it likes — per =[backend store-id op]=
+histograms for Prometheus, or an atom in a test.
+
 *** Garbage Collection
 
 Konserve has a garbage collector that can be called manually when the store gets

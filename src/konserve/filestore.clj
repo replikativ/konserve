@@ -597,6 +597,11 @@
                                              :encryptor  encryptor
                                              :store-key  store-key
                                              :buffer-size buffer-size
+                                             ;; The store's config and mode travel
+                                             ;; with the env: `update-blob` picks
+                                             ;; its arm and its metrics labels there.
+                                             :config     (:config env)
+                                             :sync?      sync?
                                              :base base
                                              :key-vec [nkey]
                                              :up-fn-meta (fn [_] meta)}
@@ -624,7 +629,11 @@
                  (finally
                    (when binary?
                      (Files/delete data-path))
-                   (.close ^AsynchronousFileChannel c-data-file))))))
+                   ;; A FileChannel on the synchronous path, an
+                   ;; AsynchronousFileChannel otherwise: both are Channels.
+                   ;; The cast to the async one made every synchronous v1
+                   ;; migration throw ClassCastException at its close.
+                   (.close ^java.nio.channels.Channel c-data-file))))))
 
 (defn- migrate-file-v2
   "Migration Function For Konserve Version, who has Meta and Data Bases.
@@ -669,6 +678,8 @@
                                             :compressor compressor
                                             :encryptor  encryptor
                                             :buffer-size buffer-size
+                                            :config     (:config env)
+                                            :sync?      sync?
                                             :base base
                                             :store-key  store-key
                                             :key-vec [key]

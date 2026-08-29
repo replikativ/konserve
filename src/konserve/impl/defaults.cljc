@@ -4,6 +4,7 @@
    [clojure.core.async :refer [<! timeout] :as async]
    [clojure.string :refer [ends-with?]]
    [hasch.core :refer [uuid]]
+   [konserve.metrics :as metrics]
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor null-compressor]]
    [konserve.encryptor :refer [get-encryptor null-encryptor]]
@@ -59,7 +60,7 @@
 
 #?(:cljs (extend-type js/Uint8Array ICounted (-count [this] (alength this))))
 
-(defn update-blob
+(defn update-blob*
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."
   [backing store-key serializer write-handlers
@@ -125,12 +126,15 @@
           ;; the caller's input untouched, which is what lets a value larger
           ;; than the heap be written at all: Lucene's DEFAULT merge policy
           ;; tops out at 5 GB per segment, and a byte array at 2 GB.
-          (<?- (-write-binary new-blob meta-size
-                              (if (-streaming-binary-write? new-blob)
-                                input
-                                #?(:clj (nio/blob->bytes input) :cljs input))
-                              env))
+          (let [input (if (-streaming-binary-write? new-blob)
+                        input
+                        #?(:clj (nio/blob->bytes input) :cljs input))]
+            (when-let [n #?(:clj (when (bytes? input) (alength ^bytes input))
+                            :cljs (when (instance? js/Uint8Array input) (.-length input)))]
+              (metrics/bytes! config operation (+ meta-size n)))
+            (<?- (-write-binary new-blob meta-size input env)))
           (let [value-arr (to-array value)]
+            (metrics/bytes! config operation (+ meta-size (count value-arr)))
             (<?- (-write-value new-blob value-arr meta-size env))))
 
         (when (:sync-blob? config)
@@ -183,7 +187,7 @@
                                         :store-key store-key
                                         :arr (seq arr)})))))))))
 
-(defn read-blob
+(defn read-blob*
   "Read meta, edn or binary from blob."
   [blob read-handlers serializers {:keys [sync? operation locked-cb config _store-key] :as env}]
   (async+sync
@@ -282,7 +286,7 @@
        (some? (protocols/-conditional-write-domain backing))
        (not (satisfies? protocols/PSelfConditionalWrite backing))))
 
-(defn delete-blob
+(defn delete-blob*
   "Remove/Delete key-value pair of backing store by given key. Returns true if the
    key existed and was deleted, false if it was absent.
 
@@ -327,6 +331,76 @@
               (when cas-lock (<?- (-release cas-lock env))))))
         (finally
           (when cas-blob (<?- (-close cas-blob env)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Timed blob operations
+;; ---------------------------------------------------------------------------
+;;
+;; The `*` functions above do the work; these report it to `konserve.metrics`
+;; — the whole operation, from a backup copy or header read to the final
+;; move, with the exception's class when it threw. With no sink installed the
+;; inner channel (or value) is returned as it is: nothing added. Timing lives
+;; here, in a function of its own, rather than inside the operation's go
+;; block: a try/catch around a parking body is fine, but not one more closure
+;; inside `io-operation`, whose state machine already closes over more locals
+;; than the JVM lets a constructor take.
+
+(defn- preceding-write? [operation] (contains? #{:write-edn :write-binary} operation))
+
+(defn read-blob
+  "Read meta, edn or binary from blob — timed: the read of the old value that
+   precedes a write reports as `:read-old`, every other read as its operation."
+  [blob read-handlers serializers {:keys [sync? operation config] :as env}]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (read-blob* blob read-handlers serializers env)
+      (let [op (if (preceding-write? operation) :read-old operation)]
+        (async+sync
+         sync? *default-sync-translation*
+         (go-try-
+          (try
+            (let [r (<?- (read-blob* blob read-handlers serializers env))]
+              (metrics/finish! config op :io t0)
+              r)
+            (catch #?(:clj Throwable :cljs :default) e
+              ;; A miss is not a failure of the backend.
+              (metrics/finish! config op :io t0 (when-not (store-key-not-found? e) e))
+              (throw e)))))))))
+
+(defn update-blob
+  "Write the meta and the updated value into the backing store — timed as one
+   `:write-edn`/`:write-binary` operation, backup copy and move included."
+  [backing store-key serializer write-handlers {:keys [sync? operation config] :as env} old]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (update-blob* backing store-key serializer write-handlers env old)
+      (async+sync
+       sync? *default-sync-translation*
+       (go-try-
+        (try
+          (let [r (<?- (update-blob* backing store-key serializer write-handlers env old))]
+            (metrics/finish! config operation :io t0)
+            r)
+          (catch #?(:clj Throwable :cljs :default) e
+            (metrics/finish! config operation :io t0 e)
+            (throw e))))))))
+
+(defn delete-blob
+  "Remove the key's blob from the backing store — timed as `:delete`."
+  [backing env]
+  (let [t0 (metrics/start)]
+    (if-not t0
+      (delete-blob* backing env)
+      (async+sync
+       (:sync? env) *default-sync-translation*
+       (go-try-
+        (try
+          (let [r (<?- (delete-blob* backing env))]
+            (metrics/finish! (:config env) :delete :io t0)
+            r)
+          (catch #?(:clj Throwable :cljs :default) e
+            (metrics/finish! (:config env) :delete :io t0 e)
+            (throw e))))))))
 
 (def ^:const max-lock-attempts 100)
 
@@ -1181,7 +1255,13 @@
                 {:keys [store-key-values processed-pairs]} prepared-data
 
                 ;; 2. Use the backing store's multi-write capability
-                multi-result (<?- (-multi-write-blobs backing store-key-values env))]
+                t0 (metrics/start)
+                multi-result (try (let [r (<?- (-multi-write-blobs backing store-key-values env))]
+                                    (metrics/finish! config :multi-write :io t0)
+                                    r)
+                                  (catch #?(:clj Throwable :cljs :default) e
+                                    (metrics/finish! config :multi-write :io t0 e)
+                                    (throw e)))]
 
             ;; 3. Map the results back to original keys
             (into {} (map (fn [{:keys [key store-key]}]
@@ -1204,7 +1284,13 @@
               env (merge opts {:sync? sync?})
 
               ;; Use backing store's multi-delete capability
-              result (<?- (-multi-delete-blobs backing store-keys env))]
+              t0 (metrics/start)
+              result (try (let [r (<?- (-multi-delete-blobs backing store-keys env))]
+                            (metrics/finish! config :multi-delete :io t0)
+                            r)
+                          (catch #?(:clj Throwable :cljs :default) e
+                            (metrics/finish! config :multi-delete :io t0 e)
+                            (throw e)))]
 
           ;; Map results back from store-keys to original keys
           (into {} (map (fn [key store-key]
@@ -1228,7 +1314,13 @@
               env (merge opts {:sync? sync?})
 
               ;; Use backing store's multi-read capability to get blobs
-              store-key-to-blob (<?- (-multi-read-blobs backing store-keys env))]
+              t0 (metrics/start)
+              store-key-to-blob (try (let [r (<?- (-multi-read-blobs backing store-keys env))]
+                                       (metrics/finish! config :multi-read :io t0)
+                                       r)
+                                     (catch #?(:clj Throwable :cljs :default) e
+                                       (metrics/finish! config :multi-read :io t0 e)
+                                       (throw e)))]
 
           ;; Deserialize each blob and build result map (sparse - only found keys)
           (loop [result {}
@@ -1457,6 +1549,6 @@
                                                      :write-handlers      write-handlers
                                                      :buffer-size         buffer-size
                                                      :locks               (atom {})
-                                                     :config              complete-config
+                                                     :config              (metrics/with-backend-label complete-config backing)
                                                      :write-hooks         (atom {})})]
           store))))))

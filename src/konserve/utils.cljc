@@ -186,7 +186,8 @@
     <?- do
     reduce<?- reduce
     go-locked locked
-    maybe-go-locked maybe-locked})
+    maybe-go-locked maybe-locked
+    konserve.metrics/measured-go konserve.metrics/measured})
 
 #?(:clj
    (defmacro with-promise [sym & body]
