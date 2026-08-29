@@ -629,7 +629,11 @@
                  (finally
                    (when binary?
                      (Files/delete data-path))
-                   (.close ^AsynchronousFileChannel c-data-file))))))
+                   ;; A FileChannel on the synchronous path, an
+                   ;; AsynchronousFileChannel otherwise: both are Channels.
+                   ;; The cast to the async one made every synchronous v1
+                   ;; migration throw ClassCastException at its close.
+                   (.close ^java.nio.channels.Channel c-data-file))))))
 
 (defn- migrate-file-v2
   "Migration Function For Konserve Version, who has Meta and Data Bases.

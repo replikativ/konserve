@@ -1,9 +1,9 @@
 (ns konserve.filestore-migration-test
   (:refer-clojure :exclude [get get-in keys update update-in assoc assoc-in exists? bget bassoc])
-  (:require [clojure.test :refer [deftest testing are]]
+  (:require [clojure.test :refer [deftest testing are is]]
             [konserve.old-filestore :as old-store]
             [clojure.core.async :refer [go <!!]]
-            [konserve.core :refer [get bget keys]]
+            [konserve.core :refer [get get-in bget keys]]
             [konserve.filestore :refer [connect-fs-store delete-store]]))
 
 (deftest old-filestore-v1
@@ -173,3 +173,26 @@
           {:key 5, :type :binary}
           {:key 8, :type :binary}}
         (into #{} (map #(dissoc % :last-write) list-keys))))))
+
+(deftest old-filestore-migrations-synchronously
+  ;; The migrations ran only under {:sync? false} until now: the synchronous
+  ;; path closed its FileChannel as an AsynchronousFileChannel and threw.
+  (testing "v1 edn and binary, synchronously"
+    (let [path      "/tmp/konserve-fs-migration-test-v1-sync"
+          _         (delete-store path)
+          store     (<!! (old-store/new-fs-store-v1 path))
+          _         (<!! (old-store/-assoc-in store [:e] {:v 1}))
+          _         (<!! (old-store/-bassoc store :b (byte-array (range 10))))
+          new-store (connect-fs-store path :detect-old-file-schema? true :opts {:sync? true})]
+      (is (= {:v 1} (get-in new-store [:e] nil {:sync? true})))
+      (is (= (range 10) (bget new-store :b (fn [{:keys [input-stream]}] (vec (.readAllBytes ^java.io.InputStream input-stream))) {:sync? true})))
+      (delete-store path)))
+  (testing "v2 edn, synchronously"
+    (let [path      "/tmp/konserve-fs-migration-test-v2-sync"
+          _         (delete-store path)
+          store     (<!! (old-store/new-fs-store path))
+          _         (<!! (old-store/-assoc-in store [:e] {:v 2}))
+          new-store (connect-fs-store path :detect-old-file-schema? true :opts {:sync? true})]
+      (is (= {:v 2} (get-in new-store [:e] nil {:sync? true})))
+      (delete-store path))))
+
