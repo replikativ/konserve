@@ -362,7 +362,7 @@
             (let [r (<?- (read-blob* blob read-handlers serializers env))]
               (metrics/finish! config op :io t0)
               r)
-            (catch #?(:clj Exception :cljs js/Error) e
+            (catch #?(:clj Throwable :cljs :default) e
               ;; A miss is not a failure of the backend.
               (metrics/finish! config op :io t0 (when-not (store-key-not-found? e) e))
               (throw e)))))))))
@@ -381,7 +381,7 @@
           (let [r (<?- (update-blob* backing store-key serializer write-handlers env old))]
             (metrics/finish! config operation :io t0)
             r)
-          (catch #?(:clj Exception :cljs js/Error) e
+          (catch #?(:clj Throwable :cljs :default) e
             (metrics/finish! config operation :io t0 e)
             (throw e))))))))
 
@@ -398,7 +398,7 @@
           (let [r (<?- (delete-blob* backing env))]
             (metrics/finish! (:config env) :delete :io t0)
             r)
-          (catch #?(:clj Exception :cljs js/Error) e
+          (catch #?(:clj Throwable :cljs :default) e
             (metrics/finish! (:config env) :delete :io t0 e)
             (throw e))))))))
 
@@ -1537,6 +1537,6 @@
                                                      :write-handlers      write-handlers
                                                      :buffer-size         buffer-size
                                                      :locks               (atom {})
-                                                     :config              complete-config
+                                                     :config              (metrics/with-backend-label complete-config backing)
                                                      :write-hooks         (atom {})})]
           store))))))

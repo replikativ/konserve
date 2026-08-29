@@ -66,18 +66,32 @@
   #?(:clj  (System/nanoTime)
      :cljs (* 1e6 (if (exists? js/performance) (.now js/performance) (.now js/Date)))))
 
+(defn type-label
+  "A keyword for `x`'s type, for a store that carries no config to label it
+   by: `konserve.filestore.BackingFilestore` → `:backingfilestore`."
+  [x]
+  #?(:clj  (some-> x class .getSimpleName .toLowerCase keyword)
+     :cljs (some-> x type pr-str keyword)))
+
+(defn with-backend-label
+  "`config` with `::backend` set from `backing`'s type unless a store spec
+   already named the backend — called where a DefaultStore is built, so the
+   `:config` map every blob operation carries labels itself the same way the
+   store does."
+  [config backing]
+  (cond-> config
+    (nil? (::backend config)) (assoc ::backend (type-label backing))))
+
 (defn labels
   "The labels of `x` — a store, or the `:config` map a blob operation carries:
    `:backend` and `:store-id` from what `konserve.store/connect-store` stamped
    (on the store under `store-config-key`, into a `DefaultStore`'s `:config`
    under this namespace's keys). A store opened by a backend's own connect fn
-   has no id and is labelled by its backing's type."
+   has no id and is labelled by its backing's type, at every level alike."
   [x]
   (let [cfg  (or (:config x) x)
         spec (get x p/store-config-key)]
-    {:backend  (or (::backend cfg) (:backend spec)
-                   #?(:clj (some-> (or (:backing x) x) class .getSimpleName .toLowerCase keyword)
-                      :cljs :unknown))
+    {:backend  (or (::backend cfg) (:backend spec) (type-label (:backing x)) :unknown)
      :store-id (or (::store-id cfg) (:id spec))}))
 
 (defn- emit!

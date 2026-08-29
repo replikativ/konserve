@@ -8,20 +8,23 @@
             [konserve.memory :refer [new-mem-store]]
             [konserve.metrics :as metrics]
             #?(:clj [konserve.filestore :refer [delete-store]])
+            #?(:clj [konserve.filestore])
             #?(:clj [konserve.store :as ks])))
 
 (defn- recording!
-  "Register a recording sink under `id`; returns the atom it fills."
-  [id]
-  (let [events (atom [])]
+  "Register a recording sink; returns `[id events]` — the id is fresh, so
+   tests may run in parallel."
+  []
+  (let [id     (keyword "konserve.metrics-test" (str (random-uuid)))
+        events (atom [])]
     (metrics/add-sink! id #(swap! events conj %))
-    events))
+    [id events]))
 
 (defn- ops [events level] (->> @events (filter #(= level (:level %))) (map :op) vec))
 
 (deftest sync-api-events-on-a-memory-store
   ;; Synchronous only, so it runs on every platform.
-  (let [events (recording! ::t)
+  (let [[sink events] (recording!)
         store  (new-mem-store (atom {}) {:sync? true})]
     (try
       (k/assoc-in store [:a] 1 {:sync? true})
@@ -39,10 +42,10 @@
         (is (= :update-in (:op (last @events))))
         (is (some? (:error (last @events)))))
       (finally
-        (metrics/remove-sink! ::t)))))
+        (metrics/remove-sink! sink)))))
 
 (deftest a-sink-cannot-harm-the-operation
-  (let [events (recording! ::good)
+  (let [[sink events] (recording!)
         store  (new-mem-store (atom {}) {:sync? true})]
     (metrics/add-sink! ::bad (fn [_] (throw (ex-info "sink-boom" {}))))
     (try
@@ -52,7 +55,7 @@
         (is (= [:assoc-in :get-in] (ops events :api))))
       (finally
         (metrics/remove-sink! ::bad)
-        (metrics/remove-sink! ::good)))))
+        (metrics/remove-sink! sink)))))
 
 (deftest no-sink-no-events
   (let [store (new-mem-store (atom {}) {:sync? true})]
@@ -61,7 +64,7 @@
 
 #?(:clj
    (deftest async-api-events
-     (let [events (recording! ::t)
+     (let [[sink events] (recording!)
            store  (<!! (new-mem-store))]
        (try
          (<!! (k/assoc-in store [:a] 1))
@@ -77,12 +80,12 @@
            (is (= 1 (<!! (k/get-in store [:a]))))
            (metrics/remove-sink! ::bad))
          (finally
-           (metrics/remove-sink! ::t))))))
+           (metrics/remove-sink! sink))))))
 
 #?(:clj
    (deftest io-lock-and-bytes-events-on-the-filestore
      (let [path   (str (System/getProperty "java.io.tmpdir") "/konserve-metrics-" (random-uuid))
-           events (recording! ::t)
+           [sink events] (recording!)
            id     (random-uuid)
            store  (ks/create-store {:backend :file :path path :id id} {:sync? true})]
        (try
@@ -115,13 +118,25 @@
          (testing "every event carries the store's backend and id"
            (is (every? #(= :file (:backend %)) @events))
            (is (every? #(= id (:store-id %)) @events)))
+         (testing "a store opened by the backend's own connect fn is labelled by its backing at every level alike"
+           (let [path2  (str path "-direct")
+                 direct (konserve.filestore/connect-fs-store path2 :opts {:sync? true})]
+             (try
+               (reset! events [])
+               (k/assoc-in direct [:a] 1 {:sync? true})
+               (is (= #{:backingfilestore} (set (map :backend @events))))
+               (is (every? #(nil? (:store-id %)) @events))
+               (finally (delete-store path2)))))
          (finally
-           (metrics/remove-sink! ::t)
+           (metrics/remove-sink! sink)
            (delete-store path))))))
 
 #?(:clj
-   (deftest multi-key-io-events
-     (let [events (recording! ::t)
+   ;; The memory store answers multi-key calls itself, so this covers the :api
+   ;; events; the :multi-* blob events come from a backing that implements
+   ;; PMultiWriteBackingStore, which in-tree is IndexedDB (browser suite).
+   (deftest multi-key-api-events
+     (let [[sink events] (recording!)
            store  (<!! (new-mem-store))]
        (try
          (<!! (k/multi-assoc store {:a 1 :b 2}))
@@ -129,4 +144,4 @@
          (<!! (k/multi-dissoc store [:a :b]))
          (is (= [:multi-assoc :multi-get :multi-dissoc] (ops events :api)))
          (finally
-           (metrics/remove-sink! ::t))))))
+           (metrics/remove-sink! sink))))))
