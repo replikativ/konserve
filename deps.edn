@@ -9,9 +9,13 @@
         ;; compiled into datahike's `dthk` native image, where a reflective call
         ;; works only if it was registered at build time.
         org.replikativ/incognito {:mvn/version "0.3.71"}
-        org.replikativ/hasch {:mvn/version "0.3.96"}
+        org.replikativ/hasch {:mvn/version "0.4.100"}
         org.replikativ/superv.async {:mvn/version "0.3.50"}
-        org.replikativ/geheimnis {:mvn/version "0.1.25"}
+        ;; Temporary review pin for geheimnis#10. Replace with its released
+        ;; Maven coordinate before publishing Konserve.
+        org.replikativ/geheimnis
+        {:git/url "https://github.com/replikativ/geheimnis"
+         :git/sha "ed95baf100456ea09c3d6ae4dd089049363785d2"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
         org.replikativ/logging {:mvn/version "0.1.3"}
         ;; cljs

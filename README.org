@@ -522,9 +522,12 @@ used by all current backends except lmdb and memory.
   (def config {:backend :file
                :id #uuid "550e8400-e29b-41d4-a716-44665544000c"
                :path "/tmp/secure-store"
-               :config {:encryptor {:type :aes
-                                   :key "s3cr3t"}
-                       :compressor {:type :lz4}}})
+               :config
+               {:encoding
+                {:encryptor {:type :aes-gcm
+                             ;; 32 random bytes, shown as 64 hex characters
+                             :key (konserve.encryptor/generate-key)}
+                 :compressor {:type :lz4}}}})
 
   (def store (k/create-store config {:sync? true}))
 #+END_SRC
@@ -546,9 +549,20 @@ frame header carries **no content size**. A one-shot decompressor fails on
 these frames; use a streaming one. See =interop/read_konserve_blob.py=.
 
 *Encryption:*
-- AES/CBC/PKCS{5/7}Padding with 256 bit
-- Different salt for each written value
-- Same cold storage format for JVM and JS (cross-runtime compatible)
+- =:aes-gcm= — AES-256-GCM authenticated encryption. Each metadata/value
+  segment has a fresh salt and per-segment key; associated data binds it to
+  the layout version, store key, and segment. Tampering, truncation, and moving
+  ciphertext between keys or segments are therefore rejected. Encryptor byte 2.
+- =:aes= — legacy, unauthenticated AES-CBC. Encryptor byte 1. It remains
+  readable for existing stores but must not be selected for new ones.
+- =:aes-gcm= uses the asynchronous API in ClojureScript because Web Crypto has
+  no synchronous cipher. Its bytes are interoperable between JVM and JS.
+
+Binary values remain streaming and are not automatically encrypted. On an
+encrypted store, =bassoc= and =bget= therefore require ={:raw? true}= so
+plaintext cannot be stored accidentally. Use =konserve.core/seal= and =unseal=
+to authenticate and encrypt a materialized binary value under the store's key
+before storing it as raw bytes.
 
 *** Serialization Formats
 
@@ -579,7 +593,7 @@ value:
   byte 0     storage layout version (1)
   byte 1     serializer id      (3 = BoringSerializer)
   byte 2     compressor id      (0 none, 1 lz4, 2 zstd)
-  byte 3     encryptor id       (0 none, 1 aes)
+  byte 3     encryptor id       (0 none, 1 legacy aes, 2 aes-gcm)
   bytes 4-7  metadata length, big-endian
   bytes 8-19 spare, zero
 #+END_SRC

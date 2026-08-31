@@ -2,9 +2,11 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [chan put! poll!]]
             [hasch.core :as hasch]
+            [konserve.encryptor :as encryptor]
             [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write-domain -revision
                                                       -exists? -get-meta -get-in -assoc-in
                                                       -update-in -dissoc -bget -bassoc
+                                                      -encrypt -decrypt
                                                       -keys -multi-get -multi-assoc -multi-dissoc
                                                       -assoc-serializers -get-write-hooks -lock-free?]]
             [konserve.utils :refer [meta-update multi-key-capable? kv-keys invoke-write-hooks! #?(:clj async+sync) *default-sync-translation*]
@@ -971,6 +973,51 @@
                                                         (reduce-fn acc elem))))
                                                   acc)))))))
 
+(defn encrypted?
+  "True when this store has a non-null value encryptor configured."
+  [store]
+  (let [{:keys [encryptor config]} store]
+    (boolean (when encryptor
+               (encryptor/encrypting? (encryptor (:encryptor config)))))))
+
+(defn- store-cipher [store]
+  (when-not (encrypted? store)
+    (throw (ex-info "This store has no encryptor configured."
+                    {:type :konserve/no-encryptor})))
+  ((:encryptor store) (:encryptor (:config store))))
+
+(defn seal
+  "Encrypt bytes under the store's configured key, bound to the Konserve key.
+
+  Returns a channel unless `{:sync? true}` is supplied."
+  ([store key bytes]
+   (seal store key bytes {:sync? false}))
+  ([store key bytes opts]
+   (async+sync
+    (:sync? opts) *default-sync-translation*
+    (go-try-
+     (<?- (-encrypt (store-cipher store)
+                    bytes
+                    (encryptor/associated-data (:version store)
+                                               (defaults/key->store-key key)
+                                               :binary)
+                    opts))))))
+
+(defn unseal
+  "Decrypt bytes produced by `seal` for the same store and Konserve key."
+  ([store key bytes]
+   (unseal store key bytes {:sync? false}))
+  ([store key bytes opts]
+   (async+sync
+    (:sync? opts) *default-sync-translation*
+    (go-try-
+     (<?- (-decrypt (store-cipher store)
+                    bytes
+                    (encryptor/associated-data (:version store)
+                                               (defaults/key->store-key key)
+                                               :binary)
+                    opts))))))
+
 (defn bget
   "Calls locked-cb with a platform specific binary representation inside the lock.
   You need to properly close/dispose the object when you are done!
@@ -1003,7 +1050,11 @@
   File stores accept `:streaming? true` to expose a bounded view over the stored
   payload instead of first materializing it. In that mode the callback must fully
   consume the stream before it (or its returned channel) completes; the view is
-  valid only while Konserve owns the locked backing object."
+  valid only while Konserve owns the locked backing object.
+
+  Binary payload bytes are not encrypted automatically. An encrypted store
+  therefore requires `{:raw? true}`; use `seal` and `unseal` when the bytes
+  should use the store's key."
   ([store key locked-cb]
    (bget store key locked-cb {:sync? false}))
   ([store key locked-cb opts]
@@ -1017,7 +1068,11 @@
 
 (defn bassoc
   "Copies given value (InputStream, Reader, File, byte[] or String on
-  JVM, Blob in JavaScript) under key in the store."
+  JVM, Blob in JavaScript) under key in the store.
+
+  Binary payload bytes are not encrypted automatically. An encrypted store
+  therefore requires `{:raw? true}`; use `seal` and `unseal` when the bytes
+  should use the store's key."
   ([store key val]
    (bassoc store key val {:sync? false}))
   ([store key val opts]
