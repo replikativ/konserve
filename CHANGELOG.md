@@ -5,6 +5,13 @@ All notable, user-visible changes to konserve are documented here.
 ## Unreleased
 
 ### Added
+- **Authenticated encryption with `:aes-gcm`.** AES-256-GCM encrypts complete
+  serialized metadata and value segments, with fresh per-segment salt and
+  associated data binding ciphertext to its layout version, key and slot.
+  `konserve.core/seal` / `unseal` provide the same protection for
+  materialized binary payloads; streaming binary remains explicitly raw.
+- **`konserve.protocols/PEncryptor`.** Encryption is separated from streaming
+  serialization so authentication completes before plaintext is decoded.
 - **Metrics, without wrapping a store.** `konserve.metrics` reports every
   operation to a process-wide registry of sinks — `(add-sink! id f)` /
   `(remove-sink! id)`, each a `(fn [event])` — at three levels: `:api` (what
@@ -19,6 +26,8 @@ All notable, user-visible changes to konserve are documented here.
   site.
 
 ### Fixed
+- **IndexedDB now honors caller encoding configuration.** Its connect helper no
+  longer discards the nested encryptor/compressor configuration.
 - **Connecting to an existing IndexedDB store opens it again.** The previous
   fix (connect no longer writes) skipped `-create-store` for a store that
   already exists — and for the IndexedDB backing, `-create-store` *is* the open:

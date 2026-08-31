@@ -7,10 +7,10 @@
    [konserve.metrics :as metrics]
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor null-compressor]]
-   [konserve.encryptor :refer [get-encryptor null-encryptor]]
+   [konserve.encryptor :refer [associated-data encrypting? get-encryptor null-encryptor]]
    [konserve.protocols :as protocols :refer [PEDNKeyValueStore
                                              PBinaryKeyValueStore
-                                             -serialize -deserialize
+                                             -serialize -deserialize -encrypt -decrypt
                                              PAssocSerializers
                                              PKeyIterable
                                              PMultiKeySupport PConditionalWrite
@@ -60,6 +60,14 @@
 
 #?(:cljs (extend-type js/Uint8Array ICounted (-count [this] (alength this))))
 
+(def ^:private binary-encryption-msg
+  (str "Binary values pass through unencrypted on an encrypted store. "
+       "Use konserve.core/seal and unseal, or pass {:raw? true} to declare "
+       "that the caller owns the binary format and its confidentiality."))
+
+(defn- refuse-plaintext-binary? [enc env]
+  (and (encrypting? enc) (not (:raw? env))))
+
 (defn update-blob*
   "This function writes first the meta-size, then the meta-data and then the
   actual updated data into the underlying backing store."
@@ -71,17 +79,22 @@
    (go-try-
     (let [[key & rkey] key-vec
           store-key (or store-key (key->store-key key))
+          enc (encryptor (:encryptor config))
           to-array #?(:cljs
                       (fn [value]
-                        (-serialize ((encryptor  (:encryptor config)) (compressor serializer)) nil write-handlers value))
+                        (-serialize (compressor serializer) nil write-handlers value))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
-                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
-                                           bos write-handlers value)
+                          (try (-serialize (compressor serializer) bos write-handlers value)
                                (.toByteArray bos)
                                (finally
                                  (.close bos))))))
+          seal (fn [part value]
+                 (-encrypt enc
+                           (to-array value)
+                           (associated-data version store-key part)
+                           env))
 
           meta  (up-fn-meta old-meta)
           value (when (= operation :write-edn)
@@ -108,7 +121,7 @@
           _ (when (and (:in-place? config) (not (:no-backup? config))) ;; let's back things up before writing then
               (log/trace :konserve/backup-blob {:backup-store-key backup-store-key :key key})
               (<?- (-copy backing store-key backup-store-key env)))
-          meta-arr             (to-array meta)
+          meta-arr             (<?- (seal :meta meta))
           meta-size            (count meta-arr)
           header               (create-header version
                                               serializer compressor encryptor meta-size)
@@ -133,7 +146,7 @@
                             :cljs (when (instance? js/Uint8Array input) (.-length input)))]
               (metrics/bytes! config operation (+ meta-size n)))
             (<?- (-write-binary new-blob meta-size input env)))
-          (let [value-arr (to-array value)]
+          (let [value-arr (<?- (seal :value value))]
             (metrics/bytes! config operation (+ meta-size (count value-arr)))
             (<?- (-write-value new-blob value-arr meta-size env))))
 
@@ -189,65 +202,33 @@
 
 (defn read-blob*
   "Read meta, edn or binary from blob."
-  [blob read-handlers serializers {:keys [sync? operation locked-cb config _store-key] :as env}]
+  [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
-    (let [[_ serializer compressor encryptor meta-size header-size]
+    (let [[version serializer compressor encryptor meta-size header-size]
           (<?- (read-header blob serializers env))
           env (assoc env :header-size header-size)
-          fn-read (partial -deserialize
-                           ;; Encryptor OUTERMOST, matching the write path.
-                           ;;
-                           ;; Bytes on disk are encrypt(compress(serialize(v))),
-                           ;; so reading them must decrypt BEFORE decompressing.
-                           ;; This nested the other way -- compressor outermost --
-                           ;; and so tried to decompress ciphertext. Any
-                           ;; compressor combined with any encryptor failed:
-                           ;; zstd+aes with "Unknown frame descriptor", lz4+aes
-                           ;; with "Stream unsupported". Invisible while either
-                           ;; side is the null implementation, which is the
-                           ;; default and is what the tests used.
-                           ((encryptor (:encryptor config)) (compressor serializer))
-                           read-handlers)]
+          enc (encryptor (:encryptor config))
+          fn-read (partial -deserialize (compressor serializer) read-handlers)
+          decode (fn [part bytes]
+                   (async+sync
+                    sync? *default-sync-translation*
+                    (go-try-
+                     (let [plaintext
+                           (<?- (-decrypt enc
+                                          bytes
+                                          (associated-data version store-key part)
+                                          env))]
+                       #?(:cljs (fn-read plaintext)
+                          :clj (with-open [input (ByteArrayInputStream. plaintext)]
+                                 (fn-read input)))))))]
       (case operation
-        :read-meta #?(:cljs (fn-read (<?- (-read-meta blob meta-size env)))
-                      :clj
-                      (let [bais-read (ByteArrayInputStream.
-                                       (<?- (-read-meta blob meta-size env)))
-                            value     (fn-read bais-read)
-                            _         (.close bais-read)]
-                        value))
-        :read-edn #?(:cljs (fn-read (<?- (-read-value blob meta-size env)))
-                     :clj
-                     (let [bais-read (ByteArrayInputStream.
-                                      (<?- (-read-value blob meta-size env)))
-                           value     (fn-read bais-read)
-                           _         (.close bais-read)]
-                       value))
-        :write-binary #?(:cljs
-                         (let [meta (fn-read (<?- (-read-meta blob meta-size env)))]
-                           [meta nil])
-                         :clj
-                         (let [bais-read (ByteArrayInputStream.
-                                          (<?- (-read-meta blob meta-size env)))
-                               meta      (fn-read bais-read)
-                               _         (.close bais-read)]
-                           [meta nil]))
-        :write-edn #?(:cljs
-                      (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
-                            value (fn-read (<?- (-read-value blob meta-size env)))]
-                        [meta value])
-                      :clj
-                      (let [bais-meta  (ByteArrayInputStream.
-                                        (<?- (-read-meta blob meta-size env)))
-                            meta       (fn-read bais-meta)
-                            _          (.close bais-meta)
-                            bais-value (ByteArrayInputStream.
-                                        (<?- (-read-value blob meta-size env)))
-                            value     (fn-read bais-value)
-                            _          (.close bais-value)]
-                        [meta value]))
+        :read-meta (<?- (decode :meta (<?- (-read-meta blob meta-size env))))
+        :read-edn (<?- (decode :value (<?- (-read-value blob meta-size env))))
+        :write-binary [(<?- (decode :meta (<?- (-read-meta blob meta-size env)))) nil]
+        :write-edn [(<?- (decode :meta (<?- (-read-meta blob meta-size env))))
+                    (<?- (decode :value (<?- (-read-value blob meta-size env))))]
         ;; Both segments, from the one pass the blob is already open for. The
         ;; write path has always done this (`:write-edn` below); a READ needs it
         ;; so a caller can obtain a value AND the revision it is at without a
@@ -255,20 +236,8 @@
         ;; is RACY: between reading the value and reading its revision another
         ;; writer can move both, and the caller would fence against a revision
         ;; that never belonged to the value it computed from.
-        :read-edn-meta #?(:cljs
-                          (let [meta  (fn-read (<?- (-read-meta blob meta-size env)))
-                                value (fn-read (<?- (-read-value blob meta-size env)))]
-                            [meta value])
-                          :clj
-                          (let [bais-meta  (ByteArrayInputStream.
-                                            (<?- (-read-meta blob meta-size env)))
-                                meta       (fn-read bais-meta)
-                                _          (.close bais-meta)
-                                bais-value (ByteArrayInputStream.
-                                            (<?- (-read-value blob meta-size env)))
-                                value      (fn-read bais-value)
-                                _          (.close bais-value)]
-                            [meta value]))
+        :read-edn-meta [(<?- (decode :meta (<?- (-read-meta blob meta-size env))))
+                        (<?- (decode :value (<?- (-read-value blob meta-size env))))]
         :read-binary (<?- (-read-binary blob meta-size locked-cb env)))))))
 
 (declare get-lock cas-lock-suffix)
@@ -547,6 +516,13 @@
           overwrite?    (and (:overwrite? env) (nil? expected-revision))
           env           (assoc env :overwrite? overwrite?)
           store-key     (key->store-key key)
+          _             (when (and (#{:read-binary :write-binary} operation)
+                                   (refuse-plaintext-binary?
+                                    ((:encryptor env) (:encryptor config))
+                                    env))
+                          (throw (ex-info binary-encryption-msg
+                                          {:type :konserve/unencrypted-binary
+                                           :key key})))
           env           (assoc env :store-key store-key :header-size header-size)
           serializer    (get serializers default-serializer)
           migration-key (<?- (-migratable backing key store-key env))
@@ -930,14 +906,14 @@
    (:sync? env) *default-sync-translation*
    (go-try-
     (let [serializer (get serializers default-serializer)
+          enc (encryptor (:encryptor config))
           to-array #?(:cljs
                       (fn [value]
-                        (-serialize ((encryptor  (:encryptor config)) (compressor serializer)) nil write-handlers value))
+                        (-serialize (compressor serializer) nil write-handlers value))
                       :clj
                       (fn [value]
                         (let [bos (ByteArrayOutputStream.)]
-                          (try (-serialize ((encryptor (:encryptor config)) (compressor serializer))
-                                           bos write-handlers value)
+                          (try (-serialize (compressor serializer) bos write-handlers value)
                                (.toByteArray bos)
                                (finally
                                  (.close bos))))))
@@ -953,9 +929,15 @@
 
                             ;; Prepare serialized data
                             meta (meta-up-fn key :edn old-meta)
-                            meta-arr (to-array meta)
+                            meta-arr (<?- (-encrypt enc
+                                                    (to-array meta)
+                                                    (associated-data version store-key :meta)
+                                                    env))
                             meta-size (count meta-arr)
-                            value-arr (to-array val)
+                            value-arr (<?- (-encrypt enc
+                                                     (to-array val)
+                                                     (associated-data version store-key :value)
+                                                     env))
                             header (create-header version
                                                   serializer compressor encryptor meta-size)
 
@@ -1105,7 +1087,7 @@
 
   PBinaryKeyValueStore
   (-bget [this key locked-cb opts]
-    (let [{:keys [sync? streaming?]} opts]
+    (let [{:keys [sync? streaming? raw?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
                      :operation :read-binary
@@ -1116,12 +1098,13 @@
                      :version version
                      :sync? sync?
                      :streaming? streaming?
+                     :raw? raw?
                      :buffer-size buffer-size
                      :locked-cb locked-cb
                      :msg       {:type :read-binary-error
                                  :key  key}})))
   (-bassoc [this key meta-up input opts]
-    (let [{:keys [sync?]} opts]
+    (let [{:keys [sync? raw?]} opts]
       (io-operation this serializers read-handlers write-handlers
                     {:key-vec [key]
                      :operation  :write-binary
@@ -1133,6 +1116,7 @@
                      :up-fn-meta meta-up
                      :config     config
                      :sync?      sync?
+                     :raw?       raw?
                      :buffer-size buffer-size
                      :msg        {:type :write-binary-error
                                   :key  key}})))

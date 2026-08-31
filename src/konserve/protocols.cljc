@@ -55,6 +55,14 @@
     "For the JVM we use streams, while for JavaScript we return the value for now.")
   (-deserialize [this read-handlers input-stream]))
 
+(defprotocol PEncryptor
+  "Whole-value encryption. Both operations consume and produce byte arrays.
+
+  Associated data binds ciphertext to its storage context. Operations return a
+  channel unless `(:sync? env)` is true."
+  (-encrypt [this plaintext aad env])
+  (-decrypt [this ciphertext aad env]))
+
 (defprotocol PWriteHookStore
   "Protocol for stores that support write hooks.
    Write hooks are callbacks invoked after successful write operations.
@@ -320,4 +328,3 @@
 (extend-protocol PLockFreeStore
   #?(:clj Object :cljs default)
   (-lock-free? [_] false))
-
