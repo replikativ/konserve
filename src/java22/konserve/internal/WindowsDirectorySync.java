@@ -1,10 +1,12 @@
+package konserve.internal;
+
 import java.io.IOException;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.Path;
 import static java.lang.foreign.ValueLayout.*;
 
-/** Experimental JDK 22+ binding. Not yet connected to Konserve's runtime. */
+/** Windows x64 directory persistence barrier. Loaded only on JDK 22+. */
 public final class WindowsDirectorySync {
     interface Calls {
         long open(String path) throws IOException;

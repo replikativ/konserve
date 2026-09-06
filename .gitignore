@@ -1,6 +1,7 @@
 .cache/
 .vscode/
-/resources
+/resources/*
+!/resources/META-INF/
 /target
 /classes
 /checkouts

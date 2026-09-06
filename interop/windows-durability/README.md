@@ -3,7 +3,8 @@
 Run the `Windows durability API probes` workflow on this PR. One Windows 2025
 runner executes JDK 21, GraalVM JDK 25, the same Java source compiled to a tiny
 native executable, and direct Win32 calls through PowerShell/.NET P/Invoke.
-No Datahike build, Clojure dependencies, or new runtime library dependency.
+The integration stage also resolves Clojure dependencies and tests Konserve.
+No Datahike build or new native runtime library dependency is introduced.
 All operations are batched, with JSONL artifacts and one Actions summary table.
 
 Java compares forced staging + atomic rename, post-rename destination force,
@@ -17,7 +18,8 @@ An API error is a measurement, not a failed experiment. Incomplete output, build
 failures and readback mismatches fail the job. Expected sharing violations and
 unsupported directory operations remain visible as error rows. A green workflow
 means a complete compatibility experiment, **not a qualified durability recipe**.
-No process-kill, OS-crash or power-cut test is included in this first gate.
+The subsequent integration gate includes process-kill recovery, but not OS-crash
+or power-cut testing.
 
 Local JVM invocation (use an existing scratch parent):
 
@@ -43,7 +45,7 @@ production binding.
 
 ## Experimental FFM binding increment
 
-`WindowsDirectorySync.java` calls CreateFileW with GENERIC_WRITE, share
+`src/java22/konserve/internal/WindowsDirectorySync.java` calls CreateFileW with GENERIC_WRITE, share
 read/write/delete, OPEN_EXISTING and FILE_FLAG_BACKUP_SEMANTICS, then
 FlushFileBuffers and CloseHandle. Native errors are captured at the downcall
 boundary with GetLastError, before Java or another call can overwrite them.
@@ -57,11 +59,13 @@ uploads separate text artifacts and fails on any binding error. Linux can run th
 six injected handle-lifecycle cases using `DirectorySyncBindingProbe --self-test`.
 This adds one small native build, not a full Datahike build.
 
-This is deliberately outside production source: FFM requires JDK 22+ and the
-native gate targets GraalVM 25 Windows/x64. Konserve's Java baseline is unchanged.
-Support for older JVMs requires a separate binding/packaging decision; do not
-silently enable unsafe mode there. Initial directory provisioning, mmap, store
-integration and crash recovery are not covered by these binding checks.
+The candidate production binding requires JDK 22+ on Windows; the native gate
+targets GraalVM 25 Windows/x64. Older Unix JVMs do not load the binding.
+The Windows baseline decision remains a merge gate; do not silently enable
+unsafe mode on older Windows JVMs. `RunKonserve.ps1` additionally runs file-store,
+mmap, directory-sync and simulation tests, followed by child-JVM kill/reopen
+checks at acknowledged payload and root boundaries. These are distinct from
+power-loss qualification. Actual Datahike native integration remains required.
 
 Microsoft documents directory handles via BACKUP_SEMANTICS and write access for
 FlushFileBuffers. These establish the API/access requirements, not by themselves

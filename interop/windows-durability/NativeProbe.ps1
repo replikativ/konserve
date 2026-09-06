@@ -84,3 +84,4 @@ foreach ($access in @([uint32]2147483648, [uint32]1073741824, [uint32]3221225472
 # Keep the original survey JSONL shape unchanged. Binding tests have their own
 # artifacts and fail the step on any assertion/build failure (no error-as-data).
 & "$PSScriptRoot/RunBinding.ps1" -ScratchParent $ScratchParent
+& "$PSScriptRoot/RunKonserve.ps1" -ScratchParent $ScratchParent

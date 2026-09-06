@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :refer [go <! <!! chan close! put! timeout]]
    [clojure.java.io :as io]
+   [konserve.directory-sync :as directory-sync]
    [clojure.string :refer [includes? ends-with?]]
    [konserve.impl.defaults :as kd :refer [update-blob connect-default-store key->store-key store-key->uuid-key normalize-store-config]]
    [konserve.impl.storage-layout :refer [PBackingStore
@@ -102,12 +103,14 @@
    ;; this sync exists to surface, and propagates; `with-open` closes the
    ;; channel either way.
    (when-not filesystem
-     (when-let [fc (try (open-directory-channel filesystem base)
-                        (catch java.nio.file.AccessDeniedException cause
-                          (when (or (not allow-unsafe?) (not (windows?)))
-                            (throw cause))))]
-       (with-open [^FileChannel fc fc]
-         (force-directory-channel! fc))))))
+     (if (and (windows?) (not allow-unsafe?))
+       (directory-sync/sync-directory! (get-path filesystem base))
+       (when-let [fc (try (open-directory-channel filesystem base)
+                          (catch java.nio.file.AccessDeniedException cause
+                            (when (or (not allow-unsafe?) (not (windows?)))
+                              (throw cause))))]
+         (with-open [^FileChannel fc fc]
+           (force-directory-channel! fc)))))))
 
 (defn- check-and-create-backing-store
   "Helper Function to Check if Base is not writable"

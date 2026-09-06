@@ -10,8 +10,17 @@
 (def current-commit (b/git-process {:git-args "rev-parse HEAD"}))
 (def version (format "0.9.%s" (b/git-count-revs nil)))
 (def class-dir "target/classes")
+(def jar-dir "target/jar")
 (def basis (b/create-basis {:project "deps.edn"}))
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
+
+(defn javac
+  "Compile the optional Windows binding on JDK 22+; older Unix JVMs need none."
+  [_]
+  (.mkdirs (java.io.File. class-dir))
+  (when (>= (.feature (Runtime/version)) 22)
+    (b/javac {:src-dirs ["src/java22"] :class-dir class-dir :basis basis
+              :javac-opts ["--release" "22"]})))
 
 (defn clean
   [_]
@@ -19,22 +28,28 @@
 
 (defn jar
   [_]
-  (b/write-pom {:class-dir class-dir
+  (javac nil)
+  (b/delete {:path jar-dir})
+  (b/write-pom {:class-dir jar-dir
                 :src-pom "./template/pom.xml"
                 :lib lib
                 :version version
                 :basis basis
                 :src-dirs ["src"]})
-  (b/copy-dir {:src-dirs ["src" "resources"]
-               :target-dir class-dir})
-  (b/jar {:class-dir class-dir
+  (b/copy-dir {:src-dirs ["src" "resources" class-dir]
+               :target-dir jar-dir})
+  (b/jar {:class-dir jar-dir
           :jar-file jar-file}))
 
 (defn deploy
   "Don't forget to set CLOJARS_USERNAME and CLOJARS_PASSWORD env vars."
   [_]
+  (with-open [artifact (java.util.jar.JarFile. jar-file)]
+    (when-not (.getJarEntry artifact "konserve/internal/WindowsDirectorySync.class")
+      (throw (ex-info "Release artifact must include the Windows binding; build with JDK 22+"
+                      {:type :konserve/incomplete-release}))))
   (dd/deploy {:installer :remote :artifact jar-file
-              :pom-file (b/pom-path {:lib lib :class-dir class-dir})}))
+              :pom-file (b/pom-path {:lib lib :class-dir jar-dir})}))
 
 (defn fib [a b]
   (lazy-seq (cons a (fib b (+ a b)))))
@@ -79,4 +94,4 @@
               :lib lib
               :version version
               :jar-file jar-file
-              :class-dir class-dir}))
+              :class-dir jar-dir}))
