@@ -7,7 +7,8 @@
    [konserve.metrics :as metrics]
    [konserve.serializers :refer [key->serializer]]
    [konserve.compressor :refer [get-compressor null-compressor]]
-   [konserve.encryptor :refer [associated-data encrypting? get-encryptor null-encryptor]]
+   [konserve.encryptor :refer [associated-data encrypting? get-encryptor null-encryptor
+                               assert-readable! validate-policy!]]
    [konserve.protocols :as protocols :refer [PEDNKeyValueStore
                                              PBinaryKeyValueStore
                                              -serialize -deserialize -encrypt -decrypt
@@ -208,6 +209,7 @@
    (go-try-
     (let [[version serializer compressor encryptor meta-size header-size]
           (<?- (read-header blob serializers env))
+          _ (assert-readable! encryptor (:encryptor config))
           env (assoc env :header-size header-size)
           enc (encryptor (:encryptor config))
           fn-read (partial -deserialize (compressor serializer) read-handlers)
@@ -1466,6 +1468,7 @@
                                (select-keys enc [:compressor :encryptor]))
         compressor (get-compressor (get-in enc [:compressor :type]))
         encryptor (get-encryptor (get-in enc [:encryptor :type]))]
+    (validate-policy! (:encryptor complete-config))
     ;; A top-level `:compressor`/`:encryptor` is REFUSED rather than ignored.
     ;; Both are read from `config` above, so passing a function at the top
     ;; level -- which reads exactly like it should work, and which

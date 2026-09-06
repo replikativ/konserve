@@ -174,6 +174,27 @@
 
 (defn get-encryptor [type]
   (case type
+    nil null-encryptor
+    :none null-encryptor
     :aes aes-encryptor
     :aes-gcm aes-gcm-encryptor
-    null-encryptor))
+    (throw (ex-info "Unknown encryptor type" {:type ::unknown-encryptor :encryptor type}))))
+
+(defn validate-policy!
+  "Validate the optional authenticated-only read policy. Compatibility reads
+  remain the default; strict stores must also write authenticated values."
+  [config]
+  (when (and (contains? config :require-authenticated?)
+             (not (boolean? (:require-authenticated? config))))
+    (throw (ex-info "require-authenticated? must be boolean" {:type ::invalid-read-policy})))
+  (when (and (:require-authenticated? config) (not= :aes-gcm (:type config)))
+    (throw (ex-info "Authenticated-only stores require :aes-gcm" {:type ::invalid-read-policy})))
+  config)
+
+(defn assert-readable!
+  "Reject unauthenticated header-selected formats before decrypt/deserialization
+  when the caller explicitly requires authenticated records."
+  [factory config]
+  (when (and (:require-authenticated? config) (not= factory aes-gcm-encryptor))
+    (throw (ex-info "Unauthenticated record refused by store policy"
+                    {:type ::unauthenticated-record}))))

@@ -555,6 +555,13 @@ these frames; use a streaming one. See =interop/read_konserve_blob.py=.
   ciphertext between keys or segments are therefore rejected. Encryptor byte 2.
 - =:aes= — legacy, unauthenticated AES-CBC. Encryptor byte 1. It remains
   readable for existing stores but must not be selected for new ones.
+- For control-plane records that must never accept plaintext or legacy CBC,
+  set =:require-authenticated? true= inside the =:encryptor= map alongside
+  =:type :aes-gcm= and =:key=. This rejects weaker header-selected formats
+  before deserialization. The default still permits compatibility reads of
+  older records. Unknown encryptor types now fail instead of selecting none.
+  This policy does not prevent rollback of an older authentic record; keep an
+  independent revision floor where rollback resistance is required.
 - =:aes-gcm= uses the asynchronous API in ClojureScript because Web Crypto has
   no synchronous cipher. Its bytes are interoperable between JVM and JS.
 
