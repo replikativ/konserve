@@ -1,41 +1,53 @@
-# Strict directory sync (JVM file store)
+# Directory sync is required by default (JVM file store)
 
-Applications that must not acknowledge a write after skipping directory sync can
-opt in when connecting a file store:
+With the default `:sync-blob? true`, successful write completion requires both
+file and directory sync. Directory-open and directory-force failures propagate
+on every OS, including Windows. Async API calls report the failure on their
+result channel; blocking calls throw.
+
+The default non-in-place sequence is: write segments, force the file, close it,
+atomic replacement, then force the store directory. A failure after replacement
+can leave the new value visible. Failure is not rollback: reconcile/retry and
+withhold transaction-success and durability receipts.
+
+## Explicitly unsafe compatibility
+
+This deliberately changes 0.9.392, which silently ignored directory-open
+AccessDeniedException, including on POSIX. Windows FileChannel directory opens
+may be unsupported. Synced writes now fail in that case. NTFS journaling is not
+treated as a substitute for the missing barrier.
+
+For disposable data, development or tests only, a caller can explicitly choose:
 
 ```clojure
 (connect-fs-store path
-  :config {:sync-blob? true
-           :in-place? false
-           :strict-directory-sync? true})
+  :config {:allow-unsafe-directory-sync? true})
 ```
 
-The non-in-place write sequence is: write segments, force the file, close it,
-atomic replacement, then force the store directory. Strict mode propagates
-directory-open and directory-force failures, including on Windows. The option
-must be boolean, requires `:sync-blob? true`, and rejects custom filesystems
-whose directory-sync operation is not implemented. It does not require blocking
-API calls: async completion carries the failure through its result channel.
+This boolean option emits a warning at connection and permits skipping directory
+sync for custom filesystems (including in-memory Jimfs) or a Windows directory
+open AccessDeniedException. POSIX open errors and force errors still propagate.
+**Acknowledged writes may be lost after an OS crash or power loss.** Do not use
+this option for durable database commits or replication receipts.
+Alternatively, existing `:sync-blob? false` explicitly disables sync altogether
+and likewise does not promise crash durability. Custom filesystems without
+directory-sync support must choose one of these weaker modes explicitly.
 
-Without strict mode, only Windows directory-open `AccessDeniedException` keeps
-the historical compatibility fallback. POSIX open failures and force failures
-on all platforms propagate. Custom filesystems retain their non-strict behavior.
+The earlier unreleased `:strict-directory-sync?` option is rejected: safety is
+now the default, not an extra setting consumers must discover and enable.
 
-A failure after replacement can leave the new value visible. A failed write is
-not a rollback: callers must reconcile/retry and withhold durability receipts.
-This option does not establish hardware power-loss guarantees, durability of
-externally provisioned ancestor directories, immutable-write semantics, replica
-retention, or distributed consensus. Administrative `delete-store` retains its
-separate best-effort cleanup semantics. Qualifying a complete durable repository
-still requires testing provisioning, the filesystem/device and the repository's
-own marker/receipt ordering.
+## Qualification boundaries
 
-The focused gate injects open and force errors for sync/async writes, checks
-platform-policy decisions, and verifies successful retry/reopen:
+This does not establish hardware power-loss guarantees, durability of ancestor
+directory provisioning, immutable-write semantics, retention or consensus.
+Administrative `delete-store` remains separate best-effort cleanup. Complete
+repository qualification still requires filesystem/device and provisioning tests
+plus the repository's marker/receipt ordering tests.
 
 ```sh
 clojure -X:test :nses '[konserve.directory-sync-test konserve.filestore-test konserve.simulation-crash-test]'
 ```
 
-The crash simulator tests storage ordering independently of the OS. These tests
-are not an actual power-cut experiment or execution on a Windows machine.
+These tests inject open/force errors, exercise sync/async writes and successful
+retry/reopen. Platform decisions are injected on Linux, not a Windows machine.
+The crash simulator tests storage ordering, not actual power-cut behavior.

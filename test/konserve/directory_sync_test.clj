@@ -19,32 +19,32 @@
 
 (deftest directory-open-policy
   (let [denied (AccessDeniedException. "injected")]
-    (doseq [windows? [false true] strict? [false true]]
+    (doseq [windows? [false true] allow-unsafe? [false true]]
       (with-redefs-fn {(private-var 'windows?) (constantly windows?)
                        (private-var 'open-directory-channel)
                        (fn [& _] (throw denied))}
-        #(is (= (when (or strict? (not windows?)) denied)
-                (outcome (fn [] ((private-var 'sync-base) nil "unused" strict?)))))))
+        #(is (= (when (or (not allow-unsafe?) (not windows?)) denied)
+                (outcome (fn [] ((private-var 'sync-base) nil "unused" allow-unsafe?)))))))
     (is (instance? Exception
-                   (outcome #((private-var 'sync-base) :custom "unused" true))))
-    (is (nil? ((private-var 'sync-base) :custom "unused" false)))))
+                   (outcome #((private-var 'sync-base) :custom "unused" false))))
+    (is (nil? ((private-var 'sync-base) :custom "unused" true)))))
 
-(deftest strict-configuration-validation
-  (doseq [config [{:strict-directory-sync? :yes}
-                  {:strict-directory-sync? nil}
-                  {:strict-directory-sync? true :sync-blob? false}]]
+(deftest directory-configuration-validation
+  (doseq [config [{:allow-unsafe-directory-sync? :yes}
+                  {:allow-unsafe-directory-sync? nil}
+                  {:strict-directory-sync? false}]]
     (is (= :konserve/invalid-directory-sync-config
            (:type (ex-data (outcome #(fs/connect-fs-store "unused" :config config)))))))
   (is (= :konserve/invalid-directory-sync-config
          (:type (ex-data
                  (outcome #(fs/connect-fs-store "unused" :filesystem :custom
-                                                :config {:strict-directory-sync? true})))))))
+                                                :config {})))))))
 
 (deftest write-completion-requires-directory-sync
   (doseq [sync? [true false]]
     (let [path (str (Files/createTempDirectory "konserve-directory-sync-"
                                                (make-array java.nio.file.attribute.FileAttribute 0)))
-          config {:sync-blob? true :in-place? false :strict-directory-sync? true}
+          config {:sync-blob? true :in-place? false}
           store (fs/connect-fs-store path :config config :opts {:sync? true})
           call! (fn [f] (outcome #(let [result (f)] (if sync? result (<!! result)))))
           opts {:sync? sync?}]

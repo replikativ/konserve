@@ -85,17 +85,17 @@
   (.force channel true))
 
 (defn- sync-base
-  "Helper Function to synchronize the base of the filestore.
-   Note: Jimfs doesn't support directory sync via FileChannel, so we skip it."
+  "Synchronize directory entries; skipping an unsupported barrier requires
+   explicit unsafe consent. Jimfs has no directory-sync implementation."
   ([base] (sync-base nil base))
   ([filesystem base] (sync-base filesystem base false))
-  ([filesystem base strict?]
-   (when (and filesystem strict?)
+  ([filesystem base allow-unsafe?]
+   (when (and filesystem (not allow-unsafe?))
      (throw (ex-info "Strict directory sync requires the default filesystem"
                      {:type :konserve/unsupported-directory-sync})))
    ;; Only sync directories on the default filesystem (Jimfs doesn't support this).
    ;;
-   ;; Preserve Windows compatibility only outside strict mode. Skipping this
+   ;; Windows compatibility requires an explicit unsafe opt-in. Skipping this
    ;; operation is not equivalent to completing a directory durability barrier.
    ;; POSIX directory-open failures always propagate. A `force` that
    ;; fails on a directory that did open (EIO on POSIX) is the durability loss
@@ -104,7 +104,7 @@
    (when-not filesystem
      (when-let [fc (try (open-directory-channel filesystem base)
                         (catch java.nio.file.AccessDeniedException cause
-                          (when (or strict? (not (windows?)))
+                          (when (or (not allow-unsafe?) (not (windows?)))
                             (throw cause))))]
        (with-open [^FileChannel fc fc]
          (force-directory-channel! fc))))))
@@ -341,7 +341,7 @@
     (async+sync (:sync? env) *default-sync-translation*
                 (go-try-
                  (sync-base filesystem base
-                            (true? (get-in env [:config :strict-directory-sync?])))))))
+                            (true? (get-in env [:config :allow-unsafe-directory-sync?])))))))
 
 (extend-type AsynchronousFileChannel
   PBackingBlob
@@ -789,9 +789,10 @@
   The :filesystem option allows using a custom java.nio.file.FileSystem (e.g., Jimfs for testing).
   When provided, all path operations will use that filesystem instead of the default.
 
-  :config :strict-directory-sync? true requires :sync-blob? true and the default
-  filesystem. Directory open/force failures then fail writes on every OS. Without
-  strict mode only Windows directory-open AccessDeniedException is tolerated.
+  Synced writes fail on directory open/force errors on every OS by default.
+  :config :allow-unsafe-directory-sync? true explicitly permits skipping directory
+  sync on custom filesystems or Windows directory-open AccessDeniedException.
+  This unsafe compatibility mode can lose acknowledged writes on system failure.
   This qualifies directory syncing of entries, not hardware power-loss behavior
   or durability of externally created parent directories. delete-store is an
   independent best-effort administrative operation, not a strict deletion receipt.
@@ -851,13 +852,17 @@
                                             %))
                          (update :buffer-size #(or % (* 1024 1024)))
                          (update :opts #(or % {:sync? false})))
-        strict? (get-in store-config [:config :strict-directory-sync?] false)
-        _ (when-not (and (boolean? strict?)
-                         (or (not strict?)
-                             (and (nil? filesystem)
-                                  (true? (get-in store-config [:config :sync-blob?])))))
-            (throw (ex-info "Invalid strict directory-sync configuration"
+        allow-unsafe? (get-in store-config [:config :allow-unsafe-directory-sync?] false)
+        _ (when-not (and (boolean? allow-unsafe?)
+                         (not (contains? (:config store-config) :strict-directory-sync?))
+                         (or (nil? filesystem) allow-unsafe?
+                             (false? (get-in store-config [:config :sync-blob?]))))
+            (throw (ex-info "Invalid directory-sync configuration"
                             {:type :konserve/invalid-directory-sync-config})))
+        _ (when allow-unsafe?
+            (log/warn :konserve/unsafe-directory-sync
+                      {:base path
+                       :msg "Directory sync may be skipped; acknowledged writes may be lost on system failure."}))
         detect-old-blob (when detect-old-file-schema?
                           (atom (detect-old-file-schema filesystem path)))
         _                  (when detect-old-file-schema?
