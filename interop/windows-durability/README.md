@@ -40,3 +40,33 @@ Windows support has an agreed implementation; do not enable unsafe fallback just
 to make a build pass. If a native primitive is required, its packaging and GraalVM
 integration need their own validation: PowerShell P/Invoke is a probe, not the
 production binding.
+
+## Experimental FFM binding increment
+
+`WindowsDirectorySync.java` calls CreateFileW with GENERIC_WRITE, share
+read/write/delete, OPEN_EXISTING and FILE_FLAG_BACKUP_SEMANTICS, then
+FlushFileBuffers and CloseHandle. Native errors are captured at the downcall
+boundary with GetLastError, before Java or another call can overwrite them.
+Flush errors survive close errors; close errors are never silently discarded.
+Native-image foreign-call metadata is supplied explicitly. Long and Unicode paths
+are covered. No JNA or bundled JNI library is introduced.
+
+The existing Windows survey step invokes `RunBinding.ps1` afterward, so no workflow
+edit is needed. It builds and runs both JDK 25 and GraalVM native binding checks,
+uploads separate text artifacts and fails on any binding error. Linux can run the
+six injected handle-lifecycle cases using `DirectorySyncBindingProbe --self-test`.
+This adds one small native build, not a full Datahike build.
+
+This is deliberately outside production source: FFM requires JDK 22+ and the
+native gate targets GraalVM 25 Windows/x64. Konserve's Java baseline is unchanged.
+Support for older JVMs requires a separate binding/packaging decision; do not
+silently enable unsafe mode there. Initial directory provisioning, mmap, store
+integration and crash recovery are not covered by these binding checks.
+
+Microsoft documents directory handles via BACKUP_SEMANTICS and write access for
+FlushFileBuffers. These establish the API/access requirements, not by themselves
+the complete recovery guarantee for our multi-file publication sequence:
+
+* https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+* https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+* https://www.graalvm.org/latest/reference-manual/native-image/native-code-interoperability/ffm-api/
