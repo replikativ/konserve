@@ -57,7 +57,14 @@
               #(is (caused-by? (call! (fn [] (k/assoc store :key operation opts))) failure)))))
         ;; Failed completion can still leave the new value visible: retry, do not
         ;; infer rollback. Success after removing the fault survives a reopen.
-        (is (not (instance? Throwable (call! #(k/assoc store :key :complete opts)))))
-        (let [reopened (fs/connect-fs-store path :config config :opts {:sync? true})]
-          (is (= :complete (k/get reopened :key nil {:sync? true}))))
+        (let [result (call! #(k/assoc store :key :complete opts))]
+          (if (and ((private-var 'windows?)) (instance? Throwable result))
+            ;; A real Windows filesystem may refuse directory opens. Strict
+            ;; mode must report that, not pretend the successful-retry path ran.
+            (is (some #(instance? AccessDeniedException %)
+                      (take-while some? (iterate ex-cause result))))
+            (do
+              (is (not (instance? Throwable result)))
+              (let [reopened (fs/connect-fs-store path :config config :opts {:sync? true})]
+                (is (= :complete (k/get reopened :key nil {:sync? true})))))))
         (finally (fs/delete-store path))))))
