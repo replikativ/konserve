@@ -307,3 +307,12 @@
                                         (fn [store-name]
                                           (go (filestore/delete-store store-name)))))
            (done))))
+
+(deftest aes-gcm-async-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-test "/tmp/aes-gcm-test"
+                                      connect-fs-store
+                                      (fn [store-name]
+                                        (go (filestore/delete-store store-name)))))
+           (done))))

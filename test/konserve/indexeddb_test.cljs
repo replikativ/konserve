@@ -345,6 +345,14 @@
                                         idb/connect-idb-store
                                         idb/delete-idb))
            (done))))
+
+(deftest aes-gcm-async-test
+  (async done
+         (go
+           (<! (et/async-aes-gcm-test "aes-gcm-test"
+                                      idb/connect-idb-store
+                                      idb/delete-idb))
+           (done))))
 (deftest ^:browser reconnect-existing-store-opens-its-handle-test
   ;; Connect no longer writes for an existing store — it must still OPEN it.
   ;; Before PBackingOpen, the second connect below skipped -create-store (which

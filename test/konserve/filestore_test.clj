@@ -503,3 +503,13 @@
   (<!! (et/async-encryptor-test "/tmp/encryptor-test"
                                 connect-fs-store
                                 (fn [p] (go (delete-store p))))))
+
+(deftest aes-gcm-sync-test
+  (et/sync-aes-gcm-test "/tmp/aes-gcm-test"
+                        connect-fs-store
+                        delete-store))
+
+(deftest aes-gcm-async-test
+  (<!! (et/async-aes-gcm-test "/tmp/aes-gcm-test"
+                              connect-fs-store
+                              (fn [p] (go (delete-store p))))))
