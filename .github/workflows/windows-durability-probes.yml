@@ -1,0 +1,92 @@
+name: Windows durability API probes
+
+on:
+  pull_request:
+    paths:
+      - 'interop/windows-durability/**'
+      - '.github/workflows/windows-durability-probes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-durability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probes:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare output
+        shell: pwsh
+        run: New-Item -ItemType Directory -Path probe-results, probe-classes | Out-Null
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: JDK 21 matrix
+        shell: pwsh
+        run: |
+          javac -d probe-classes interop/windows-durability/DurabilityProbe.java
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          java -cp probe-classes DurabilityProbe "$env:RUNNER_TEMP" jdk-21 | Tee-Object probe-results/jdk-21.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: JDK 25 matrix
+        shell: pwsh
+        run: |
+          java -cp probe-classes DurabilityProbe "$env:RUNNER_TEMP" jdk-25 | Tee-Object probe-results/jdk-25.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile tiny native probe (no Clojure or Datahike build)
+        shell: pwsh
+        run: |
+          native-image -O0 --no-fallback -cp probe-classes DurabilityProbe durability-probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: GraalVM native matrix
+        shell: pwsh
+        run: |
+          ./durability-probe.exe "$env:RUNNER_TEMP" native-25 | Tee-Object probe-results/native-25.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Native Windows API matrix
+        if: always()
+        shell: pwsh
+        run: ./interop/windows-durability/NativeProbe.ps1 -ScratchParent "$env:RUNNER_TEMP" | Tee-Object probe-results/win32.jsonl
+
+      - name: Summarize and validate probe completeness
+        if: always()
+        shell: pwsh
+        run: |
+          $expected = @{'jdk-21'=13; 'jdk-25'=13; 'native-25'=13; 'win32'=16}
+          $complete = $true
+          '## Windows persistence API compatibility (NOT crash/power-loss qualification)' >> $env:GITHUB_STEP_SUMMARY
+          '| Runtime | Recipe | Scenario | Outcome | Detail |' >> $env:GITHUB_STEP_SUMMARY
+          '| --- | --- | --- | --- | --- |' >> $env:GITHUB_STEP_SUMMARY
+          foreach ($label in $expected.Keys) {
+            $path = "probe-results/$label.jsonl"
+            if (-not (Test-Path $path)) { $complete = $false; continue }
+            $rows = @(Get-Content $path | ForEach-Object { $_ | ConvertFrom-Json })
+            if ($rows.Count -ne $expected[$label]) { $complete = $false }
+            foreach ($r in $rows) {
+              $detail = ($r.detail -replace '\|','/' -replace '[\r\n]+',' ')
+              "| $($r.runtime) | $($r.recipe) | $($r.scenario) | $($r.outcome) | $detail |" >> $env:GITHUB_STEP_SUMMARY
+              if ($r.outcome -eq 'error' -and $r.detail.StartsWith('verify:')) { $complete = $false }
+            }
+          }
+          if (-not $complete) { throw 'Incomplete probe matrix or readback mismatch; inspect artifacts' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-durability-probe-results
+          path: probe-results
+          if-no-files-found: error
