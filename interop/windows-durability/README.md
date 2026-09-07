@@ -61,7 +61,7 @@ This adds one small native build, not a full Datahike build.
 
 The candidate production binding requires JDK 22+ on Windows; the native gate
 targets GraalVM 25 Windows/x64. Older Unix JVMs do not load the binding.
-The Windows baseline decision remains a merge gate; do not silently enable
+JDK 22+ is the agreed Windows file-store baseline; do not silently enable
 unsafe mode on older Windows JVMs. `RunKonserve.ps1` additionally runs file-store,
 mmap, directory-sync and simulation tests, followed by child-JVM kill/reopen
 checks at acknowledged payload and root boundaries. These are distinct from

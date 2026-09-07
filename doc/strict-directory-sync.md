@@ -54,8 +54,8 @@ the unsafe file-store override.
 
 The candidate release compiles the Windows binding with `javac --release 22`.
 Unix JVMs below 22 can still load the Clojure namespaces without loading that
-class. A Windows JVM below 22 fails explicitly; the supported Windows JVM floor
-must be agreed before merging. GraalVM 25 Windows/x64 is the native test target;
+class. Windows file stores require JDK 22+; a Windows JVM below 22 fails explicitly
+instead of silently weakening persistence. GraalVM 25 Windows/x64 is the native test target;
 older Native Image toolchains are not qualified by this increment.
 
 Run JVMs with `--enable-native-access=ALL-UNNAMED`. The jar includes the native
