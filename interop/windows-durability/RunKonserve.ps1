@@ -12,9 +12,12 @@ Expand-Archive $zip -DestinationPath $tools
 $toolsJar = Join-Path $tools 'ClojureTools/clojure-tools-1.12.2.1565.jar'
 java -cp $toolsJar clojure.main "$PSScriptRoot/prepare-classpath.clj"
 if ($LASTEXITCODE -ne 0) { throw 'Konserve test dependency resolution failed' }
-javac --release 22 -d target/classes src/java22/konserve/internal/WindowsDirectorySync.java
-if ($LASTEXITCODE -ne 0) { throw 'Konserve binding compilation failed' }
-$cp = (Get-Content probe-results/konserve.cp -Raw).Trim()
+$buildCp = (Get-Content probe-results/build.cp -Raw).Trim()
+java -cp $buildCp clojure.main "$PSScriptRoot/build-artifact.clj"
+if ($LASTEXITCODE -ne 0) { throw 'Konserve release artifact build failed' }
+$artifact = (Get-Content probe-results/artifact.path -Raw).Trim()
+& "$PSScriptRoot/RunBinding.ps1" -ScratchParent $ScratchParent -Artifact $artifact
+$cp = (Get-Content probe-results/artifact.cp -Raw).Trim()
 java --enable-native-access=ALL-UNNAMED -cp $cp clojure.main -e `
     "(require 'konserve.directory-sync-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test) (let [r (clojure.test/run-tests 'konserve.directory-sync-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test)] (shutdown-agents) (System/exit (if (zero? (+ (:fail r) (:error r))) 0 1)))" |
     Tee-Object probe-results/konserve-windows-integration.txt | Out-Host

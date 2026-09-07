@@ -3,6 +3,7 @@
 /resources/*
 !/resources/META-INF/
 /target
+/probe-results/
 /classes
 /checkouts
 pom.xml.asc

@@ -1,76 +1,42 @@
-# Batched Windows persistence API probes
+# Windows persistence regression checks
 
-Run the `Windows durability API probes` workflow on this PR. One Windows 2025
-runner executes JDK 21, GraalVM JDK 25, the same Java source compiled to a tiny
-native executable, and direct Win32 calls through PowerShell/.NET P/Invoke.
-The integration stage also resolves Clojure dependencies and tests Konserve.
-No Datahike build or new native runtime library dependency is introduced.
-All operations are batched, with JSONL artifacts and one Actions summary table.
+Windows file stores require JDK 22+. Native checks target GraalVM 25 Windows/x64.
+Run from the repository root on Windows with GraalVM 25 and its native compiler:
 
-Java compares forced staging + atomic rename, post-rename destination force,
-directory force, and SYNC staging + post-rename force. Each runs for a new target,
-replacement and an open reader. Win32 compares ordinary/write-through rename
-and post-rename flush, including readers with and without delete sharing; it also
-tests directory open + flush with BACKUP_SEMANTICS under three access masks.
-Cross-volume copy fallback is never enabled.
-
-An API error is a measurement, not a failed experiment. Incomplete output, build
-failures and readback mismatches fail the job. Expected sharing violations and
-unsupported directory operations remain visible as error rows. A green workflow
-means a complete compatibility experiment, **not a qualified durability recipe**.
-The subsequent integration gate includes process-kill recovery, but not OS-crash
-or power-cut testing.
-
-Local JVM invocation (use an existing scratch parent):
-
-```sh
-javac -d /tmp interop/windows-durability/DurabilityProbe.java
-java -cp /tmp DurabilityProbe /tmp local-jdk
+```powershell
+New-Item -ItemType Directory -Force probe-results | Out-Null
+./interop/windows-durability/RunKonserve.ps1 -ScratchParent $env:TEMP
 ```
 
-Each invocation creates its own unique scratch directory, retained for inspection.
-The workflow runner owns cleanup. Do not point a destructive cleanup command at
-the caller-provided parent. Wine can run the Windows executable for compatibility
-diagnosis but cannot qualify Windows kernel/NTFS durability.
+The runner resolves dependencies using checksum-pinned Clojure tools, builds the
+release jar through `build/jar`, and tests that artifact, not loose source/classes:
 
-## Decision gate
+- JVM and native binding lifecycle/error handling, Unicode and long paths;
+- file-store, mmap, directory-sync and simulated storage-crash regression tests;
+- child-process kill/reopen checks after acknowledged payload and root writes.
 
-Compare all rows before changing production code. Narrow to one viable recipe,
-then validate the documented persistence semantics and add process-crash plus
-Konserve/Datahike integration tests for that recipe. Keep PR #190 unmerged until
-Windows support has an agreed implementation; do not enable unsafe fallback just
-to make a build pass. If a native primitive is required, its packaging and GraalVM
-integration need their own validation: PowerShell P/Invoke is a probe, not the
-production binding.
+The native binding check discovers foreign-call metadata and initialization
+settings from the jar. No separate test metadata or binding source compilation
+can mask packaging omissions. Failures fail the runner; text results go into
+`probe-results`. The build cleans the repository's `target` directory.
 
-## Experimental FFM binding increment
+These checks do **not** qualify OS-crash or power-loss durability, nor replace an
+actual Datahike native-image integration test. See the
+[persistence contract](../../doc/strict-directory-sync.md).
 
-`src/java22/konserve/internal/WindowsDirectorySync.java` calls CreateFileW with GENERIC_WRITE, share
-read/write/delete, OPEN_EXISTING and FILE_FLAG_BACKUP_SEMANTICS, then
-FlushFileBuffers and CloseHandle. Native errors are captured at the downcall
-boundary with GetLastError, before Java or another call can overwrite them.
-Flush errors survive close errors; close errors are never silently discarded.
-Native-image foreign-call metadata is supplied explicitly. Long and Unicode paths
-are covered. No JNA or bundled JNI library is introduced.
+## Optional diagnostic survey
 
-The existing Windows survey step invokes `RunBinding.ps1` afterward, so no workflow
-edit is needed. It builds and runs both JDK 25 and GraalVM native binding checks,
-uploads separate text artifacts and fails on any binding error. Linux can run the
-six injected handle-lifecycle cases using `DirectorySyncBindingProbe --self-test`.
-This adds one small native build, not a full Datahike build.
+`DurabilityProbe.java` and `NativeProbe.ps1 -SurveyOnly` retain the original
+Java/Win32 API comparison for manual diagnosis through the first release.
+Expected API refusals are recorded as JSONL data, not regression successes.
 
-The candidate production binding requires JDK 22+ on Windows; the native gate
-targets GraalVM 25 Windows/x64. Older Unix JVMs do not load the binding.
-JDK 22+ is the agreed Windows file-store baseline; do not silently enable
-unsafe mode on older Windows JVMs. `RunKonserve.ps1` additionally runs file-store,
-mmap, directory-sync and simulation tests, followed by child-JVM kill/reopen
-checks at acknowledged payload and root boundaries. These are distinct from
-power-loss qualification. Actual Datahike native integration remains required.
+```powershell
+javac -d probe-results interop/windows-durability/DurabilityProbe.java
+java -cp probe-results DurabilityProbe $env:TEMP manual-jdk
+./interop/windows-durability/NativeProbe.ps1 -ScratchParent $env:TEMP -SurveyOnly
+```
 
-Microsoft documents directory handles via BACKUP_SEMANTICS and write access for
-FlushFileBuffers. These establish the API/access requirements, not by themselves
-the complete recovery guarantee for our multi-file publication sequence:
-
-* https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
-* https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
-* https://www.graalvm.org/latest/reference-manual/native-image/native-code-interoperability/ffm-api/
+Scratch directories are uniquely named and retained for inspection. Wine cannot
+qualify Windows kernel/NTFS durability. The existing workflow temporarily invokes
+the regression runner after the survey for compatibility; the prepared focused
+workflow removes this coupling from regular CI.
