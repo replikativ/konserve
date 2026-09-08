@@ -43,5 +43,5 @@
                   :direct-wait-completed waited :after-wait (facts process)})))
         (finally
           (.destroyForcibly process)
-          (.waitFor process 5 TimeUnit/SECONDS)))))
+          (.waitFor process 5 TimeUnit/SECONDS))))))
 (shutdown-agents)
