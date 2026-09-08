@@ -1,7 +1,7 @@
 (ns konserve.directory-provisioning-test
   (:require [clojure.test :refer [deftest is]]
             [konserve.directory-sync :as ds])
-  (:import [java.nio.file Files Path FileVisitOption]
+  (:import [java.nio.file Files Path FileVisitOption LinkOption AccessDeniedException]
            [java.io IOException]))
 
 (defn- with-tree [f]
@@ -29,6 +29,10 @@
                                              (when (= fail-at (count @calls)) (throw error)))]
             (is (identical? error (failure #(ds/provision-directory! root b)))))
           (is (= (take fail-at expected) @calls))
+          (is (= (> fail-at 1) (Files/exists a (make-array LinkOption 0)))
+              "A failed ancestor barrier must prevent the first mkdir")
+          (is (= (> fail-at 3) (Files/exists b (make-array LinkOption 0)))
+              "A failed parent/name barrier must prevent descending further")
           (reset! calls [])
           (with-redefs [ds/sync-directory! #(swap! calls conj %)]
             (is (= b (ds/provision-directory! root b)))
@@ -36,6 +40,18 @@
             (reset! calls [])
             (ds/provision-directory! root b)
             (is (= expected @calls) "Existing names are not evidence of completed barriers")))))))
+
+(deftest access-denied-is-never-a-successful-barrier
+  (with-tree
+    (fn [^Path root]
+      (let [target (.resolve root "child")
+            denied (AccessDeniedException. (str root))]
+        (doseq [windows? [false true]]
+          (with-redefs [ds/windows? (constantly windows?)
+                        ds/sync-directory! (fn [_] (throw denied))]
+            (is (identical? denied (failure #(ds/provision-directory! root target))))
+            (is (not (Files/exists target (make-array LinkOption 0)))
+                "Permission failure must not create descendants on either platform")))))))
 
 (deftest invalid-targets-do-not-trigger-io
   (with-tree
