@@ -35,6 +35,13 @@ consistent (in fact ACID), but further consistency across keys is, depending on 
 
 ** Quick Start
 
+Windows JVM file stores require *JDK 22+* and
+=--enable-native-access=ALL-UNNAMED= for directory persistence through the
+Windows API. No bundled JNI library is required. This Windows-specific minimum
+does not raise the Unix JVM requirement. GraalVM native Windows validation targets
+version 25 on x64; older native toolchains are not qualified. See
+[[file:doc/strict-directory-sync.md][directory persistence and qualification limits]].
+
 Add to your dependencies: [[https://clojars.org/org.replikativ/konserve][https://img.shields.io/clojars/v/org.replikativ/konserve.svg]]
 
 #+BEGIN_SRC clojure

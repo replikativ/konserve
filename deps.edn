@@ -1,4 +1,5 @@
-{:paths ["src"]
+{:paths ["src" "target/classes" "resources"]
+ :deps/prep-lib {:ensure "target/classes" :alias :build :fn javac}
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         org.clojure/data.fressian {:mvn/version "1.0.0"} ;; for filestore
         mvxcvi/clj-cbor {:mvn/version "1.1.1"} ;; legacy: serializer byte 2, JVM-only

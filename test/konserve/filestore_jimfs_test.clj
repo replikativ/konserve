@@ -34,7 +34,7 @@
   (Files/createDirectories
    (.getPath jimfs path (into-array String []))
    (into-array java.nio.file.attribute.FileAttribute []))
-  (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true}))
+  (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true}))
 
 (defmacro with-jimfs-store
   "Execute body with a FileStore backed by Jimfs."
@@ -88,8 +88,8 @@
          (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store1 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})
-              store2 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store1 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})
+              store2 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
 
           ;; Write from store1, read from store2
           (k/assoc store1 :from-store1 {:source 1} {:sync? true})
@@ -125,7 +125,7 @@
                    ^Runnable
                    (fn []
                      (try
-                       (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+                       (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
                          (dotimes [i n-writes]
                            (try
                              (k/assoc store :contested-key {:store store-id :write i} {:sync? true})
@@ -136,7 +136,7 @@
 
         (.await latch 30 TimeUnit/SECONDS)
 
-        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})
+        (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})
               v (k/get store :contested-key nil {:sync? true})]
           (is (some? v) "Should have a value after concurrent writes")
           (is (contains? (set (range n-stores)) (:store v))))
@@ -162,8 +162,8 @@
          (.getPath jimfs2 path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store1 (fs/connect-fs-store path :filesystem jimfs1 :opts {:sync? true})
-              store2 (fs/connect-fs-store path :filesystem jimfs2 :opts {:sync? true})]
+        (let [store1 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs1 :opts {:sync? true})
+              store2 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs2 :opts {:sync? true})]
 
           (k/assoc store1 :key {:from "jimfs1"} {:sync? true})
           (k/assoc store2 :key {:from "jimfs2"} {:sync? true})
@@ -190,14 +190,14 @@
             (Files/createDirectories
              (.getPath jimfs path (into-array String []))
              (into-array java.nio.file.attribute.FileAttribute []))
-            (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+            (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
               (k/assoc store :key {:store i} {:sync? true})
               (is (= {:store i} (k/get store :key nil {:sync? true}))))))
 
         ;; Verify all stores are independent
         (doseq [i (range n-stores)]
           (let [path (str "/store-" i)
-                store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+                store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
             (is (= {:store i} (k/get store :key nil {:sync? true})))))
 
         (finally
@@ -213,11 +213,11 @@
          (into-array java.nio.file.attribute.FileAttribute []))
 
         ;; First store instance
-        (let [store1 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store1 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
           (k/assoc store1 :persistent {:value "survives"} {:sync? true}))
 
         ;; Second store instance should see data
-        (let [store2 (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store2 (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
           (is (= {:value "survives"} (k/get store2 :persistent nil {:sync? true}))))
 
         (finally
@@ -350,7 +350,7 @@
          (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
           (k/assoc store :key {:value 1} {:sync? true}))
 
         (fs/delete-store jimfs path)
@@ -368,7 +368,7 @@
          (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
           (k/assoc store :key {:value 1} {:sync? true}))
 
         (fs/delete-store jimfs path)
@@ -377,7 +377,7 @@
          (.getPath jimfs path (into-array String []))
          (into-array java.nio.file.attribute.FileAttribute []))
 
-        (let [store (fs/connect-fs-store path :filesystem jimfs :opts {:sync? true})]
+        (let [store (fs/connect-fs-store path :config {:allow-unsafe-directory-sync? true} :filesystem jimfs :opts {:sync? true})]
           (is (nil? (k/get store :key nil {:sync? true})))
           (is (= 0 (count (k/keys store {:sync? true})))))
 

@@ -1,0 +1,43 @@
+name: Windows persistence regression
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'resources/**'
+      - 'test/**'
+      - 'deps.edn'
+      - 'build.clj'
+      - 'interop/windows-durability/**'
+      - '.github/workflows/windows-durability-probes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-durability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probes:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test packaged Konserve and recovery
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force probe-results | Out-Null
+          ./interop/windows-durability/RunKonserve.ps1 -ScratchParent "$env:RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-persistence-results
+          path: probe-results
+          if-no-files-found: error
