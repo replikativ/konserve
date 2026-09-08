@@ -19,6 +19,14 @@
            (when-let [cause (ex-cause result)]
              (caused-by? cause expected)))))
 
+(deftest older-jvm-rejects-windows-binding-explicitly
+  (when (< (.feature (Runtime/version)) 22)
+    ;; Exercise the unavailable binding directly, without changing os.name or
+    ;; requiring a Windows host. Unix operations remain covered by store tests.
+    (is (= :konserve/windows-directory-sync-unavailable
+           (:type (ex-data (outcome #(ds/windows-flush!
+                                      (java.nio.file.Paths/get "unused" (make-array String 0))))))))))
+
 (deftest mmap-does-not-swallow-directory-sync-failure
   (let [failure (IOException. "injected mmap directory failure")]
     (with-redefs [ds/sync-directory! (fn [_] (throw failure))]

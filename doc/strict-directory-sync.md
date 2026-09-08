@@ -56,7 +56,12 @@ The candidate release compiles the Windows binding with `javac --release 22`.
 Unix JVMs below 22 can still load the Clojure namespaces without loading that
 class. Windows file stores require JDK 22+; a Windows JVM below 22 fails explicitly
 instead of silently weakening persistence. GraalVM 25 Windows/x64 is the native test target;
-older Native Image toolchains are not qualified by this increment.
+older Windows Native Image toolchains are not qualified by this increment.
+On Linux, the packaged jar passes the JDK 21 store regression suite, and a
+GraalVM CE 21.0.2 native executable built from the packaged directory-sync
+namespace successfully performs the Unix barrier. This does not qualify a full
+Datahike native build. Reproduction commands are in
+`test/windows-durability/README.md`.
 
 Run JVMs with `--enable-native-access=ALL-UNNAMED`. The jar includes the native
 image foreign-call metadata and runtime-initialization rule for the DLL handles.
