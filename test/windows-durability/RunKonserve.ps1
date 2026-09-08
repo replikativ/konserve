@@ -40,7 +40,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
 
 $cp = (Get-Content probe-results/artifact.cp -Raw).Trim()
 java --enable-native-access=ALL-UNNAMED -cp $cp clojure.main -e `
-    "(require 'konserve.directory-sync-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test) (let [r (clojure.test/run-tests 'konserve.directory-sync-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test)] (shutdown-agents) (System/exit (if (zero? (+ (:fail r) (:error r))) 0 1)))" |
+    "(require 'konserve.directory-sync-test 'konserve.directory-provisioning-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test) (let [r (clojure.test/run-tests 'konserve.directory-sync-test 'konserve.directory-provisioning-test 'konserve.filestore-test 'konserve.mmap-test 'konserve.simulation-crash-test)] (shutdown-agents) (System/exit (if (zero? (+ (:fail r) (:error r))) 0 1)))" |
     Tee-Object probe-results/konserve-windows-integration.txt | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Konserve Windows integration failed' }
 java --enable-native-access=ALL-UNNAMED -cp $cp clojure.main "$PSScriptRoot/process-crash.clj" |
