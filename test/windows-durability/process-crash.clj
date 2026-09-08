@@ -23,7 +23,7 @@
             process (-> (ProcessBuilder.
                          ^java.util.List [executable "--enable-native-access=ALL-UNNAMED"
                                           "-cp" (System/getProperty "java.class.path")
-                                          "clojure.main" "interop/windows-durability/process-crash.clj"
+                                          "clojure.main" "test/windows-durability/process-crash.clj"
                                           "child" path boundary])
                         (.redirectError java.lang.ProcessBuilder$Redirect/INHERIT)
                         (.start))

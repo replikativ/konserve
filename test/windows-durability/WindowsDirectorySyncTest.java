@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Fails nonzero for ANY failed binding assertion. Unlike the API survey. */
-public final class DirectorySyncBindingProbe {
+public final class WindowsDirectorySyncTest {
     static void require(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
