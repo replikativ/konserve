@@ -201,6 +201,42 @@
                                         :store-key store-key
                                         :arr (seq arr)})))))))))
 
+(defn- decode-part
+  "Decrypt and deserialize one part (`:meta` or `:value`) of a blob.
+
+   A TOP-LEVEL fn rather than a closure inside `read-blob*`'s `go-try-`: a `go` nested in
+   another `go` body macroexpands into a complete state machine that the enclosing ioc
+   transform must then analyse in full — measured at a ~6x compile-time multiplier per
+   nesting, paid twice because `async+sync` compiles each body once per branch."
+  [sync? enc version store-key env fn-read part bytes]
+  (async+sync
+   sync? *default-sync-translation*
+   (go-try-
+    (let [plaintext
+          (<?- (-decrypt enc
+                         bytes
+                         (associated-data version store-key part)
+                         env))]
+      #?(:cljs (fn-read plaintext)
+         :clj (with-open [input (ByteArrayInputStream. plaintext)]
+                (fn-read input)))))))
+
+(defn- delete-blob-once!
+  "Delete the blob and report true, translating a failure through `on-error`.
+   Top-level for the same reason as `decode-part`.
+
+   It carries its OWN `async+sync`, and that is not optional: inside `delete-blob*` this body
+   sat within an enclosing `async+sync`, whose sync branch rewrites `go-try-` to `try` and
+   `<?-` to `do` throughout — including into nested closures. Hoisted without the dispatch it
+   became async-only, so `{:sync? true}` deletes returned an unconsumed channel and silently
+   did nothing."
+  [sync? backing store-key env on-error]
+  (async+sync
+   sync? *default-sync-translation*
+   (go-try-
+    (try (<?- (-delete-blob backing store-key env)) true
+         (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e)))))))
+
 (defn read-blob*
   "Read meta, edn or binary from blob."
   [blob read-handlers serializers {:keys [sync? operation locked-cb config store-key] :as env}]
@@ -214,17 +250,7 @@
           enc (encryptor (:encryptor config))
           fn-read (partial -deserialize (compressor serializer) read-handlers)
           decode (fn [part bytes]
-                   (async+sync
-                    sync? *default-sync-translation*
-                    (go-try-
-                     (let [plaintext
-                           (<?- (-decrypt enc
-                                          bytes
-                                          (associated-data version store-key part)
-                                          env))]
-                       #?(:cljs (fn-read plaintext)
-                          :clj (with-open [input (ByteArrayInputStream. plaintext)]
-                                 (fn-read input)))))))]
+                   (decode-part sync? enc version store-key env fn-read part bytes))]
       (case operation
         :read-meta (<?- (decode :meta (<?- (-read-meta blob meta-size env))))
         :read-edn (<?- (decode :value (<?- (-read-value blob meta-size env))))
@@ -287,9 +313,7 @@
           cas-blob      (when (and (needs-sidecar-lock? backing config)
                                    (<?- (-blob-exists? backing cas-store-key env)))
                           (<?- (-create-blob backing cas-store-key env)))
-          delete!       (fn [] (go-try-
-                                (try (<?- (-delete-blob backing store-key env)) true
-                                     (catch #?(:clj Exception :cljs js/Error) e (throw (on-error e))))))]
+          delete!       (fn [] (delete-blob-once! (:sync? env) backing store-key env on-error))]
       (try
         (let [cas-lock (when cas-blob (<?- (get-lock cas-blob key env)))]
           (try
