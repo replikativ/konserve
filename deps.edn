@@ -11,7 +11,7 @@
         ;; works only if it was registered at build time.
         org.replikativ/incognito {:mvn/version "0.3.71"}
         org.replikativ/hasch {:mvn/version "0.4.100"}
-        org.replikativ/superv.async {:mvn/version "0.3.50"}
+        org.replikativ/superv.async {:mvn/version "0.3.54"}
         ;; Includes the synchronous JVM AEAD APIs used by :aes-gcm.
         org.replikativ/geheimnis {:mvn/version "0.2.40"}
         org.lz4/lz4-java {:mvn/version "1.8.0"}
