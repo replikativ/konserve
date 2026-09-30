@@ -2,6 +2,12 @@
 
 All notable, user-visible changes to konserve are documented here.
 
+## Unreleased GC sweep changes
+
+- Add non-atomic native batch deletion and paginated metadata capabilities independently of atomic multi-key writes.
+- Sweep supports bounded fallback concurrency, cancellation, and statistics-only results. Partial deletion failures are propagated and launched fallback operations are drained.
+
+
 ## Unreleased
 
 ### Added

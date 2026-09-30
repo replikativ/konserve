@@ -1,119 +1,94 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
+            [konserve.protocols :as p]
             #?(:clj [konserve.utils :as utils :refer [async+sync *default-sync-translation*]]
                :cljs [konserve.utils :as utils :refer [*default-sync-translation*]
                       :refer-macros [async+sync]])
-            [superv.async :refer [go-try- <?- reduce<?-]])
+            [superv.async :refer [go-try- <?-]])
   #?(:clj (:import [java.util Date])))
 
-(defn- epoch-ms
-  "Epoch millis of a timestamp.
+(defn- epoch-ms ^long [d]
+  #?(:clj (.getTime ^Date d) :cljs (.getTime d)))
 
-  A function rather than an inline `.getTime` with a `^Date` hint: the call
-  sites sit inside `go-try-`, and the go macro rewrites locals into its
-  state-machine array, dropping their hints and leaving a reflective call
-  behind. A parameter hint on an ordinary function survives."
-  ^long [d]
-  #?(:clj  (.getTime ^Date d)
-     :cljs (.getTime d)))
+(defn- cancelled! [opts]
+  (when (and (:cancel? opts) ((:cancel? opts)))
+    (throw (ex-info "Sweep cancelled; completed deletions are not rolled back."
+                    {:type :konserve/sweep-cancelled}))))
 
-(defn- delete-batch!
-  "Delete one batch of keys, concurrently where the platform allows it.
+(defn- delete-individually! [store keys concurrency opts]
+  (async+sync (:sync? opts) *default-sync-translation*
+              (go-try-
+               (doseq [group (partition-all concurrency keys)]
+                 (cancelled! opts)
+                 (if (:sync? opts)
+                   #?(:clj
+                      (let [pending (mapv (fn [key]
+                                            (future (k/dissoc store key {:sync? true :ignore-existence? true}))) group)]
+                        ;; Wait for every dispatched delete before propagating an
+                        ;; error, so no work is left running after sweep returns.
+                        (let [results (mapv (fn [f] (try @f (catch Throwable e e))) pending)]
+                          (doseq [r results] (when (instance? Throwable r) (throw r)))))
+                      :cljs
+                      (doseq [key group] (k/dissoc store key {:sync? true :ignore-existence? true})))
+                   (let [pending (mapv #(k/dissoc store % {:ignore-existence? true}) group)
+                         results (<?- (async/into [] (async/merge pending)))]
+                     ;; merge treats exceptions as ordinary values. Explicitly
+                     ;; surface them after draining all dispatched channels.
+                     (doseq [r results]
+                       (when (instance? #?(:clj Throwable :cljs js/Error) r) (throw r)))))))))
 
-   `:ignore-existence?` because GC never uses `dissoc`'s `existed?` return, and
-   it lets miss-safe backings skip the per-key HEAD probe — a delete here is
-   idempotent by construction.
-
-   The concurrency is worth keeping rather than simplifying away: the stores
-   that most need it are exactly the ones that take this path. A backing with
-   multi-key support batches into one round trip above; everything else — the
-   FILESTORE included, which is what scriptum and proximum run on — deletes key
-   by key, and doing that serially against a remote store costs one round trip
-   per key.
-
-   Async mode merges the per-key channels. Sync mode has no channels to merge,
-   so the JVM uses `pmap` for the same effect; ClojureScript runs serially,
-   which costs it nothing it could have had — sync mode there is single-threaded
-   by definition.
-
-   `pmap`'s thread cost here is bounded at `cpus + 2`, measured at 11 on an
-   8-core machine, drawn from the cached pool `future` uses. THAT BOUND DEPENDS
-   ON `batch` NOT BEING CHUNKED: `pmap` realizes a chunk at a time, so a chunked
-   seq jumps to 32 + lookahead (35, measured, for a `range`). `sweep!` passes
-   `partition-all` output, which is not chunked — keep it that way, or bound the
-   parallelism explicitly.
-
-   A bounded virtual-thread executor would be the better instrument and a
-   simpler one, but Loom is new enough that konserve should not require it of
-   its users yet."
-  [store batch sync?]
-  (if sync?
-    #?(:clj (dorun (pmap (fn [{:keys [key]}]
-                           (k/dissoc store key {:sync? true :ignore-existence? true}))
-                         batch))
-       :cljs (doseq [{:keys [key]} batch]
-               (k/dissoc store key {:sync? true :ignore-existence? true})))
-    (let [pending (mapv (fn [{:keys [key]}]
-                          (k/dissoc store key {:ignore-existence? true}))
-                        batch)]
-      (async/into [] (async/merge pending)))))
+(defn- sweep-batches! [store candidates batch-size opts report]
+  (async+sync (:sync? opts) *default-sync-translation*
+              (go-try-
+               (loop [batches (seq (partition-all batch-size candidates)) report report]
+                 (if-let [batch (first batches)]
+                   (let [_ (cancelled! opts)
+                         keys (mapv :key batch)
+                         _ (cond
+                             (k/batch-delete-capable? store) (<?- (k/batch-dissoc store keys (select-keys opts [:sync?])))
+                             (utils/multi-key-capable? store) (<?- (k/multi-dissoc store keys (select-keys opts [:sync?])))
+                             :else (<?- (delete-individually! store keys (:concurrency opts 32) opts)))
+                         report (if (:collect-deleted? opts true)
+                                  (into report keys)
+                                  (-> report (update :deleted-count + (count keys)) (update :batches inc)))]
+                     (recur (next batches) report))
+                   report)))))
 
 (defn sweep!
-  "Delete every key that is neither in `whitelist` nor written at/after `cutoff`.
+  "Delete keys outside whitelist whose logical last-write precedes cutoff.
 
-   PRECONDITION, and the whole reason `konserve.gc-guard` exists: on a store
-   with guarded writers, `cutoff` must come from `konserve.gc-guard/cutoff`,
-   and it must be read BEFORE the caller computes `whitelist`:
+   Capture the guard cutoff BEFORE marking. This primitive does not serialize
+   root publication with deletion; the caller owns that coordination contract.
+   Age floors do not protect old objects promoted into roots after the mark.
 
-       (let [cutoff    (guard/cutoff store-id (utils/now))   ; 1. guard
-             whitelist (mark-reachable! store)]              ; 2. mark
-         (sweep! store whitelist cutoff))                    ; 3. sweep
-
-   That order is not a style preference. A values-then-pointer sequence that is
-   open at step 1 pins the cutoff at or before its own writes, so they survive
-   however step 2 turns out. Mark first and the same sequence can land its
-   pointer in between: step 2 walked roots that did not name its values yet, and
-   by step 3 the guard is closed again, so nothing spares them — they are older
-   than the cutoff and unreachable from the whitelist, and the sweep deletes
-   objects a live pointer names.
-
-   `sweep!` DELIBERATELY DOES NOT CONSULT THE GUARD ITSELF. It cannot: it
-   receives `whitelist` already computed, so any reading it does is necessarily
-   after the caller's mark — the broken order above, wearing the appearance of
-   safety. Only the caller is in a position to interleave the two correctly.
-
-   Passing a raw `(utils/now)` is correct only on a store no writer guards."
-  ([store whitelist cutoff]
-   (sweep! store whitelist cutoff 1000 {}))
-  ([store whitelist cutoff batch-size]
-   (sweep! store whitelist cutoff batch-size {}))
+   Options: :sync?, :concurrency (default 32, bounds individual deletes),
+   :page-size (default 1000), :collect-deleted? (default true, returns a set;
+   false returns {:deleted-count n :batches n}), and :cancel? (zero-arg predicate).
+   Cancellation/failure may follow partial deletion and never rolls it back.
+   Paginated stores are scanned one metadata page at a time. Other stores retain
+   their existing keys enumeration; statistics-only results do not bound that
+   backend's listing memory. Native batch deletion is non-atomic."
+  ([store whitelist cutoff] (sweep! store whitelist cutoff 1000 {}))
+  ([store whitelist cutoff batch-size] (sweep! store whitelist cutoff batch-size {}))
   ([store whitelist cutoff batch-size opts]
-   (async+sync
-    (:sync? opts)
-    *default-sync-translation*
-    (go-try-
-     (let [sync? (:sync? opts)
-           to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
-                          (filter (fn [{:keys [key last-write] :as meta}]
-                                    (not
-                                     (or (contains? whitelist key)
-                                         (<= (epoch-ms cutoff)
-                                             (epoch-ms (if last-write
-                                                         last-write
-                                                         ;; old name
-                                                         (:konserve.core/timestamp meta))))))))
-                          (partition-all batch-size))]
-       (<?-
-        (reduce<?-
-         (fn [deleted-files batch]
-           (go-try-
-            (if (utils/multi-key-capable? store)
-              ;; one round trip for the whole batch where the backing allows it
-              (let [keys-to-delete (mapv :key batch)]
-                (<?- (k/multi-dissoc store keys-to-delete (select-keys opts [:sync?])))
-                (into deleted-files keys-to-delete))
-              (do (<?- (delete-batch! store batch sync?))
-                  (into deleted-files (map :key batch))))))
-         #{}
-         to-delete)))))))
+   (doseq [[k v] [[:batch-size batch-size] [:concurrency (:concurrency opts 32)] [:page-size (:page-size opts 1000)]]]
+     (when-not (pos-int? v)
+       (throw (ex-info "Sweep limits must be positive integers." {:type :konserve/sweep-invalid-limit :option k :value v}))))
+   (async+sync (:sync? opts) *default-sync-translation*
+               (go-try-
+                (let [candidate? (fn [{:keys [key last-write] :as meta}]
+                                   (and (not (contains? whitelist key))
+                                        (< (epoch-ms (or last-write (:konserve.core/timestamp meta))) (epoch-ms cutoff))))
+                      initial (if (:collect-deleted? opts true) #{} {:deleted-count 0 :batches 0})]
+                  (if (k/paged-keys? store)
+                    (loop [cursor nil report initial]
+                      (cancelled! opts)
+                      (let [page (<?- (k/key-page store cursor (assoc (select-keys opts [:sync?]) :limit (:page-size opts 1000))))
+                            report (<?- (sweep-batches! store (filter candidate? (:keys page)) batch-size opts report))]
+                        (if-let [next-cursor (:cursor page)]
+                          (recur next-cursor report)
+                          report)))
+                    (let [_ (cancelled! opts)
+                          keys (<?- (k/keys store (select-keys opts [:sync?])))]
+                      (<?- (sweep-batches! store (filter candidate? keys) batch-size opts initial)))))))))
