@@ -185,6 +185,18 @@
    directory, a marker object) need not implement this."
   (-open-store [this env] "Open the underlying store's handle without creating anything."))
 
+(defprotocol PBatchDeleteBackingStore
+  "Optional non-atomic, idempotent deletion, independent of multi-key writes."
+  (-batch-delete-blobs [this store-keys env]
+    "Return {:deleted #{store-keys} :failed {store-key diagnostic}}. Every
+     requested key must occur in exactly one result category."))
+
+(defprotocol PKeyPageBackingStore
+  "Optional bounded physical-key enumeration; nil cursor starts/ends a scan."
+  (-key-page-blobs [this cursor env]
+    "Return {:keys [store-keys ...] :cursor next-cursor-or-nil}, with at most
+     (:limit env) keys. Empty nonterminal pages are valid."))
+
 (defprotocol PMultiWriteBackingStore
   "Protocol for backing stores that support atomic multi-key writes."
   (-multi-write-blobs [this store-key-values env]

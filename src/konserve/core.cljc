@@ -902,6 +902,78 @@
                                                        (throw e))
                                                      :cljs (throw e)))))))))
 
+(defn batch-delete-capable?
+  "True for native non-atomic batch deletion; says nothing about multi-key writes."
+  [store]
+  (and (satisfies? protocols/PBatchDelete store) (protocols/-supports-batch-delete? store)))
+
+(defn paged-keys? [store]
+  (and (satisfies? protocols/PKeyPage store) (protocols/-supports-key-pages? store)))
+
+(defn key-page
+  "Read one page of logical key metadata. nil cursor starts; returned nil ends.
+   Pages are not a snapshot; collectors must coordinate with publishers."
+  ([store cursor] (key-page store cursor {}))
+  ([store cursor opts]
+   (when-not (paged-keys? store)
+     (throw (ex-info "Store does not support paginated keys." {:type :konserve/key-pages-unavailable})))
+   (let [limit (:limit opts 1000)]
+     (when-not (pos-int? limit)
+       (throw (ex-info "Page limit must be a positive integer." {:type :konserve/key-page-invalid-limit})))
+     (async+sync (:sync? opts) *default-sync-translation*
+                 (go-try-
+                  (let [page (<?- (protocols/-key-page store cursor (clojure.core/assoc opts :limit limit)))]
+                    (when (or (not (map? page)) (not (sequential? (:keys page))) (> (count (:keys page)) limit)
+                              (and (:cursor page) (= cursor (:cursor page))))
+                      (throw (ex-info "Invalid or stalled metadata page." {:type :konserve/key-page-invalid-result})))
+                    page))))))
+
+(defn batch-dissoc
+  "Delete a native batch, without an atomic multi-key guarantee. Returns the
+   deleted logical keys. Missing keys count as successfully deleted. Every
+   request is accounted for; partial failure throws with :deleted and :failed.
+   In-process per-key locks are held across the backend call; cross-process
+   coordination remains the caller's responsibility. Conditional deletes are
+   deliberately rejected."
+  ([store keys] (batch-dissoc store keys {}))
+  ([store keys opts]
+   (refuse-conditional-unsupported! "batch-dissoc" opts)
+   (when-not (batch-delete-capable? store)
+     (throw (ex-info "Store does not support native batch deletion." {:type :konserve/batch-delete-unavailable})))
+   (let [keys (vec (distinct keys))]
+     (async+sync (:sync? opts) *default-sync-translation*
+                 (konserve.metrics/measured-go store :batch-dissoc :api
+                                               (go-try-
+                                                (let [held (atom [])]
+                                                  (try
+                                                   ;; All callers use physical-key order to avoid deadlock.
+                                                    (doseq [key (sort-by #(str (hasch/uuid %)) keys)]
+                                                      (let [lock (get-lock store key)]
+                                                        (try
+                                                          (if (:sync? opts) (wait lock) (<?- lock))
+                                                          (catch #?(:clj Throwable :cljs :default) e
+                                                            (release-lock store key)
+                                                            (throw e)))
+                                                        (swap! held conj [key lock])))
+                                                    (let [{:keys [deleted failed] :as result}
+                                                          (if (empty? keys) {:deleted #{} :failed {}}
+                                                              (<?- (protocols/-batch-delete store keys opts)))]
+                                                      (when-not (and (set? deleted) (map? failed)
+                                                                     (= (set keys) (into deleted (clojure.core/keys failed)))
+                                                                     (not-any? #(contains? failed %) deleted))
+                                                        (throw (ex-info "Batch deletion result did not account for every requested key."
+                                                                        {:type :konserve/batch-delete-invalid-result})))
+                                                      (doseq [key deleted]
+                                                        (invoke-write-hooks! store {:api-op :dissoc :key key}))
+                                                      (when (seq failed)
+                                                        (throw (ex-info "Native batch deletion partially failed."
+                                                                        (clojure.core/assoc result :type :konserve/batch-delete-incomplete))))
+                                                      deleted)
+                                                    (finally
+                                                      (doseq [[key lock] (reverse @held)]
+                                                        (put! lock :unlocked)
+                                                        (release-lock store key)))))))))))
+
 (defn append
   "Append the Element to the log at the given key or create a new append log there.
   This operation only needs to write the element and pointer to disk and hence is useful in write-heavy situations."
