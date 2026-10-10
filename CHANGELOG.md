@@ -26,6 +26,12 @@ All notable, user-visible changes to konserve are documented here.
   site.
 
 ### Fixed
+- **A throwing write hook never reaches the writer.** Hooks run after the write
+  has committed, but the catch covered `Exception` only (JVM) and `js/Error`
+  only (CLJS), so an `Error` such as core.async's `AssertionError` on an
+  overfull channel, or a thrown non-Error value, escaped into the caller of a
+  write that had succeeded. Any throwable is now logged and the remaining
+  hooks still run.
 - **IndexedDB now honors caller encoding configuration.** Its connect helper no
   longer discards the nested encryptor/compressor configuration.
 - **Connecting to an existing IndexedDB store opens it again.** The previous

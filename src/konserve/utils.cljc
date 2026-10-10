@@ -142,7 +142,11 @@
         (doseq [[hook-id hook-fn] hooks]
           (try
             (hook-fn hook-event)
-            (catch #?(:clj Exception :cljs js/Error) e
+            ;; Throwable, not Exception: the write has already committed, so no
+            ;; hook failure may reach the writer, including an Error such as
+            ;; core.async's AssertionError on an overfull channel. On CLJS
+            ;; anything can be thrown, not only js/Error.
+            (catch #?(:clj Throwable :cljs :default) e
               ;; Log hook errors for debugging but don't break writes
               #?(:clj (log/warn :konserve/write-hook-error "Write hook error" {:hook-id hook-id
                                                                                :api-op (:api-op hook-event)
