@@ -88,3 +88,15 @@
       (is (= 2 (k/get store :a nil {:sync? true})))
       (is (= 2 (k/get store :b nil {:sync? true})))
       (is (every? #(nil? (:meta %)) @events) "no :meta on any hook event"))))
+
+(deftest throwing-hook-never-reaches-the-writer
+  (testing "a hook that throws a non-Exception (e.g. core.async's AssertionError) is
+            logged, not rethrown into a write that already committed"
+    (let [store  (mem)
+          events (atom [])]
+      (k/add-write-hook! store :bad (fn [_] (throw #?(:clj (AssertionError. "full")
+                                                      :cljs "a thrown non-Error"))))
+      (k/add-write-hook! store :good (fn [e] (swap! events conj e)))
+      (k/assoc store :k 1 {:sync? true})
+      (is (= 1 (k/get store :k nil {:sync? true})))
+      (is (= [:k] (map :key @events)) "the other hooks still run"))))
