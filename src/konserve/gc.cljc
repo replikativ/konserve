@@ -1,6 +1,7 @@
 (ns konserve.gc
   (:require [clojure.core.async :as async]
             [konserve.core :as k]
+            [konserve.gc-coordination :as coord]
             #?(:clj [konserve.utils :as utils :refer [async+sync *default-sync-translation*]]
                :cljs [konserve.utils :as utils :refer [*default-sync-translation*]
                       :refer-macros [async+sync]])
@@ -83,7 +84,15 @@
    after the caller's mark — the broken order above, wearing the appearance of
    safety. Only the caller is in a position to interleave the two correctly.
 
-   Passing a raw `(utils/now)` is correct only on a store no writer guards."
+   Passing a raw `(utils/now)` is correct only on a store no writer guards.
+
+   `opts :coordination-token` carries the exclusive token from
+   `konserve.gc-coordination/begin-collection!`. Once durable coordination has
+   been activated for a store, a token is mandatory; an independent tokenless
+   collector fails closed instead of bypassing publishers. A legacy store with
+   no coordination record retains tokenless behavior. `sweep!` checks authority
+   before enumeration and every destructive batch. The durable coordination key
+   is always preserved."
   ([store whitelist cutoff]
    (sweep! store whitelist cutoff 1000 {}))
   ([store whitelist cutoff batch-size]
@@ -94,10 +103,14 @@
     *default-sync-translation*
     (go-try-
      (let [sync? (:sync? opts)
+           coordination-token (:coordination-token opts)
+           _ (<?- (coord/assert-sweep-authorized! store coordination-token
+                                                  (select-keys opts [:sync?])))
            to-delete (->> (<?- (k/keys store (select-keys opts [:sync?])))
                           (filter (fn [{:keys [key last-write] :as meta}]
                                     (not
-                                     (or (contains? whitelist key)
+                                     (or (contains? coord/coordination-root-keys key)
+                                         (contains? whitelist key)
                                          (<= (epoch-ms cutoff)
                                              (epoch-ms (if last-write
                                                          last-write
@@ -108,12 +121,24 @@
         (reduce<?-
          (fn [deleted-files batch]
            (go-try-
+            (<?- (coord/assert-sweep-authorized! store coordination-token
+                                                 (select-keys opts [:sync?])))
             (if (utils/multi-key-capable? store)
               ;; one round trip for the whole batch where the backing allows it
               (let [keys-to-delete (mapv :key batch)]
                 (<?- (k/multi-dissoc store keys-to-delete (select-keys opts [:sync?])))
                 (into deleted-files keys-to-delete))
-              (do (<?- (delete-batch! store batch sync?))
-                  (into deleted-files (map :key batch))))))
+              (let [results (<?- (delete-batch! store batch sync?))]
+                ;; In async mode `async/merge` transports a per-key failure as
+                ;; an element inside the result vector. `<?-` only sees the
+                ;; vector itself, so surface the nested failure explicitly
+                ;; instead of claiming every key was deleted.
+                (when-let [error (some #(when (instance?
+                                               #?(:clj Throwable :cljs js/Error)
+                                               %)
+                                          %)
+                                       results)]
+                  (throw error))
+                (into deleted-files (map :key batch))))))
          #{}
          to-delete)))))))
