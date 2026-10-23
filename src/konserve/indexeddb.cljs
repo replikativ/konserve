@@ -90,10 +90,11 @@
 ;;==============================================================================
 
 (defn flush-blob
-  [^BackingBlob {:keys [db key buf header metadata value]}]
-  (let [bin (if (some? buf)
-              #js[buf]
-              #js[header metadata value])
+  [^BackingBlob {:keys [db key buf snapshot-blob header metadata value]}]
+  (let [bin (cond
+              (some? buf) #js[buf]
+              (some? snapshot-blob) #js[snapshot-blob]
+              :else #js[header metadata value])
         blob (js/Blob. bin #js{:type "application/octet-stream"})]
     (with-promise out
       (take! (write-blob db key blob)
@@ -104,14 +105,22 @@
                                      :caller 'konserve.indexeddb/flush-blob}))
                  (close! out)))))))
 
+(defn- get-blob
+  "Batch handles retain the immutable Blob selected by their read transaction.
+   Ordinary single-key handles read from IndexedDB as before."
+  [{:keys [db key snapshot-blob]}]
+  (if (some? snapshot-blob)
+    (go snapshot-blob)
+    (read-blob db key)))
+
 (defn- get-buf
   "this ensures that blobs are cached on BackingBlobs as ArrayBuffers and read
    from the db only once."
-  [^BackingBlob {:keys [db key buf] :as bb}]
+  [^BackingBlob {:keys [buf] :as bb}]
   (with-promise out
     (if (some? buf)
       (put! out buf)
-      (take! (read-blob db key)
+      (take! (get-blob bb)
              (fn [res]
                (if (instance? js/Error res)
                  (put! out res)
@@ -139,9 +148,9 @@
                  (put! out header)))))))
 
 (defn- read-binary
-  [^BackingBlob {:keys [db key _buf]} meta-size locked-cb]
+  [bb meta-size locked-cb]
   (with-promise out
-    (take! (read-blob db key)
+    (take! (get-blob bb)
            (fn [res]
              (cond
                (store-key-not-found? res) (put! out res)
@@ -238,10 +247,11 @@
           (set! (.-onerror get-req)
                 (fn [err] (swap! errors conj {:key store-key :error err}))))))))
 
-(defrecord ^{:doc "buf is cached data that has been read from the db,
+(defrecord ^{:doc "snapshot-blob is the immutable Blob captured by a batch read;
+                   buf is cached data that has been read from the db,
                    & {header metadata value} are bin data to be written.
-                   If a write begins, buf is discarded."}
- BackingBlob [db key buf header metadata value]
+                   If a write begins, snapshot-blob and buf are discarded."}
+ BackingBlob [db key buf header metadata value snapshot-blob]
   storage-layout/PBackingBlob
   (-get-lock [_this _env]
     (let [lock (reify
@@ -265,6 +275,7 @@
     (read-binary this meta-size locked-cb))
   (-write-header [this header _env]
     (go (set! (.-buf this) nil)
+        (set! (.-snapshot-blob this) nil)
         (set! (.-header this) header)))
   (-write-meta [this meta-arr _env]
     (go (set! (.-metadata this) meta-arr)))
@@ -279,11 +290,12 @@
       (set! (.-db this) nil)
       (set! (.-key this) nil)
       (set! (.-buf this) nil)
+      (set! (.-snapshot-blob this) nil)
       (set! (.-header this) nil)
       (set! (.-metadata this) nil)
       (set! (.-value this) nil))))
 
-(defn open-backing-blob [db key] (BackingBlob. db key nil nil nil nil))
+(defn open-backing-blob [db key] (BackingBlob. db key nil nil nil nil nil))
 
 (defn multi-read-blobs
   "Execute multiple read operations in a single IndexedDB transaction.
@@ -319,9 +331,10 @@
                 (fn []
                   (let [blob (.-result get-req)]
                     ;; Only include found keys in result (sparse map)
-                    ;; BackingBlob will lazily load the buffer when needed
+                    ;; Retain this transaction's immutable value. Re-reading the
+                    ;; key later could observe an overwrite or deletion instead.
                     (when (not (undefined? blob))
-                      (let [backing-blob (BackingBlob. db store-key nil nil nil nil)]
+                      (let [backing-blob (BackingBlob. db store-key nil nil nil nil blob)]
                         (swap! results assoc store-key backing-blob)))
                     (swap! remaining-count dec))))
           (set! (.-onerror get-req)
