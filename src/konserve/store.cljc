@@ -360,22 +360,24 @@
 #?(:clj
    (defmethod -connect-store :file
      [{:keys [path filesystem] :as all-config} opts]
-     (let [exists (konserve.filestore/store-exists? filesystem path)]
-       (when-not exists
-         (throw (ex-info (str "File store does not exist at path: " path)
-                         {:path path :config all-config})))
-       (apply konserve.filestore/connect-fs-store path
-              (fs-store-args all-config opts)))))
+     #?(:jolt (konserve.filestore/open-store all-config opts :connect)
+        :clj (let [exists (konserve.filestore/store-exists? filesystem path)]
+               (when-not exists
+                 (throw (ex-info (str "File store does not exist at path: " path)
+                                 {:path path :config all-config})))
+               (apply konserve.filestore/connect-fs-store path
+                      (fs-store-args all-config opts))))))
 
 #?(:clj
    (defmethod -create-store :file
      [{:keys [path filesystem] :as all-config} opts]
-     (let [exists (konserve.filestore/store-exists? filesystem path)]
-       (when exists
-         (throw (ex-info (str "File store already exists at path: " path)
-                         {:path path :config all-config})))
-       (apply konserve.filestore/connect-fs-store path
-              (fs-store-args all-config opts)))))
+     #?(:jolt (konserve.filestore/open-store all-config opts :create)
+        :clj (let [exists (konserve.filestore/store-exists? filesystem path)]
+               (when exists
+                 (throw (ex-info (str "File store already exists at path: " path)
+                                 {:path path :config all-config})))
+               (apply konserve.filestore/connect-fs-store path
+                      (fs-store-args all-config opts))))))
 
 #?(:clj
    (defmethod -store-exists? :file

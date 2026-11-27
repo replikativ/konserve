@@ -8,7 +8,10 @@
 :deps {:aliases [:cljs]}
  :dev-http {8021 "out/browser-tests"}
  :builds
- {:app
+ {:disk-parity {:target :node-script
+                :main konserve.filestore-parity/-main
+                :output-to "out/disk-parity.js"}
+  :app
   {:target :browser
    :output-dir "public/js"
    :modules {:main {:entries [konserve.core]}}}

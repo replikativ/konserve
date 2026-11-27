@@ -1,13 +1,13 @@
 (ns konserve.serializers
-  (:require #?(:clj [clj-cbor.core :as cbor])
+  (:require #?@(:jolt [] :clj [[clj-cbor.core :as cbor]])
             [boring.core :as boring]
             [clojure.string :as str]
-            #?(:clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
+            #?(:jolt [konserve.impl.jolt-fressian :as jf] :clj [clojure.data.fressian :as fress] :cljs [fress.api :as fress])
             [konserve.protocols :refer [PStoreSerializer]]
-            [incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]
+            #?@(:jolt [] :default [[incognito.fressian :refer [incognito-read-handlers incognito-write-handlers]]])
             [incognito.edn :refer [read-string-safe]]))
 
-#?(:clj
+#?(:jolt nil :clj
    (defrecord CBORSerializer [codec]
      PStoreSerializer
      (-deserialize [_ read-handlers bytes]
@@ -19,7 +19,7 @@
          (throw (ex-info "Write handlers not supported yet." {:type :handlers-not-supported-yet})))
        (cbor/encode codec bytes val))))
 
-#?(:clj
+#?(:jolt nil :clj
    (defn cbor-serializer
      ([] (cbor-serializer {} {}))
      ([read-handlers write-handlers]
@@ -34,26 +34,30 @@
              (-namespace [_] "konserve.serializers")))
   PStoreSerializer
   (-deserialize [_ read-handlers bytes]
-    (let [handlers #?(:cljs (merge custom-read-handlers (incognito-read-handlers read-handlers))
-                      :clj (-> (merge fress/clojure-read-handlers
-                                      custom-read-handlers
-                                      (incognito-read-handlers read-handlers))
-                               fress/associative-lookup))]
-      (fress/read bytes :handlers handlers)))
+    #?(:jolt (jf/read-value bytes read-handlers custom-read-handlers)
+       :default
+       (let [handlers #?(:cljs (merge custom-read-handlers (incognito-read-handlers read-handlers))
+                         :clj (-> (merge fress/clojure-read-handlers
+                                         custom-read-handlers
+                                         (incognito-read-handlers read-handlers))
+                                  fress/associative-lookup))]
+         (fress/read bytes :handlers handlers))))
   (-serialize [_ #?(:clj bytes :cljs _) write-handlers val]
-    (let [handlers #?(:clj (-> (merge
-                                fress/clojure-write-handlers
-                                custom-write-handlers
-                                (incognito-write-handlers write-handlers))
-                               fress/associative-lookup
-                               fress/inheritance-lookup)
-                      ;; CLJS fress expects flat {Type fn} format.
-                      ;; Custom handlers must provide this format directly.
-                      :cljs (merge custom-write-handlers
-                                   (incognito-write-handlers write-handlers)))]
-      #?(:clj (let [writer (fress/create-writer bytes :handlers handlers)]
-                (fress/write-object writer val))
-         :cljs (fress/write val :handlers handlers)))))
+    #?(:jolt (jf/write-value bytes write-handlers custom-write-handlers val)
+       :default
+       (let [handlers #?(:clj (-> (merge
+                                   fress/clojure-write-handlers
+                                   custom-write-handlers
+                                   (incognito-write-handlers write-handlers))
+                                  fress/associative-lookup
+                                  fress/inheritance-lookup)
+                         ;; CLJS fress expects flat {Type fn} format.
+                         ;; Custom handlers must provide this format directly.
+                         :cljs (merge custom-write-handlers
+                                      (incognito-write-handlers write-handlers)))]
+         #?(:clj (let [writer (fress/create-writer bytes :handlers handlers)]
+                   (fress/write-object writer val))
+            :cljs (fress/write val :handlers handlers))))))
 
 (defn fressian-serializer
   ([] (fressian-serializer {} {}))
@@ -326,7 +330,7 @@
   serializer takes the next free id rather than reusing one."
   {0 (string-serializer)
    1 (fressian-serializer)
-   #?@(:clj [2 (cbor-serializer)])          ; legacy, JVM-only, rejects handlers
+   #?@(:jolt [] :clj [2 (cbor-serializer)])          ; legacy, JVM-only, rejects handlers
    3 (boring-serializer)})
 
 (def serializer-class->byte

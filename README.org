@@ -245,6 +245,12 @@ The file store supports:
 - Custom =java.nio.file.FileSystem= instances via =:filesystem= parameter
 - Thoroughly tested using [[https://github.com/google/jimfs][Jimfs]] (Google's in-memory NIO filesystem)
 
+*** File Store (Jolt)
+
+The synchronous local file backend uses the same disk layout as the JVM and
+Node stores. It currently requires a patched Jolt on Linux/Chez. See the
+[[file:test-jolt/README.md][Jolt setup and interoperability checks]] for dependencies and supported operations.
+
 *** File Store (Node.js)
 
 For Node.js environments, require the Node.js-specific file store:
