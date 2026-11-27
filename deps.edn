@@ -38,6 +38,15 @@
            :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.12.145"}
                                thheller/shadow-cljs {:mvn/version "3.4.11"}}
                   :extra-paths ["test"]}
+           :clojurific {:extra-paths ["test" "test-clojurific"]
+                        :extra-deps {com.whimsical/clojurific {:mvn/version "0.12.16"}}
+                        :override-deps {org.clojure/clojurescript {:git/url "https://github.com/WhimsicalCode/clojurific"
+                                                                   :git/sha "74aa340e084ea4ef2cdca543277d7ac74970bbbc"
+                                                                   :deps/root "no-clojurescript"}
+                                        ;; Use a Maven release once pkpkpk/fress#9 ships.
+                                        com.github.pkpkpk/fress {:git/url "https://github.com/whilo/fress"
+                                                                 :git/sha "38fcf59226c4c37e3baf86aefc221a5137633e7e"}}
+                        :jvm-opts ["-Xss32m"]}
            :benchmark {:extra-deps {metasoarous/oz {:mvn/version "2.0.0-alpha5"}
                                     org.clojure/tools.cli {:mvn/version "1.0.214"}}
                        :extra-paths ["benchmark/src"]

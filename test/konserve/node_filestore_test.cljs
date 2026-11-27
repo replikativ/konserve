@@ -228,6 +228,16 @@
 #!==================
 #! Serializers tests
 
+(deftest reopen-boring-file-store
+  (let [config {:backend :file :id (random-uuid) :path store-path
+                :config {:encoding {:serializer :BoringSerializer}}}
+        opts {:sync? true}
+        value {:items [:one 2 "café"]}]
+    (try
+      (k/assoc (k/create-store config opts) :item value opts)
+      (is (= value (k/get (k/connect-store config opts) :item nil opts)))
+      (finally (k/delete-store config opts)))))
+
 (deftest fressian-serializer-test
   (async done
          (go

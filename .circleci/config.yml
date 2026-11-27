@@ -13,6 +13,15 @@ orbs:
 # Runs with :zstd so the optional compressor is checked too; without it that
 # namespace fails to load and would be skipped silently.
 jobs:
+  clojurific:
+    docker:
+      - image: cimg/clojure:1.12-openjdk-21.0-node
+    steps:
+      - checkout
+      - run:
+          name: Run Konserve's ClojureScript suites on native Node ES modules
+          command: bin/test-clojurific
+
   reflection:
     docker:
       - image: clojure:temurin-21-tools-deps
@@ -39,6 +48,7 @@ workflows:
   build-test-and-deploy:
     jobs:
       - reflection
+      - clojurific
       - tools/setup:
           context: docker-deploy
           setup_cljs: true
@@ -67,6 +77,7 @@ workflows:
             branches:
               only: main
           requires:
+            - clojurific
             - tools/unittest
             - tools/cljstest
       - tools/release:
