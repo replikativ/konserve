@@ -36,6 +36,20 @@
      All operations must succeed or all must fail (all-or-nothing semantics).
      Returns a map of keys to results (typically true for each key)."))
 
+(defprotocol PBatchDelete
+  "Optional non-atomic batch deletion. This does not imply multi-key writes.
+   Results explicitly account for every requested key; transport errors throw."
+  (-supports-batch-delete? [this])
+  (-batch-delete [this keys opts]
+    "Return {:deleted #{logical-keys} :failed {logical-key diagnostic}}."))
+
+(defprotocol PKeyPage
+  "Optional bounded metadata enumeration. A nil cursor starts a scan; a nil
+   returned cursor ends it. Pages are not a transactional snapshot."
+  (-supports-key-pages? [this])
+  (-key-page [this cursor opts]
+    "Return {:keys [key-metadata ...] :cursor next-cursor-or-nil}."))
+
 (defprotocol PBinaryKeyValueStore
   "Allows binary data byte array storage."
   (-bget [this key locked-cb opts] "Calls locked-cb with a platform specific binary representation inside the lock, e.g. wrapped InputStream on the JVM and Blob in JavaScript. You need to properly close/dispose the object when you are done!")

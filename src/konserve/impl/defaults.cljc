@@ -18,20 +18,20 @@
                                              PMultiKeyEDNValueStore
                                              PWriteHookStore]]
    #?(:clj [konserve.nio-helpers :as nio])
-   [konserve.impl.storage-layout :refer [-streaming-binary-write? -atomic-move -create-store -store-exists?
-                                         PBackingOpen -open-store
-                                         -copy -create-blob -delete-blob -blob-exists?
-                                         -keys -sync-store
-                                         -migratable -migrate -handle-foreign-key
-                                         -close -get-lock -sync
-                                         -read-header -read-meta -read-value -read-binary
-                                         -write-header -write-meta -write-value -write-binary
-                                         PBackingLock -release
-                                         PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
-                                         PMultiReadBackingStore -multi-read-blobs
-                                         PReadMissSafe store-key-not-found?
-                                         default-version
-                                         parse-header create-header header-size]]
+   [konserve.impl.storage-layout :as layout :refer [-streaming-binary-write? -atomic-move -create-store -store-exists?
+                                                    PBackingOpen -open-store
+                                                    -copy -create-blob -delete-blob -blob-exists?
+                                                    -keys -sync-store
+                                                    -migratable -migrate -handle-foreign-key
+                                                    -close -get-lock -sync
+                                                    -read-header -read-meta -read-value -read-binary
+                                                    -write-header -write-meta -write-value -write-binary
+                                                    PBackingLock -release
+                                                    PMultiWriteBackingStore -multi-write-blobs -multi-delete-blobs
+                                                    PMultiReadBackingStore -multi-read-blobs
+                                                    PReadMissSafe store-key-not-found?
+                                                    default-version
+                                                    parse-header create-header header-size]]
    [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
                         :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
    [superv.async :refer [go-try- <?-]]
@@ -879,15 +879,14 @@
         ;; sentinel; everyone else keeps getting nil as before.
         (:not-found env))))))
 
-(defn list-keys
+(defn- list-key-metadata
   "Return all keys in the store."
   [{:keys [backing]}
-   serializers read-handlers write-handlers {:keys [sync? config] :as env}]
+   serializers read-handlers write-handlers {:keys [sync? config] :as env} store-keys]
   (async+sync
    sync? *default-sync-translation*
    (go-try-
-    (let [serializer (get serializers (:default-serializer env))
-          store-keys (<?- (-keys backing env))]
+    (let [serializer (get serializers (:default-serializer env))]
       (loop [keys  #{}
              [store-key & store-keys] store-keys]
         (if store-key
@@ -922,6 +921,14 @@
             (let [additional-keys (<?- (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
               (recur (into keys additional-keys) store-keys)))
           keys))))))
+
+(defn list-keys
+  "Return all keys in the store."
+  [{:keys [backing] :as store} serializers read-handlers write-handlers env]
+  (async+sync (:sync? env) *default-sync-translation*
+              (go-try-
+               (let [keys (<?- (-keys backing env))]
+                 (<?- (list-key-metadata store serializers read-handlers write-handlers env keys))))))
 
 (defn prepare-multi-assoc
   "Prepares multiple key-value pairs for writing to the backing store.
@@ -1165,6 +1172,44 @@
                   :sync? sync?
                   :buffer-size buffer-size
                   :msg {:type :read-all-keys-error}})))
+
+  protocols/PBatchDelete
+  (-supports-batch-delete? [_]
+    ;; Rename-mode backings may own backup/staging blobs as well. A raw batch
+    ;; must not bypass their recovery/locking discipline.
+    (and (:in-place? config) (satisfies? layout/PBatchDeleteBackingStore backing)))
+  (-batch-delete [_ keys opts]
+    (async+sync (:sync? opts) *default-sync-translation*
+                (go-try-
+                 (let [physical->logical (into {} (map (fn [k] [(key->store-key k) k])) keys)
+                       result (<?- (layout/-batch-delete-blobs backing (vec (clojure.core/keys physical->logical))
+                                                               (assoc opts :config config)))
+                       _ (when-not (and (set? (:deleted result)) (map? (:failed result))
+                                        (= (set (clojure.core/keys physical->logical))
+                                           (into (:deleted result) (clojure.core/keys (:failed result))))
+                                        (not-any? #(contains? (:failed result) %) (:deleted result)))
+                           (throw (ex-info "Backing batch deletion result is incomplete or malformed."
+                                           {:type :konserve/batch-delete-invalid-result})))]
+                   {:deleted (into #{} (map physical->logical) (:deleted result))
+                    :failed (into {} (map (fn [[k e]] [(physical->logical k) e])) (:failed result))}))))
+
+  protocols/PKeyPage
+  (-supports-key-pages? [_] (satisfies? layout/PKeyPageBackingStore backing))
+  (-key-page [this cursor opts]
+    (async+sync (:sync? opts) *default-sync-translation*
+                (go-try-
+                 (let [env (merge opts {:operation :read-meta :default-serializer default-serializer
+                                        :version version :compressor compressor :encryptor encryptor
+                                        :config config :buffer-size buffer-size
+                                        :msg {:type :read-key-page-error}})
+                       page (<?- (layout/-key-page-blobs backing cursor env))
+                       _ (when (or (not (map? page)) (not (sequential? (:keys page)))
+                                   (> (count (:keys page)) (:limit opts 1000))
+                                   (and (:cursor page) (= cursor (:cursor page))))
+                           (throw (ex-info "Backing metadata page is malformed or stalled."
+                                           {:type :konserve/key-page-invalid-result})))]
+                   {:keys (vec (<?- (list-key-metadata this serializers read-handlers write-handlers env (:keys page))))
+                    :cursor (:cursor page)}))))
 
   PConditionalWrite
   (-conditional-write-domain [_]
