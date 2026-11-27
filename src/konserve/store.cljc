@@ -382,16 +382,16 @@
 #?(:clj
    (defmethod -store-exists? :file
      [{:keys [path filesystem] :as config} opts]
-     (let [exists (konserve.filestore/store-exists? filesystem path)]
-       (if (:sync? opts)
-         exists
-         (go-try- exists)))))
+     #?(:jolt (konserve.filestore/run-file-op opts #(konserve.filestore/store-exists? filesystem path))
+        :clj (let [exists (konserve.filestore/store-exists? filesystem path)]
+               (if (:sync? opts) exists (go-try- exists))))))
 
 #?(:clj
    (defmethod -delete-store :file
      [{:keys [path filesystem] :as config} opts]
-     (let [res (konserve.filestore/delete-store filesystem path)]
-       (if (:sync? opts) res (go-try- res)))))
+     #?(:jolt (konserve.filestore/run-file-op opts #(konserve.filestore/delete-store filesystem path))
+        :clj (let [res (konserve.filestore/delete-store filesystem path)]
+               (if (:sync? opts) res (go-try- res))))))
 
 #?(:clj
    (defmethod -release-store :file

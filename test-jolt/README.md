@@ -1,6 +1,6 @@
 # Running Konserve on Jolt
 
-The memory store supports synchronous and asynchronous operations. The local file store supports synchronous operations on Linux/Chez. Use the public lifecycle API with an explicit serializer and pass `{:sync? true}` to file operations.
+The memory and local file stores support synchronous and asynchronous operations on Linux/Chez. File operations return channels by default. Pass `{:sync? true}` for a direct result. The public lifecycle accepts an explicit serializer.
 
 ```clojure
 (require '[konserve.core :as k])
