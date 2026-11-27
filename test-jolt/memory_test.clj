@@ -27,6 +27,17 @@
         (is (= {} (result (k/multi-get store [:a :b] opts))))
         (finally (result (k/delete-store config opts)))))))
 
+(deftest repeated-key-lock-releases
+  (let [store {:locks (atom {})}]
+    (dotimes [_ 16]
+      (let [lock (k/get-lock store :key)]
+        (try
+          (is (= :unlocked (async/poll! lock)))
+          (is (true? (async/offer! lock :unlocked)))
+          (is (not (async/offer! lock :unlocked)))
+          (finally (k/release-lock store :key)))))
+    (is (empty? @(:locks store)))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'memory-test)]
     (shutdown-agents)

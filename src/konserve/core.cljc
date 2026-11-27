@@ -98,7 +98,8 @@
 (defn- unlocked-chan
   "A fresh channel preloaded with one :unlocked semaphore token."
   []
-  (let [c (chan)]
+  ;; The last holder can return its token even when no taker remains.
+  (let [c (chan 1)]
     (put! c :unlocked)
     c))
 
