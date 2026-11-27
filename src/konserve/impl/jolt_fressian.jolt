@@ -1,0 +1,22 @@
+(ns konserve.impl.jolt-fressian
+  (:require [fress.api :as f] [fress.reader :as r] [fress.writer :as w]))
+
+(defn- write-vector [writer v]
+  (w/writeTag writer "pvec" 2)
+  (w/writeInt writer (count v))
+  (doseq [x v] (w/writeObject writer x)))
+
+(defn- read-vector [reader _ _]
+  (vec (repeatedly (r/readInt reader) #(r/readObject reader))))
+
+(defn- require-empty [handlers]
+  (when (seq @handlers)
+    (throw (ex-info "Custom Fressian handlers are unavailable on Jolt" {}))))
+
+(defn read-value [in handlers custom]
+  (require-empty handlers)
+  (f/read (.readAllBytes in) :handlers (merge {"pvec" read-vector} custom)))
+
+(defn write-value [out handlers custom value]
+  (require-empty handlers)
+  (.write out (f/write value :handlers (merge {(type []) write-vector} custom))))

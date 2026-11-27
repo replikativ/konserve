@@ -1,0 +1,145 @@
+(ns konserve.filestore
+  (:require [clojure.core.async :as async]
+            [konserve.impl.defaults :as defaults]
+            [konserve.impl.storage-layout :as l]
+            [konserve.protocols :as p])
+  (:import [java.io ByteArrayInputStream File RandomAccessFile]
+           [java.nio.channels FileChannel]
+           [java.nio.file Files StandardOpenOption OpenOption CopyOption StandardCopyOption]
+           [java.util.concurrent.locks ReentrantLock]))
+
+(def ^:private writable (into-array OpenOption [StandardOpenOption/WRITE StandardOpenOption/CREATE]))
+(def ^:private replace-options (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
+(def ^:private stripes (vec (repeatedly 64 #(ReentrantLock.))))
+
+(defn- sync! [env]
+  (when-not (:sync? env)
+    (throw (ex-info "Jolt file storage requires {:sync? true}" {:type :konserve/unsupported-mode}))))
+
+(defn- read-bytes [file offset length]
+  (when-not (<= 0 length (- (.length file) offset))
+    (throw (ex-info "Truncated Konserve blob" {:offset offset :length length})))
+  (let [bs (byte-array length)]
+    (.seek file offset)
+    (.readFully file bs)
+    bs))
+
+(defn- payload [file meta-size env]
+  (let [p (+ (:header-size env) meta-size)]
+    (read-bytes file p (- (.length file) p))))
+
+(defrecord Blob [file channel guard]
+  l/PBackingBlob
+  (-close [_ _] (try (.close file) (finally (try (.close channel) (finally (.unlock guard))))))
+  (-sync [_ _] (.force channel true))
+  (-get-lock [_ _] (let [lock (.lock channel)]
+                     (reify l/PBackingLock (-release [_ _] (.release lock)))))
+  (-read-header [_ _] (read-bytes file 0 (min l/header-size (.length file))))
+  (-read-meta [_ size env] (read-bytes file (:header-size env) size))
+  (-read-value [_ size env] (payload file size env))
+  (-read-binary [_ size cb env]
+    (let [bs (payload file size env)]
+      (with-open [in (ByteArrayInputStream. bs)] (cb {:input-stream in :size (alength bs)}))))
+  (-write-header [_ bs _] (.seek file 0) (.write file bs))
+  (-write-meta [_ bs _] (.seek file l/header-size) (.write file bs))
+  (-write-value [_ bs size _] (.seek file (+ l/header-size size)) (.write file bs))
+  (-write-binary [_ size bs _]
+    (.seek file (+ l/header-size size))
+    (.write file bs)))
+
+(defn- open-blob [base k]
+  ;; Group the data, staging and CAS paths for a key. POSIX record locks may
+  ;; be released by closing another descriptor for the same inode in-process.
+  (let [guard (nth stripes (mod (hash (first (.split k "\\."))) (count stripes)))
+        f (File. base k)]
+    (.lock guard)
+    (try (let [channel (FileChannel/open (.toPath f) writable)]
+           (try (->Blob (RandomAccessFile. f "rw") channel guard)
+                (catch Throwable e (.close channel) (throw e))))
+         (catch Throwable e (.unlock guard) (throw e)))))
+
+(defn- delete-directory! [base]
+  (let [dir (File. base)
+        path (.toPath dir)]
+    (when (.exists dir)
+      (when-not (Files/isSymbolicLink path)
+        (with-open [entries (Files/newDirectoryStream path)]
+          (doseq [entry entries] (Files/delete entry))))
+      (Files/delete path)
+      (when-let [parent (.getParent (.toAbsolutePath path))]
+        (with-open [channel (FileChannel/open parent)] (.force channel true))))))
+
+(defrecord Backing [base mode]
+  p/PConditionalWrite
+  (-conditional-write-domain [_] :machine)
+  l/PBackingStore
+  (-create-blob [_ k env] (sync! env) (open-blob base k))
+  (-blob-exists? [_ k env] (sync! env) (.exists (File. base k)))
+  (-delete-blob [_ k env] (sync! env) (Files/deleteIfExists (.toPath (File. base k))))
+  (-migratable [_ _ _ _] nil)
+  (-migrate [_ _ _ _ _ _ _] (throw (ex-info "Unsupported legacy file layout" {})))
+  (-handle-foreign-key [_ _ _ _ _ _] nil)
+  (-copy [_ _ _ _] (throw (ex-info "In-place file updates are unavailable" {})))
+  (-atomic-move [_ from to env]
+    (sync! env)
+    (Files/move (.toPath (File. base from)) (.toPath (File. base to)) replace-options))
+  (-create-store [_ env]
+    (sync! env)
+    (let [dir (File. base)]
+      (when (or (= :connect mode)
+                (not (or (.mkdirs dir) (and (= mode :ensure) (.isDirectory dir)))))
+        (throw (ex-info "Cannot open file store" {:path base :mode mode})))))
+  (-delete-store [_ env] (sync! env) (delete-directory! base))
+  (-store-exists? [_ env]
+    (sync! env)
+    (let [exists (.isDirectory (File. base))]
+      (when (and exists (= mode :create)) (throw (ex-info "File store already exists" {:path base})))
+      exists))
+  (-sync-store [_ env]
+    (sync! env)
+    (with-open [dir (FileChannel/open (.toPath (File. base)))] (.force dir true)))
+  (-keys [_ env]
+    (sync! env)
+    (with-open [entries (Files/newDirectoryStream (.toPath (File. base)))]
+      (mapv #(str (.getFileName %)) entries))))
+
+(defn- local-path! [filesystem path]
+  (when filesystem
+    (throw (ex-info "Jolt supports only the local filesystem" {:path path})))
+  (when-not (and (string? path) (seq path))
+    (throw (ex-info "Expected a nonempty store path" {:path path})))
+  path)
+
+(defn store-exists? [filesystem path]
+  (.isDirectory (File. (local-path! filesystem path))))
+
+(defn delete-store [filesystem path]
+  (delete-directory! (local-path! filesystem path)))
+
+(defn- submit-blocking [f]
+  (async/thread (try (f) (catch Throwable e e))))
+
+(defn run-file-op [opts f]
+  (if (:sync? opts) (f) (submit-blocking f)))
+
+(defn- submit-operation [run env]
+  ;; Keep blob locks on their acquiring thread until the binary callback finishes.
+  (submit-blocking
+   #(run (cond-> (assoc env :sync? true)
+           (:locked-cb env)
+           (assoc :locked-cb (fn [input] (async/<!! ((:locked-cb env) input))))))))
+
+(defn open-store [{:keys [path config] :as settings} opts mode]
+  (run-file-op opts
+               (fn []
+                 (local-path! (:filesystem settings) path)
+                 (when (:in-place? config)
+                   (throw (ex-info "Jolt requires staged writes on the local filesystem" {})))
+                 (defaults/connect-default-store
+                  (assoc (->Backing path mode) ::defaults/submit-blocking submit-operation)
+                  (assoc settings :opts (assoc opts :sync? true))))))
+
+(defn connect-fs-store
+  "Open or create a staged local filestore."
+  [path & {:as settings}]
+  (open-store (assoc settings :path path) (:opts settings) :ensure))

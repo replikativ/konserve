@@ -32,8 +32,8 @@
                                          PReadMissSafe store-key-not-found?
                                          default-version
                                          parse-header create-header header-size]]
-   [konserve.utils  #?@(:clj [:refer [async+sync *default-sync-translation*]]
-                        :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync]])]
+   [konserve.utils  #?@(:clj [:refer [async+sync with-backing-io *default-sync-translation*]]
+                        :cljs [:refer [*default-sync-translation*] :refer-macros [async+sync with-backing-io]])]
    [superv.async :refer [go-try- <?-]]
    [replikativ.logging :as log])
   #?(:clj
@@ -380,8 +380,7 @@
             (metrics/finish! config operation :io t0 e)
             (throw e))))))))
 
-(defn delete-blob
-  "Remove the key's blob from the backing store — timed as `:delete`."
+(defn- delete-blob-timed
   [backing env]
   (let [t0 (metrics/start)]
     (if-not t0
@@ -396,6 +395,11 @@
           (catch #?(:clj Throwable :cljs :default) e
             (metrics/finish! (:config env) :delete :io t0 e)
             (throw e))))))))
+
+(defn delete-blob
+  "Remove the key's blob from the backing store — timed as `:delete`."
+  [backing env]
+  (with-backing-io [env backing] (delete-blob-timed backing env)))
 
 (def ^:const max-lock-attempts 100)
 
@@ -526,8 +530,18 @@
                                :store-key store-key}))
               (recur (inc i))))))))))
 
-(defn io-operation
-  "Read/Write blob. For better understanding use the flow-chart of konserve."
+(defn- skip-target-blob?
+  "A staged write to a key already probed absent opens only its staging blob.
+   Creating the target here would expose an empty key if staging fails."
+  [env target-exists? exists-under-lock? attempt]
+  (if (:expected-revision env)
+    (not exists-under-lock?)
+    (and (#{:write-edn :write-binary} (:operation env))
+         (not (get-in env [:config :in-place?]))
+         (zero? attempt)
+         (false? target-exists?))))
+
+(defn- run-io-operation
   [{:keys [backing]} serializers read-handlers write-handlers
    {:keys [key-vec operation default-serializer sync? config expected-revision] :as env}]
   (async+sync
@@ -772,7 +786,7 @@
                                 ;;
                                 ;; Not creating it retires the ghost, the cleanup, and
                                 ;; the race in the cleanup together.
-                                skip-blob? (and expected-revision (not exists-under-lock?))
+                                skip-blob? (skip-target-blob? env store-key-exists? exists-under-lock? attempt)
                                 blob (when-not skip-blob?
                                        (<?- (-create-blob backing store-key env)))
                                 ;; In an atom, not a plain binding: the target is
@@ -879,8 +893,13 @@
         ;; sentinel; everyone else keeps getting nil as before.
         (:not-found env))))))
 
-(defn list-keys
-  "Return all keys in the store."
+(defn io-operation
+  "Read/Write blob. For better understanding use the flow-chart of konserve."
+  [store serializers read-handlers write-handlers env]
+  (with-backing-io [env (:backing store)]
+    (run-io-operation store serializers read-handlers write-handlers env)))
+
+(defn- list-store-keys
   [{:keys [backing]}
    serializers read-handlers write-handlers {:keys [sync? config] :as env}]
   (async+sync
@@ -922,6 +941,12 @@
             (let [additional-keys (<?- (-handle-foreign-key backing store-key serializer read-handlers write-handlers env))]
               (recur (into keys additional-keys) store-keys)))
           keys))))))
+
+(defn list-keys
+  "Return all keys in the store."
+  [store serializers read-handlers write-handlers env]
+  (with-backing-io [env (:backing store)]
+    (list-store-keys store serializers read-handlers write-handlers env)))
 
 (defn prepare-multi-assoc
   "Prepares multiple key-value pairs for writing to the backing store.
@@ -993,13 +1018,14 @@
                          read-handlers write-handlers buffer-size locks config write-hooks]
   PEDNKeyValueStore
   (-exists? [_ key env]
-    (async+sync
-     (:sync? env) *default-sync-translation*
-     (go-try-
-      (let [store-key (key->store-key key)]
-        (or (<?- (-blob-exists? backing store-key env))
-            (<?- (-migratable backing key store-key env))
-            false)))))
+    (with-backing-io [env backing]
+      (async+sync
+       (:sync? env) *default-sync-translation*
+       (go-try-
+        (let [store-key (key->store-key key)]
+          (or (<?- (-blob-exists? backing store-key env))
+              (<?- (-migratable backing key store-key env))
+              false))))))
   (-get-in [this key-vec not-found opts]
     (let [{:keys [sync? with-revision?]} opts]
       (async+sync

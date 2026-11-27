@@ -3,6 +3,17 @@
             [konserve.protocols :as protocols]
             #?(:clj [replikativ.logging :as log])))
 
+#?(:clj
+   (defmacro with-backing-io
+     "Let a blocking backing run a complete async operation on its own worker."
+     [[env backing] & body]
+     #?(:jolt `(let [run# (fn [~env] ~@body)]
+                 (if-let [submit# (when-not (:sync? ~env)
+                                    (:konserve.impl.defaults/submit-blocking ~backing))]
+                   (submit# run# ~env)
+                   (run# ~env)))
+        :clj `(do ~@body))))
+
 (defn invert-map [m]
   (->> (map (fn [[k v]] [v k]) m)
        (into {})))

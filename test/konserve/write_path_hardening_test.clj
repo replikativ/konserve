@@ -29,6 +29,18 @@
   (let [r (k/bget store key (kb/to-bytes opts) opts)]
     (if (:sync? opts) r (<!! r))))
 
+(deftest failed-staged-write-preserves-the-target
+  (let [path (fresh-path)
+        opts {:sync? true}
+        store (connect-fs-store path :opts opts)]
+    (try
+      (is (thrown? Exception (k/bassoc store :new 7 opts)))
+      (is (false? (k/exists? store :new opts)))
+      (k/assoc store :existing :original opts)
+      (is (thrown? Exception (k/bassoc store :existing 7 opts)))
+      (is (= :original (k/get store :existing nil opts)))
+      (finally (delete-store path)))))
+
 (deftest short-reads-do-not-shift-the-value
   (testing "a binary written from a stream that returns short reads is intact (sync and async)"
     (doseq [sync? [true false]]
