@@ -51,7 +51,17 @@
       (let [restored (k/get (k/connect-store c o) :row nil o)]
         (assert (instance? Datum restored))
         (assert (= datum restored))))
-    (assert (= #{:row :counter} (set (map :key (k/keys s o)))))
+    (let [id (random-uuid)
+          tags (with-meta #{'example/tag :active} {:source 'example/writer})]
+      (k/assoc s :payload {:id id :tags tags :bytes (byte-array [0 42 127])} o)
+      (let [restored (k/get (k/connect-store c o) :payload nil o)]
+        (assert (= id (:id restored)))
+        (assert (set? (:tags restored)))
+        (assert (= tags (:tags restored)))
+        (assert (= (meta tags) (meta (:tags restored))))
+        (assert (bytes? (:bytes restored)))
+        (assert (= [0 42 127] (vec (:bytes restored))))))
+    (assert (= #{:payload :row :counter} (set (map :key (k/keys s o)))))
     (assert (k/dissoc s :counter o))
     (assert (not (k/exists? s :counter o)))
     (k/delete-store c o)

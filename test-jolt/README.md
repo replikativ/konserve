@@ -14,7 +14,7 @@ The file store stages each write in the store directory, forces the file before 
 
 ## Runtime and dependencies
 
-Use [Jolt 0.8.31](https://github.com/jolt-lang/jolt/releases/tag/v0.8.31) on Linux/Chez. The [consumer profile](deps.edn) selects Jolt's core.async and pins the time, Fressian and upstream [crypto 0.4.0](https://github.com/jolt-lang/crypto/tree/v0.4.0) providers. Boring 0.1.32 comes from Konserve's Maven dependencies. To test a packaged jar, replace the Konserve local root with the jar path and keep the exclusions.
+Use [Jolt 0.8.31](https://github.com/jolt-lang/jolt/releases/tag/v0.8.31) on Linux/Chez. The [consumer profile](deps.edn) selects Jolt's core.async and pins the time, Fressian and upstream [crypto 0.4.0](https://github.com/jolt-lang/crypto/tree/v0.4.0) providers. Boring 0.1.35 comes from Konserve's Maven dependencies. To test a packaged jar, replace the Konserve local root with the jar path and keep the exclusions.
 
 ## Verification
 
