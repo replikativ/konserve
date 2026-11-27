@@ -526,6 +526,17 @@
                                :store-key store-key}))
               (recur (inc i))))))))))
 
+(defn- skip-target-blob?
+  "A staged write to a key already probed absent opens only its staging blob.
+   Creating the target here would expose an empty key if staging fails."
+  [env target-exists? exists-under-lock? attempt]
+  (if (:expected-revision env)
+    (not exists-under-lock?)
+    (and (#{:write-edn :write-binary} (:operation env))
+         (not (get-in env [:config :in-place?]))
+         (zero? attempt)
+         (false? target-exists?))))
+
 (defn io-operation
   "Read/Write blob. For better understanding use the flow-chart of konserve."
   [{:keys [backing]} serializers read-handlers write-handlers
@@ -772,7 +783,7 @@
                                 ;;
                                 ;; Not creating it retires the ghost, the cleanup, and
                                 ;; the race in the cleanup together.
-                                skip-blob? (and expected-revision (not exists-under-lock?))
+                                skip-blob? (skip-target-blob? env store-key-exists? exists-under-lock? attempt)
                                 blob (when-not skip-blob?
                                        (<?- (-create-blob backing store-key env)))
                                 ;; In an atom, not a plain binding: the target is
