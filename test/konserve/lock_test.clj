@@ -8,7 +8,7 @@
    datahike's content-addressed key space, which produced ~82k retained
    channels on a single long-lived store)."
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.core.async :refer [<!! <! go timeout alts!!]]
+            [clojure.core.async :refer [<!! <! go timeout alts!! poll! offer!]]
             [konserve.core :refer [go-locked get-lock release-lock locked]]
             [konserve.memory :refer [new-mem-store]]))
 
@@ -29,6 +29,15 @@
       (testing "many DISTINCT keys do not accumulate (the heap-leak shape)"
         (dotimes [i 500] (<!! (go-locked store (str "key-" i) :work)))
         (is (zero? (count @locks)))))))
+
+(deftest last-holder-can-return-its-token-without-a-waiter
+  (let [store (<!! (new-mem-store))
+        lock (get-lock store :k)]
+    (try
+      (is (= :unlocked (poll! lock)))
+      (is (true? (offer! lock :unlocked)))
+      (is (not (offer! lock :unlocked)))
+      (finally (release-lock store :k)))))
 
 (deftest get-release-lock-refcount
   (testing "explicit get-lock/release-lock bracket reclaims only at refcount 0"
