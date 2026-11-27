@@ -5,7 +5,7 @@
             [konserve.core :as k]
             [konserve.utils :refer [multi-key-capable?]]
             [konserve.indexeddb :as idb]
-            [konserve.impl.storage-layout :refer [PReadMissSafe]]
+            [konserve.impl.storage-layout :as layout :refer [PReadMissSafe]]
             [konserve.protocols :as p]
             [konserve.tests.cache :as ct]
             [konserve.tests.encryptor :as et]
@@ -232,6 +232,102 @@
              (<! (.close (:backing store)))
              (<! (idb/delete-idb db-name))
              (done)))))
+
+(deftest ^:browser multi-read-snapshot-test
+  (async done
+         (go
+           (let [db-name (str "multi-read-snapshot-" (random-uuid))
+                 db (<! (idb/connect-to-idb db-name))
+                 opts {:sync? false}
+                 bytes (vec (range (+ layout/header-size 5)))
+                 original (js/Blob. #js[(js/Uint8Array. (clj->js bytes))])
+                 replacement (js/Blob. #js[(js/Uint8Array. #js[99 98 97])])
+                 proto (.-prototype js/IDBObjectStore)
+                 original-get (.-get proto)
+                 reads (atom [])]
+             (try
+               (<! (idb/write-blob db "changed" original))
+               (<! (idb/write-blob db "deleted" original))
+               (set! (.-get proto)
+                     (fn [key]
+                       (this-as this
+                                (when (= db-name (.. this -transaction -db -name))
+                                  (swap! reads conj key))
+                                (.call original-get this key))))
+          ;; The channel completes only after the atomic read transaction does.
+          ;; Changes below therefore deterministically precede materialization.
+               (let [handles (<! (idb/multi-read-blobs db ["changed" "deleted" "absent"]))
+                     changed (get handles "changed")
+                     deleted (get handles "deleted")]
+                 (is (= #{"changed" "deleted"} (set (keys handles))))
+                 (is (= ["changed" "deleted" "absent"] @reads)
+                     "one physical get per requested key")
+                 (<! (idb/write-blob db "changed" replacement))
+                 (<! (idb/multi-delete-blobs db ["deleted"]))
+            ;; The delete helper probes too; measure only reads of the handles.
+                 (reset! reads [])
+                 (is (= (subvec bytes 0 layout/header-size)
+                        (vec (<! (layout/-read-header changed opts)))))
+                 (is (= (subvec bytes layout/header-size)
+                        (vec (<! (layout/-read-value changed 0 opts)))))
+                 (is (= bytes
+                        (<! (layout/-read-binary deleted 0
+                                                 (fn [stream]
+                                                   (go (vec (<! (idb/read-web-stream (assoc stream :offset 0))))))
+                                                 opts)))
+                     "binary reads use the snapshot even after deletion")
+                 (is (empty? @reads) "materializing captured handles never rereads IndexedDB")
+                 (<! (layout/-close changed opts))
+                 (<! (layout/-close deleted opts)))
+               (catch :default e
+                 (is false (str "snapshot test failed: " e)))
+               (finally
+                 (set! (.-get proto) original-get)
+                 (.close db)
+                 (<! (idb/delete-idb db-name))
+                 (done)))))))
+
+(deftest ^:browser multi-read-snapshot-lifecycle-test
+  (async done
+         (go
+           (let [db-name (str "multi-read-lifecycle-" (random-uuid))
+                 db (<! (idb/connect-to-idb db-name))
+                 opts {:sync? false}
+                 bytes (vec (range (+ layout/header-size 5)))
+                 original (js/Blob. #js[(js/Uint8Array. (clj->js bytes))])]
+             (try
+               (<! (idb/write-blob db "key" original))
+               (let [handle (get (<! (idb/multi-read-blobs db ["key"])) "key")]
+                 (<! (layout/-sync handle opts))
+                 (let [blob (<! (idb/read-blob db "key"))
+                       buffer (promise-chan)]
+                   (.then (.arrayBuffer blob) #(put! buffer %) #(put! buffer %))
+                   (is (= bytes (vec (js/Uint8Array. (<! buffer))))
+                       "flushing an unread snapshot preserves its bytes"))
+            ;; Populate buf as well: write initialization must discard both.
+                 (<! (layout/-read-header handle opts))
+                 (<! (layout/-write-header handle (js/Uint8Array. #js[7 8]) opts))
+                 (<! (layout/-write-meta handle (js/Uint8Array. #js[9]) opts))
+                 (<! (layout/-write-value handle (js/Uint8Array. #js[10]) 1 opts))
+                 (is (nil? (:snapshot-blob handle)) "write initialization releases the snapshot")
+                 (<! (layout/-sync handle opts))
+                 (let [blob (<! (idb/read-blob db "key"))
+                       buffer (promise-chan)]
+                   (.then (.arrayBuffer blob) #(put! buffer %) #(put! buffer %))
+                   (is (= [7 8 9 10] (vec (js/Uint8Array. (<! buffer))))
+                       "writing a snapshot handle flushes new components"))
+                 (<! (layout/-close handle opts))
+                 (is (nil? (:snapshot-blob handle))))
+               (let [handle (get (<! (idb/multi-read-blobs db ["key"])) "key")]
+                 (is (instance? js/Blob (:snapshot-blob handle)))
+                 (<! (layout/-close handle opts))
+                 (is (nil? (:snapshot-blob handle)) "close releases an unread snapshot"))
+               (catch :default e
+                 (is false (str "snapshot lifecycle test failed: " e)))
+               (finally
+                 (.close db)
+                 (<! (idb/delete-idb db-name))
+                 (done)))))))
 
 ;; Test using k/create-store multimethod dispatch path (issue #134)
 (deftest ^:browser multi-key-via-create-store-test
