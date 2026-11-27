@@ -248,7 +248,7 @@ The file store supports:
 *** File Store (Jolt)
 
 The synchronous local file backend uses the same disk layout as the JVM and
-Node stores. It currently requires a patched Jolt on Linux/Chez. See the
+Node stores. It runs on Jolt 0.8.31 on Linux/Chez. See the
 [[file:test-jolt/README.md][Jolt setup and interoperability checks]] for dependencies and supported operations.
 
 *** File Store (Node.js)

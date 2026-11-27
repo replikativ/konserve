@@ -3,8 +3,8 @@
                                  :exclusions [org.clojure/clojurescript org.clojure/core.async]}
         jolt-lang/time {:git/url "https://github.com/jolt-lang/time"
                         :git/sha "8948149534722ac791ca1d5db9ff9ca941410012"}
-        jolt-lang/crypto {:git/url "https://github.com/whilo/crypto"
-                          :git/sha "1c787803b8d74cd0864b2cbd87d2d7ff0a5c00fa"}
+        jolt-lang/crypto {:git/url "https://github.com/jolt-lang/crypto"
+                          :git/sha "8eaae9fa8965f6b2689604d6be3b0ad436bbfb33"}
         jolt-lang/fressian {:git/url "https://github.com/jolt-lang/jolt-fressian"
                             :git/sha "2cae99751bd6a0a2e32dd54e9af8f5c93cef0519"}}
  :aliases {:test {:main-opts ["-m" "memory-test"]}}}

@@ -14,7 +14,7 @@ The file store stages each write in the store directory, forces the file before 
 
 ## Runtime and dependencies
 
-Use a Jolt build with [primitive-array dispatch](https://github.com/jolt-lang/jolt/pull/1900) and [FileChannel.force](https://github.com/jolt-lang/jolt/pull/1902). The [consumer profile](deps.edn) selects Jolt's core.async and pins the time, Fressian and [patched crypto](https://github.com/jolt-lang/crypto/pull/23) providers. Boring 0.1.32 comes from Konserve's Maven dependencies. To test a packaged jar, replace the Konserve local root with the jar path and keep the exclusions. This requires Jolt's [local-jar POM exclusions fix](https://github.com/jolt-lang/jolt/pull/1903).
+Use [Jolt 0.8.31](https://github.com/jolt-lang/jolt/releases/tag/v0.8.31) on Linux/Chez. The [consumer profile](deps.edn) selects Jolt's core.async and pins the time, Fressian and upstream [crypto 0.4.0](https://github.com/jolt-lang/crypto/tree/v0.4.0) providers. Boring 0.1.32 comes from Konserve's Maven dependencies. To test a packaged jar, replace the Konserve local root with the jar path and keep the exclusions.
 
 ## Verification
 
@@ -22,4 +22,4 @@ Use a Jolt build with [primitive-array dispatch](https://github.com/jolt-lang/jo
 - From the repository root run `interop/check-jolt-filestore.sh` for the public file lifecycle and full JVM/Node/Jolt store-directory parity with Boring and Fressian, including shorter replacements. The gate uses the Clojure CLI and Node.
 - Run `interop/check-jolt-contention.sh` for competing JVM/Jolt conditional writes and read-modify-write increments. Both processes reopen the store and check the final value.
 
-Set `JOLT` to the absolute path to the patched runtime for the shell checks.
+Set `JOLT` to the absolute path to the Jolt executable for the shell checks.
