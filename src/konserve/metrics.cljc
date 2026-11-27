@@ -43,8 +43,7 @@
   (:require [clojure.core.async]
             [konserve.protocols :as p]
             [replikativ.logging :as log])
-  #?(:cljs (:require-macros [konserve.metrics :refer [measured measured-go]]
-                            [clojure.core.async :refer [go]])))
+  #?(:cljs (:require-macros [konserve.metrics :refer [measured measured-go]])))
 
 (defonce ^{:doc "id -> (fn [event]). See `add-sink!`."}
   sinks (atom {}))

@@ -262,6 +262,19 @@ For Node.js environments, require the Node.js-specific file store:
     (def my-db (<! (k/create-store config {:sync? false}))))
 #+END_SRC
 
+**** Clojurific on Node
+
+Clojurific can use the same =konserve.core= and =konserve.node-filestore=
+namespaces. For the Clojure CLI, the =:clojurific= alias in [[file:deps.edn][deps.edn]]
+selects the ES module compiler and pins the [[https://github.com/pkpkpk/fress/pull/9][Fress signed BigInt fix]].
+Apply the same dependency overrides in the consuming application.
+
+The Node backend and its =cljs-node-io= dependency use CommonJS =require=
+during initialization. Preload [[file:test-clojurific/node-require.mjs][the Node bridge]] before loading the compiled
+entry module (for example, =node --import ./node-require.mjs app.js=).
+Run =bin/test-clojurific= to exercise the memory store, Node filestore and
+Boring serializer under Clojurific.
+
 *** IndexedDB (Browser)
 
 [[https://developer.mozilla.org/en-US/docs/IndexedDB][IndexedDB]] backend for ClojureScript browser applications. Async-only, must be explicitly required.

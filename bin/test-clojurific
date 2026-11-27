@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+clojure -M:clojurific -m cljf.esm build '{:main konserve.clojurific-runner :output-dir "target/clojurific"}'
+node --import ./test-clojurific/node-require.mjs target/clojurific/konserve/clojurific_runner.js
