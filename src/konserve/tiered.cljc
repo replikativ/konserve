@@ -384,13 +384,13 @@
    (defn- detached-fill!
      "Run one detached read-through fill on the JVM. Returns its go channel.
 
-      It PARKS on the cache lock. The fill used to run `populate-frontend` in
-      the reader's mode, and for a synchronous read that took the lock with a
-      blocking take inside this go block: while an asynchronous holder kept
-      the lock, each cold read pinned a core.async dispatch thread, and the
-      holder needed one to release it, so a burst of cold reads stalled the
-      whole pool. The frontend write itself still runs in the reader's mode, so
-      a frontend that only supports synchronous writes still warms."
+      For a SYNCHRONOUS read. It parks on the cache lock. The fill used to run
+      `populate-frontend` in the reader's mode, which for a synchronous read
+      took the lock with a blocking take inside this go block: while an
+      asynchronous holder kept the lock, each cold read pinned a core.async
+      dispatch thread, and the holder needed one to release it, so a burst of
+      cold reads stalled the whole pool. The frontend write itself is still
+      synchronous, as the reader asked."
      [frontend-store cache-lock cache-generation observed-generation
       populate-fn hook-event opts]
      (go
@@ -408,9 +408,7 @@
                filled? (when acquired?
                          (try
                            (when (= observed-generation @cache-generation)
-                             (if (:sync? opts)
-                               (populate-fn)
-                               (<?- (populate-fn)))
+                             (populate-fn)
                              true)
                            (finally
                              (async/put! cache-lock :unlocked))))]
@@ -431,19 +429,20 @@
     (if (:await-read-through? opts)
       (fill)
       (do
-        #?(:clj
-           (detached-fill! frontend-store cache-lock cache-generation observed-generation
-                           populate-fn hook-event opts)
-           ;; On ClojureScript a synchronous fill takes the lock with `poll!`
-           ;; and holds it only for its synchronous frontend write; it never
-           ;; waits, so it cannot pin anything.
-           :cljs
-           (go
-             (try
-               (<?- (fill))
-               (catch js/Error e
-                 (log/debug :konserve/tiered-frontend-populate-failed
-                            {:event hook-event :error e})))))
+        ;; Only a synchronous read on the JVM needs `detached-fill!`: its fill
+        ;; would wait for the lock with a blocking take. An asynchronous fill
+        ;; already parks, and on ClojureScript a synchronous fill takes the
+        ;; lock with `poll!` and never waits.
+        (if #?(:clj (:sync? opts) :cljs false)
+          #?(:clj (detached-fill! frontend-store cache-lock cache-generation observed-generation
+                                  populate-fn hook-event opts)
+             :cljs nil)
+          (go
+            (try
+              (<?- (fill))
+              (catch #?(:clj Exception :cljs js/Error) e
+                (log/debug :konserve/tiered-frontend-populate-failed
+                           {:event hook-event :error e})))))
         ;; The caller uniformly awaits this function. Deliver an immediate
         ;; completion in ordinary mode while the detached fill continues.
         (async+sync (:sync? opts) *default-sync-translation* (go-try- true))))))

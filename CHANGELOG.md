@@ -26,14 +26,15 @@ All notable, user-visible changes to konserve are documented here.
   site.
 
 ### Fixed
-- **A detached tiered cache fill no longer blocks a core.async dispatch thread on the cache lock (JVM).**
+- **A synchronous read's detached tiered cache fill no longer blocks a core.async dispatch thread on its store's cache lock (JVM).**
   A read that missed the frontend started a detached cache fill that, for a
   synchronous read, took the tiered cache lock with a blocking take inside a
   `go` block. While an asynchronous operation held the lock, each cold read
   pinned a dispatch thread; enough of them pinned the whole pool, and the
-  holder could not release the lock. A detached fill now parks on the lock (at
-  most 512 per store; beyond that a fill is skipped and the next miss reads
-  through again) and still writes the frontend in the reader's mode. Still
+  holder could not release the lock. Such a fill now parks on the lock (at most
+  512 per store; beyond that a fill is skipped and the next miss reads through
+  again) and still writes the frontend synchronously. Asynchronous reads are
+  unchanged. Still
   blocking while the lock is held: synchronous work called inside a `go`
   block (an awaited fill, a write-through write, a hook's synchronous write),
   including a synchronous fill into a frontend that is itself a tiered store.

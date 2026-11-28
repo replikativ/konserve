@@ -31,7 +31,9 @@
             core.async dispatch thread, and a burst of cold reads stalled the
             whole pool. Checked by looking at the dispatch threads rather than
             by stalling the pool, which would strand the rest of the suite."
-    (doseq [sync? [true false]]
+    ;; async first: if the sync case pins the pool (the defect), the test
+    ;; stops right there instead of running on into a stalled pool
+    (loop [[sync? & more] [false true]]
       (let [frontend (new-mem-store (atom {}) {:sync? true})
             backend (new-mem-store (atom {}) {:sync? true})
             store (tiered/connect-tiered-store frontend backend :opts {:sync? true})
@@ -47,9 +49,11 @@
                         (a/<!! (k/get store kk nil {:sync? false})))))
             "the read itself answers")
           (Thread/sleep 300)
+          (is (not-any? #(k/exists? frontend % {:sync? true}) ks)
+              "no fill lands while the lock is held")
           (is (zero? (dispatch-threads-blocked-on-the-lock))
               (str ":sync? " sync? ": no dispatch thread waits for the lock"))
-          (finally (a/>!! lock :unlocked)))
+          (finally (a/offer! lock :unlocked)))
         (let [deadline (+ (System/currentTimeMillis) 5000)]
           (while (and (< (count (filter #(k/exists? frontend % {:sync? true}) ks)) (count ks))
                       (< (System/currentTimeMillis) deadline))
@@ -57,7 +61,9 @@
         (is (= (count ks) (count (filter #(k/exists? frontend % {:sync? true}) ks)))
             "the fills complete once the lock is free")
         (Thread/sleep 100)
-        (is (= 1 (tokens lock)) "and leave exactly one lock token")))))
+        (is (= 1 (tokens lock)) "and leave exactly one lock token")
+        (when (and (seq more) (zero? (dispatch-threads-blocked-on-the-lock)))
+          (recur more))))))
 
 (deftest a-frontend-hook-may-write-to-the-store
   (testing "a detached fill runs the frontend's write hooks after releasing the
