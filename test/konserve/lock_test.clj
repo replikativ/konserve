@@ -10,6 +10,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :refer [<!! <! go timeout alts!! poll! offer!]]
             [konserve.core :refer [go-locked get-lock release-lock locked]]
+            [konserve.impl.mutex :as mutex]
             [konserve.memory :refer [new-mem-store]]))
 
 (deftest locks-reclaimed-after-use
@@ -30,14 +31,38 @@
         (dotimes [i 500] (<!! (go-locked store (str "key-" i) :work)))
         (is (zero? (count @locks)))))))
 
-(deftest last-holder-can-return-its-token-without-a-waiter
+(deftest last-holder-can-release-without-a-waiter
   (let [store (<!! (new-mem-store))
         lock (get-lock store :k)]
     (try
-      (is (= :unlocked (poll! lock)))
-      (is (true? (offer! lock :unlocked)))
-      (is (not (offer! lock :unlocked)))
+      (is (true? (mutex/try-acquire! lock)))
+      (is (nil? (mutex/release! lock)))
+      (is (not (mutex/held? lock)))
+      (is (thrown? clojure.lang.ExceptionInfo (mutex/release! lock))
+          "a lock that is not held cannot be released")
       (finally (release-lock store :k)))))
+
+(deftest more-than-1024-async-waiters-on-one-key
+  (testing "the lock was a core.async channel, which refuses more than 1024
+            pending takes; the 1025th go-locked waiter threw inside the go
+            block and released a lock it never took"
+    (let [store (<!! (new-mem-store))
+          lock (get-lock store :k)
+          inside (atom 0)
+          most (atom 0)
+          n 3000]
+      (try
+        (is (true? (mutex/try-acquire! lock)))
+        (let [chs (doall (for [_ (range n)]
+                           (go-locked store :k
+                                      (swap! most max (swap! inside inc))
+                                      (<! (timeout 0))
+                                      (swap! inside dec)
+                                      :done)))]
+          (mutex/release! lock)
+          (is (= (repeat n :done) (map <!! chs)))
+          (is (= 1 @most) "one holder at a time"))
+        (finally (release-lock store :k))))))
 
 (deftest get-release-lock-refcount
   (testing "explicit get-lock/release-lock bracket reclaims only at refcount 0"

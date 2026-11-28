@@ -1,6 +1,7 @@
 (ns konserve.core
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
-  (:require [clojure.core.async :refer [chan put! poll!]]
+  (:require [clojure.core.async]
+            [konserve.impl.mutex :as mutex]
             [hasch.core :as hasch]
             [konserve.encryptor :as encryptor]
             [konserve.protocols :as protocols :refer [PConditionalWrite -conditional-write-domain -revision
@@ -86,27 +87,18 @@
 ;; strategies are added without touching callers (OCP).
 
 (defprotocol PLockRegistry
-  "Per-key in-process lock lifecycle. A lock is a core.async channel used as a
-   binary semaphore (holds one :unlocked token while free)."
+  "Per-key in-process lock lifecycle. A lock is a `konserve.impl.mutex`."
   (-acquire-lock [this key]
-    "Register intent on `key` and return its unlocked semaphore channel.")
+    "Register intent on `key` and return its lock.")
   (-release-lock [this key]
     "Release `key`; reclaim the registry entry once no holder remains. Returns nil."))
 
 ;; Pure registry calculations — no I/O, trivially unit-testable ----------------
 
-(defn- unlocked-chan
-  "A fresh channel preloaded with one :unlocked semaphore token."
-  []
-  ;; The last holder can return its token even when no taker remains.
-  (let [c (chan 1)]
-    (put! c :unlocked)
-    c))
-
 (defn- fresh-lock
   "A new refcounted registry entry: an unlocked lock held by one acquirer."
   []
-  {:ch (unlocked-chan) :n 1})
+  {:ch (mutex/mutex) :n 1})
 
 (defn- acquire-entry
   "Bump the refcount of `key`'s lock in registry map `m`, inserting `entry` when
@@ -142,9 +134,9 @@
 
 (defrecord LockFreeRegistry []
   ;; MVCC backends (LMDB, …) serialize internally, so locks need not be tracked:
-  ;; hand out a throwaway unlocked channel and register nothing.
+  ;; hand out a throwaway free lock and register nothing.
   PLockRegistry
-  (-acquire-lock [_ _key] (unlocked-chan))
+  (-acquire-lock [_ _key] (mutex/mutex))
   (-release-lock [_ _key] nil))
 
 (def ^:private lock-free-registry
@@ -161,11 +153,11 @@
 ;; Public API — single level of abstraction, delegate to the strategy ----------
 
 (defn get-lock
-  "Acquire `store`/`key`'s in-process lock channel, registering intent. MUST be
-   paired with `release-lock` so the entry is reclaimed when the last holder
-   releases — otherwise the registry grows one channel per distinct key for the
-   store's lifetime (unbounded heap retention). Lock-free stores get a throwaway
-   channel."
+  "`store`/`key`'s in-process lock (a `konserve.impl.mutex`), registering
+   intent; it is not taken yet. MUST be paired with `release-lock` so the entry
+   is reclaimed when the last holder releases — otherwise the registry grows one
+   lock per distinct key for the store's lifetime (unbounded heap retention).
+   Lock-free stores get a throwaway lock."
   [store key]
   (-acquire-lock (store-lock-registry store) key))
 
@@ -176,26 +168,36 @@
   [store key]
   (-release-lock (store-lock-registry store) key))
 
-(defn wait [lock]
-  #?(:clj (while (not (poll! lock))
-            (Thread/sleep (long (rand-int 20))))
-     :cljs (when-not (some-> lock poll!)
-             (log/debug :konserve/lock-not-active "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript."))))
+(defn wait
+  "Take `lock` for a synchronous operation. Returns whether it is held, and only
+   a held lock may be released. On ClojureScript, which cannot block, a lock
+   that is taken is NOT held: the operation proceeds without it, as it always
+   did there, but no longer releases a lock it never had."
+  [lock]
+  #?(:cljs (or (mutex/try-acquire! lock)
+               (do (log/debug :konserve/lock-not-active "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")
+                   false))
+     :default (mutex/acquire-sync! lock)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
+  ;; The lock is taken outside the inner `try`: a wait that fails (an
+  ;; interrupted thread) must not release a lock it does not hold.
   `(let [s# ~store
          k# ~key
          l# (get-lock s# k#)]
      (try
-       (let [t0# (konserve.metrics/start)]
-         (wait l#)
-         (konserve.metrics/finish! s# :lock :lock t0#))
-       (log/trace :konserve/acquired-spin-lock {:key k#})
-       ~@code
+       (let [held?# (let [t0# (konserve.metrics/start)
+                          h# (wait l#)]
+                      (konserve.metrics/finish! s# :lock :lock t0#)
+                      h#)]
+         (log/trace :konserve/acquired-spin-lock {:key k#})
+         (try
+           ~@code
+           (finally
+             (log/trace :konserve/releasing-spin-lock {:key k#})
+             (when held?# (konserve.impl.mutex/release! l#)))))
        (finally
-         (log/trace :konserve/releasing-spin-lock {:key k#})
-         (put! l# :unlocked)
          (release-lock s# k#)))))
 
 (defmacro go-locked [store key & code]
@@ -207,13 +209,15 @@
         ;; Closure-free on purpose: this macro is inlined wherever a store is
         ;; locked, and a go block per lock would blow up a method's size.
         (let [t0# (konserve.metrics/start)]
-          (<?- l#)
+          (clojure.core.async/<! (konserve.impl.mutex/acquire l#))
           (konserve.metrics/finish! s# :lock :lock t0#))
         (log/trace :konserve/acquired-go-lock {:key k#})
-        ~@code
+        (try
+          ~@code
+          (finally
+            (log/trace :konserve/releasing-go-lock {:key k#})
+            (konserve.impl.mutex/release! l#)))
         (finally
-          (log/trace :konserve/releasing-go-lock {:key k#})
-          (put! l# :unlocked)
           (release-lock s# k#))))))
 
 ;; Optional locking macros - skip locking for lock-free stores (MVCC backends)

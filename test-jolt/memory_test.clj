@@ -1,7 +1,8 @@
 (ns memory-test
   (:require [clojure.core.async :as async]
             [clojure.test :refer [deftest is run-tests]]
-            [konserve.core :as k]))
+            [konserve.core :as k]
+            [konserve.impl.mutex :as mutex]))
 
 (deftest public-memory-api
   (doseq [sync? [true false]]
@@ -32,9 +33,9 @@
     (dotimes [_ 16]
       (let [lock (k/get-lock store :key)]
         (try
-          (is (= :unlocked (async/poll! lock)))
-          (is (true? (async/offer! lock :unlocked)))
-          (is (not (async/offer! lock :unlocked)))
+          (is (true? (mutex/try-acquire! lock)))
+          (is (nil? (mutex/release! lock)))
+          (is (not (mutex/held? lock)))
           (finally (k/release-lock store :key)))))
     (is (empty? @(:locks store)))))
 

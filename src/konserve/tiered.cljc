@@ -2,6 +2,7 @@
   "Tiered store implementation with frontend and backend storage layers."
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [go] :as async]
+            [konserve.impl.mutex :as mutex]
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
@@ -279,18 +280,19 @@
   (or (contains? opts :expected-revision)
       (:with-revision? opts)))
 
-(defn ^:private make-cache-lock []
-  (let [lock (async/chan 1)]
-    (async/put! lock :unlocked)
-    lock))
+(defn ^:private make-cache-lock [] (mutex/mutex))
 
-(defn ^:private take-cache-lock-sync! [cache-lock]
-  #?(:clj
-     (async/<!! cache-lock)
-     :cljs
-     (or (async/poll! cache-lock)
-         (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
-                         {:type :konserve/tiered-sync-cache-contention})))))
+(defn ^:private take-cache-lock-sync!
+  "Take the cache lock for a synchronous operation. ClojureScript cannot block,
+   so there a lock that is taken is a contention error; nothing was acquired,
+   so nothing is released."
+  [cache-lock]
+  #?(:cljs
+     (when-not (mutex/try-acquire! cache-lock)
+       (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
+                       {:type :konserve/tiered-sync-cache-contention})))
+     :default
+     (mutex/acquire-sync! cache-lock)))
 
 (defn ^:private populate-frontend
   "Run a read-through cache fill unless a backend write completed since its read.
@@ -299,26 +301,29 @@
    post-write invalidation. Without both, a fire-and-forget fill can land after
    a newer backend write invalidated the frontend and resurrect the stale value."
   [cache-lock cache-generation observed-generation populate-fn opts]
+  ;; The lock is taken before the `try`: a failed acquisition holds nothing
+  ;; and must release nothing.
   (if (:sync? opts)
-    (try
+    (do
       (take-cache-lock-sync! cache-lock)
-      (if (= observed-generation @cache-generation)
-        (do
-          (populate-fn)
-          true)
-        false)
-      (finally
-        (async/put! cache-lock :unlocked)))
+      (try
+        (if (= observed-generation @cache-generation)
+          (do
+            (populate-fn)
+            true)
+          false)
+        (finally
+          (mutex/release! cache-lock))))
     (go-try-
+     (async/<! (mutex/acquire cache-lock))
      (try
-       (<?- cache-lock)
        (if (= observed-generation @cache-generation)
          (do
            (<?- (populate-fn))
            true)
          false)
        (finally
-         (async/put! cache-lock :unlocked))))))
+         (mutex/release! cache-lock))))))
 
 (defn ^:private invalidate-frontend!
   "Fire-and-forget frontend invalidation for one key. Returns the `go` channel, which every
@@ -382,22 +387,24 @@
 (defn ^:private update-frontend-after-backend
   "Order a frontend mutation after all older read-through cache fills."
   [cache-lock cache-generation update-fn opts]
+  ;; lock taken before the `try`, as in `populate-frontend`
   (if (:sync? opts)
-    (try
+    (do
       (take-cache-lock-sync! cache-lock)
-      ;; Invalidate every fill that observed the backend before this write
-      ;; committed, including fills still waiting for the lock.
-      (swap! cache-generation inc)
-      (update-fn)
-      (finally
-        (async/put! cache-lock :unlocked)))
+      (try
+        ;; Invalidate every fill that observed the backend before this write
+        ;; committed, including fills still waiting for the lock.
+        (swap! cache-generation inc)
+        (update-fn)
+        (finally
+          (mutex/release! cache-lock))))
     (go-try-
+     (async/<! (mutex/acquire cache-lock))
      (try
-       (<?- cache-lock)
        (swap! cache-generation inc)
        (<?- (update-fn))
        (finally
-         (async/put! cache-lock :unlocked))))))
+         (mutex/release! cache-lock))))))
 
 (defn ^:private invalidate-frontend
   "Synchronously evict `key` from the frontend after the backend committed.

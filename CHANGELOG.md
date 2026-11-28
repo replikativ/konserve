@@ -26,6 +26,19 @@ All notable, user-visible changes to konserve are documented here.
   site.
 
 ### Fixed
+- **konserve's locks are real mutexes.** The per-key store locks (`locked`,
+  `go-locked`) and the tiered store's cache lock were core.async channels
+  holding one token, which is not a mutex. A channel accepts at most 1024
+  pending takes: with 3,000 async writers on one key of a memory store, 987
+  writes ended without a result and up to 958 ran inside the "lock" at once. A
+  take that failed, or an interrupted synchronous waiter, released a token it
+  never held. And on ClojureScript a synchronous operation that found its key
+  locked proceeded without the lock but still released it. The locks are now
+  `konserve.impl.mutex`: the state is an atom with a waiter queue, so there is
+  no waiter limit; an interrupted waiter withdraws; acquisition precedes the
+  `try` that releases; releasing a free lock is an error. `get-lock` returns
+  such a lock instead of a channel. Portable: JVM, Jolt and ClojureScript
+  differ only in whether a synchronous caller can block.
 - **A throwing write hook never reaches the writer.** Hooks run after the write
   has committed, but the catch covered `Exception` only (JVM) and `js/Error`
   only (CLJS), so an `Error` such as core.async's `AssertionError` on an
