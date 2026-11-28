@@ -60,39 +60,57 @@
         (mutex/release! m)
         (is (= 5000 (count (filter #{:ok} (map take-within chs)))))))))
 
-(deftest an-interrupted-waiter-leaves-the-lock-intact
-  (testing "a waiter interrupted while queued withdraws; the holder's release
-            then frees the lock instead of handing it to the abandoned waiter"
+(deftest an-abandoned-wait-leaves-the-lock-intact
+  (testing "abandoned while still queued: the waiter is removed"
+    (let [m (mutex/mutex)]
+      (mutex/try-acquire! m)
+      (let [w (mutex/acquire m)]
+        (is (= 1 (queued m)))
+        (mutex/abandon! m w)
+        (is (zero? (queued m))))
+      (mutex/release! m)
+      (is (not (mutex/held? m)))))
+  (testing "abandoned after the lock was handed to it: the lock passes on"
+    (let [m (mutex/mutex)]
+      (mutex/try-acquire! m)
+      (let [w1 (mutex/acquire m)
+            w2 (mutex/acquire m)]
+        (mutex/release! m)                        ; handed to w1
+        (is (true? (take-within w1)))
+        (mutex/abandon! m w1)                     ; w1 gave up anyway
+        (is (true? (take-within w2)) "the next waiter gets it")
+        (mutex/release! m)
+        (is (not (mutex/held? m))))))
+  (testing "a blocked thread whose wait ends in an exception (interrupt)"
     (let [m (mutex/mutex)
           outcome (promise)]
       (mutex/try-acquire! m)
-      (let [t (Thread. #(deliver outcome (try (mutex/acquire-sync! m) (catch InterruptedException e e))))]
+      (let [t (Thread. #(deliver outcome (try (mutex/acquire-sync! m) (catch Throwable e e))))]
         (.start t)
-        (Thread/sleep 100)
+        (is (= 1 (await-queued m 1)))
         (.interrupt t)
-        (is (instance? InterruptedException (deref outcome 2000 :blocked))))
+        (is (instance? InterruptedException (deref outcome 5000 :blocked))))
+      (is (zero? (queued m)))
       (mutex/release! m)
       (is (not (mutex/held? m)))
       (is (true? (mutex/try-acquire! m)))
-      (mutex/release! m)))
-  (testing "a waiter interrupted just as the lock is handed to it releases it"
-    (let [m (mutex/mutex)
-          granted (promise)
-          outcome (promise)]
-      (mutex/try-acquire! m)
-      (let [t (Thread. #(deliver outcome
-                                 (try (mutex/acquire-sync! m) :acquired
-                                      (catch InterruptedException e e))))]
-        (.start t)
-        (Thread/sleep 100)
-        ;; hand over and interrupt as close together as the test can
-        (.interrupt t)
-        (mutex/release! m)
-        (let [r (deref outcome 2000 :blocked)]
-          (when (= :acquired r) (mutex/release! m))
-          (is (not= :blocked r))))
-      (Thread/sleep 50)
-      (is (not (mutex/held? m)) "either way the lock ends up free"))))
+      (mutex/release! m))))
+
+(deftest go-checking-only-for-a-call-that-would-block
+  (testing "with core.async's go-checking on, a synchronous acquire inside a go
+            block throws only when it would block, as `<!!` does; a free lock
+            is taken"
+    (let [m (mutex/mutex)]
+      (System/setProperty "clojure.core.async.go-checking" "true")
+      (try
+        (is (true? (take-within (a/go (mutex/acquire-sync! m)))) "free: taken")
+        (is (instance? IllegalStateException
+                       (take-within (a/go (try (mutex/acquire-sync! m) (catch Throwable e e)))))
+            "held: refused")
+        (is (zero? (queued m)) "and the refused call left no waiter behind")
+        (finally
+          (System/clearProperty "clojure.core.async.go-checking")
+          (mutex/release! m))))))
 
 (deftest releasing-a-free-lock-is-an-error
   (let [m (mutex/mutex)]

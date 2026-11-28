@@ -85,46 +85,54 @@
 
 (defn acquire
   "A channel that yields `true` once `m` is held by the caller. Park on it in a
-   go block. The caller must `release!` afterwards."
+   go block. The caller must `release!` afterwards, and if the wait itself ends
+   in an exception (a go block interrupted while parked, as Jolt can), must call
+   `(abandon! m ch)` before rethrowing."
   [m]
   (let [ch (async/promise-chan)
-        w {:grant #(async/put! ch true)}]
+        w {:token ch :grant #(async/put! ch true)}]
     (when (acquire-or-enqueue! m w)
       (async/put! ch true))
     ch))
 
-#?(:cljs nil
-   :default
-   (defn- withdraw!
-     "Remove `waiter` from `m`'s queue. True if it was still waiting; false if
-      the lock had already been handed to it."
-     [m waiter]
-     (let [[old _] (swap-vals! m update :waiters
-                               (fn [q] (into empty-queue (remove #(identical? % waiter)) q)))]
-       (boolean (some #(identical? % waiter) (:waiters old))))))
+(defn abandon!
+  "Give up the wait identified by `token` (the channel `acquire` returned).
+   A waiter still in the queue is removed. One the lock was already handed to
+   holds it, so it is released, to the next waiter or free. Without this an
+   abandoned waiter keeps its place, and the release that reaches it hands the
+   lock to nobody: every later caller waits forever."
+  [m token]
+  (let [[old _] (swap-vals! m update :waiters
+                            (fn [q] (into empty-queue (remove #(identical? (:token %) token)) q)))]
+    (when-not (some #(identical? (:token %) token) (:waiters old))
+      (release! m))
+    nil))
 
 #?(:cljs nil
    :default
    (defn acquire-sync!
      "Take `m`, blocking the calling thread until it is free. Returns `true`.
 
-      Interruptible: an interrupted waiter withdraws from the queue, or, if the
-      lock was handed to it in the meantime, releases it, and then rethrows.
-      The handoff itself does not need a core.async dispatch thread: `release!`
-      delivers the waiter's promise directly."
+      A wait that ends in an exception (an interrupted thread, an interrupted
+      Jolt fiber) abandons the lock (`abandon!`) and rethrows. The handoff
+      itself needs no core.async dispatch thread: `release!` delivers the
+      waiter's promise directly.
+
+      Under `clojure.core.async.go-checking` (JVM) a call that would block
+      inside a go block throws, as `<!!` does; an uncontended one does not."
      [m]
-     ;; The check `<!!` makes under `clojure.core.async.go-checking`: blocking
-     ;; a dispatch thread here can stall the whole pool.
-     #?(:jolt nil
-        :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
-               (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
-     (let [p (promise)
-           w {:grant #(deliver p true)}]
-       (when-not (acquire-or-enqueue! m w)
-         (try
-           @p
-           (catch InterruptedException e
-             (when-not (withdraw! m w)
-               (release! m))
-             (throw e))))
-       true)))
+     (when-not (try-acquire! m)
+       ;; The check `<!!` makes under `clojure.core.async.go-checking`:
+       ;; blocking a dispatch thread here can stall the whole pool.
+       #?(:jolt nil
+          :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
+                 (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
+       (let [p (promise)
+             w {:token p :grant #(deliver p true)}]
+         (when-not (acquire-or-enqueue! m w)
+           (try
+             @p
+             (catch Throwable e
+               (abandon! m p)
+               (throw e))))))
+     true))

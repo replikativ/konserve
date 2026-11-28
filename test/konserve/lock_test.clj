@@ -231,6 +231,7 @@
                 _ (queued 1)
                 second-op (go-locked store :k :second)]
             (queued 2)
+            (is (= 2 (count (:waiters @lock))) "both operations wait for the key")
             (mutex/release! lock)
             (is (instance? Exception (deref first-op 5000 :blocked)) "the first operation throws")
             (is (= :second (first (alts!! [second-op (timeout 5000)])))

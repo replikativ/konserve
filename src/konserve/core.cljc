@@ -208,8 +208,15 @@
       (try
         ;; Closure-free on purpose: this macro is inlined wherever a store is
         ;; locked, and a go block per lock would blow up a method's size.
-        (let [t0# (konserve.metrics/start)]
-          (clojure.core.async/<! (konserve.impl.mutex/acquire l#))
+        (let [t0# (konserve.metrics/start)
+              wait# (konserve.impl.mutex/acquire l#)]
+          ;; a go block interrupted while parked here (Jolt) must give up its
+          ;; place, or the release that reaches it hands the lock to nobody
+          (try
+            (clojure.core.async/<! wait#)
+            (catch ~(if (:ns &env) :default 'Throwable) e#
+              (konserve.impl.mutex/abandon! l# wait#)
+              (throw e#)))
           ;; from here on the lock is held: everything is inside the bracket
           (try
             (konserve.metrics/finish! s# :lock :lock t0#)

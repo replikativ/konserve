@@ -315,7 +315,14 @@
         (finally
           (mutex/release! cache-lock))))
     (go-try-
-     (async/<! (mutex/acquire cache-lock))
+     (let [wait (mutex/acquire cache-lock)]
+       ;; a go block interrupted while parked here (Jolt) gives up its place,
+       ;; or the release that reaches it would hand the lock to nobody
+       (try
+         (async/<! wait)
+         (catch #?(:clj Throwable :cljs :default) e
+           (mutex/abandon! cache-lock wait)
+           (throw e))))
      (try
        (if (= observed-generation @cache-generation)
          (do
@@ -399,7 +406,14 @@
         (finally
           (mutex/release! cache-lock))))
     (go-try-
-     (async/<! (mutex/acquire cache-lock))
+     (let [wait (mutex/acquire cache-lock)]
+       ;; a go block interrupted while parked here (Jolt) gives up its place,
+       ;; or the release that reaches it would hand the lock to nobody
+       (try
+         (async/<! wait)
+         (catch #?(:clj Throwable :cljs :default) e
+           (mutex/abandon! cache-lock wait)
+           (throw e))))
      (try
        (swap! cache-generation inc)
        (<?- (update-fn))
