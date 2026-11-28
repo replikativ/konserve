@@ -304,7 +304,7 @@
       (take-cache-lock-sync! cache-lock)
       (if (= observed-generation @cache-generation)
         (do
-          (populate-fn)
+          (populate-fn opts)
           true)
         false)
       (finally
@@ -314,7 +314,7 @@
        (<?- cache-lock)
        (if (= observed-generation @cache-generation)
          (do
-           (<?- (populate-fn))
+           (<?- (populate-fn opts))
            true)
          false)
        (finally
@@ -361,17 +361,27 @@
                  (invoke-write-hooks! frontend-store hook-event)))))
 
 (defn- start-read-through!
-  "Await a cache fill when requested; otherwise preserve fire-and-forget reads."
+  "Await a cache fill when requested; otherwise preserve fire-and-forget reads.
+
+   `populate-fn` takes the opts of the fill, not of the read, because the two
+   need not run in the same mode. A detached fill always runs asynchronously,
+   even for a synchronous read: it runs inside a `go` block, and in sync mode
+   `populate-frontend` takes the cache lock with a BLOCKING take. That blocked
+   a core.async dispatch thread while an asynchronous operation held the lock,
+   and that operation needs a dispatch thread to release it. A burst of
+   synchronous cold reads could block every dispatch thread and stall the
+   whole pool. Asynchronously, the fill parks on the lock instead."
   [frontend-store cache-lock cache-generation observed-generation
    populate-fn hook-event opts]
-  (let [fill #(complete-read-through frontend-store cache-lock cache-generation
-                                     observed-generation populate-fn hook-event opts)]
+  (let [fill (fn [fill-opts]
+               (complete-read-through frontend-store cache-lock cache-generation
+                                      observed-generation populate-fn hook-event fill-opts))]
     (if (:await-read-through? opts)
-      (fill)
+      (fill opts)
       (do
         (go
           (try
-            (<?- (fill))
+            (<?- (fill (clojure.core/assoc opts :sync? false)))
             (catch #?(:clj Exception :cljs js/Error) e
               (log/debug :konserve/tiered-frontend-populate-failed
                          {:event hook-event :error e}))))
@@ -503,9 +513,10 @@
                            (when (not= backend-result ::missing)
                              (<?- (start-read-through!
                                    frontend-store cache-lock cache-generation observed-generation
-                                   #(-assoc-in frontend-store key-vec
-                                               (partial meta-update (first key-vec) :edn)
-                                               backend-result (frontend-opts opts))
+                                   (fn [fill-opts]
+                                     (-assoc-in frontend-store key-vec
+                                                (partial meta-update (first key-vec) :edn)
+                                                backend-result (frontend-opts fill-opts)))
                                    {:api-op :assoc-in
                                     :key (first key-vec)
                                     :key-vec key-vec
@@ -772,8 +783,9 @@
                          (when (seq backend-result)
                            (<?- (start-read-through!
                                  frontend-store cache-lock cache-generation observed-generation
-                                 #(-multi-assoc frontend-store backend-result meta-update
-                                                (frontend-opts opts))
+                                 (fn [fill-opts]
+                                   (-multi-assoc frontend-store backend-result meta-update
+                                                 (frontend-opts fill-opts)))
                                  {:api-op :multi-assoc :kvs backend-result}
                                  opts)))
                          ;; Merge frontend and backend results
