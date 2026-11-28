@@ -27,11 +27,13 @@
     (deref p 2000 ::timeout)))
 
 (defn- tokens
-  "How many lock tokens the cache lock holds right now; returns them."
+  "How many lock tokens the cache lock holds right now, as 0, 1 or 2 (two or
+   more). Leaves at most one behind and never blocks."
   [lock]
-  (let [n (count (take-while some? (repeatedly #(a/poll! lock))))]
-    (dotimes [_ n] (a/>!! lock :unlocked))
-    n))
+  (let [a (a/poll! lock)
+        b (when a (a/poll! lock))]
+    (when a (a/offer! lock :unlocked))
+    (cond b 2 a 1 :else 0)))
 
 (deftest cold-reads-while-the-cache-lock-is-held
   ;; async first: a stalled pool (the defect) stays stalled for the rest of
@@ -95,5 +97,30 @@
       (is (= 1 (k/get store :cold nil {:sync? true})))
       (is (= :written (deref done 2000 :blocked)))
       (is (= 2 (k/get backend :audit nil {:sync? true})))
-      (is (= 1 (count (take-while some? (repeatedly #(a/poll! (:cache-lock store)))))))
-      (a/>!! (:cache-lock store) :unlocked))))
+      (is (= 1 (tokens (:cache-lock store)))))))
+
+(deftest an-interrupted-waiter-does-not-take-the-lock-with-it
+  (testing "a synchronous caller waiting for the cache lock is interrupted. Its
+            wait must not swallow the token the holder releases later"
+    (let [frontend (new-mem-store (atom {}) {:sync? true})
+          backend (new-mem-store (atom {}) {:sync? true})
+          store (tiered/connect-tiered-store frontend backend :opts {:sync? true})
+          lock (:cache-lock store)
+          outcome (promise)]
+      (k/assoc backend :cold 1 {:sync? true})
+      (a/<!! lock)
+      (let [t (Thread. #(deliver outcome
+                                 (try (k/get store :cold nil {:sync? true :await-read-through? true})
+                                      (catch Throwable e e))))]
+        (.start t)
+        (Thread/sleep 200)
+        (.interrupt t)
+        (is (instance? Throwable (deref outcome 2000 :blocked)) "the waiter gave up"))
+      (a/>!! lock :unlocked)
+      (Thread/sleep 200)
+      (is (= 1 (tokens lock)) "the released token is still there")
+      (testing "and the lock still works"
+        ;; bounded: with the token lost this read would wait forever
+        (is (= 1 (deref (future (k/get store :cold nil {:sync? true :await-read-through? true}))
+                        2000 :blocked)))
+        (is (k/exists? frontend :cold {:sync? true}))))))

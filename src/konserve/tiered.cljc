@@ -284,9 +284,28 @@
     (async/put! lock :unlocked)
     lock))
 
-(defn ^:private take-cache-lock-sync! [cache-lock]
+(defn ^:private take-cache-lock-sync!
+  "Take the cache lock, blocking. On the JVM a wait that is abandoned (the
+   thread is interrupted) gives the token back as soon as its take completes:
+   `<!!` left the take queued, and the holder's release then handed the only
+   token to nobody."
+  [cache-lock]
   #?(:clj
-     (async/<!! cache-lock)
+     (let [p (promise)]
+       (async/take! cache-lock
+                    (fn [token]
+                      ;; `deliver` fails only when the waiter gave up first
+                      (when-not (deliver p token)
+                        (async/put! cache-lock :unlocked))))
+       (try
+         @p
+         (catch InterruptedException e
+           ;; Either the waiter gives up before the take completes, and the
+           ;; callback above returns the token, or the token arrived just now
+           ;; and it is returned here.
+           (when-not (deliver p ::abandoned)
+             (async/put! cache-lock :unlocked))
+           (throw e))))
      :cljs
      (or (async/poll! cache-lock)
          (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
@@ -366,13 +385,23 @@
 
 #?(:clj
    (def ^:private max-parked-fills
-     "Detached fills parked on cache locks at once, process-wide. core.async
+     "Detached fills parked on one cache lock at once. core.async
       refuses more than 1024 pending takes on one channel; past this a fill is
       skipped (it is a best-effort warm-up and the next miss reads through
       again) rather than risk that limit for the writes that share the lock."
      512))
 
-#?(:clj (defonce ^:private parked-fills (atom 0)))
+#?(:clj
+   (defonce ^:private parked-fills
+     ;; per cache lock: core.async's limit is per channel, and one busy store
+     ;; must not stop another from warming
+     (java.util.Collections/synchronizedMap (java.util.WeakHashMap.))))
+
+#?(:clj
+   (defn- parked-fills-of [cache-lock]
+     (locking parked-fills
+       (or (.get ^java.util.Map parked-fills cache-lock)
+           (let [a (atom 0)] (.put ^java.util.Map parked-fills cache-lock a) a)))))
 
 #?(:clj
    (defn- detached-fill!
@@ -391,13 +420,14 @@
        (try
          (let [;; the slot is given back whether the take succeeds or core.async
                ;; refuses it (more than 1024 pending takes throws)
-               n (swap! parked-fills inc)
+               slots (parked-fills-of cache-lock)
+               n (swap! slots inc)
                acquired? (try
                            (when (<= n max-parked-fills)
                              (async/<! cache-lock)
                              true)
                            (catch Throwable _ false)
-                           (finally (swap! parked-fills dec)))
+                           (finally (swap! slots dec)))
                filled? (when acquired?
                          (try
                            (when (= observed-generation @cache-generation)
