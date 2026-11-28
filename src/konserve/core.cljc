@@ -210,13 +210,16 @@
         ;; locked, and a go block per lock would blow up a method's size.
         (let [t0# (konserve.metrics/start)
               wait# (konserve.impl.mutex/acquire l#)]
-          ;; a go block interrupted while parked here (Jolt) must give up its
-          ;; place, or the release that reaches it hands the lock to nobody
-          (try
-            (clojure.core.async/<! wait#)
-            (catch ~(if (:ns &env) :default 'Throwable) e#
-              (konserve.impl.mutex/abandon! l# wait#)
-              (throw e#)))
+          ;; A wait that does not complete (a go block or fiber interrupted or
+          ;; killed while parked, as Jolt can) gives up its place in a
+          ;; `finally`, which a killed Jolt fiber still runs, or the release
+          ;; that reaches it would hand the lock to nobody.
+          (let [done# (volatile! false)]
+            (try
+              (clojure.core.async/<! (konserve.impl.mutex/wait-chan wait#))
+              (vreset! done# true)
+              (finally
+                (when-not @done# (konserve.impl.mutex/abandon! l# wait#)))))
           ;; from here on the lock is held: everything is inside the bracket
           (try
             (konserve.metrics/finish! s# :lock :lock t0#)

@@ -35,10 +35,12 @@ All notable, user-visible changes to konserve are documented here.
   token it never held, and a ClojureScript synchronous operation that found its
   key taken released a lock it did not hold. The locks are now
   `konserve.impl.mutex`: an atom with a queue of waiters, no waiter limit, a
-  wait that ends in an exception (an interrupted thread, a go block or fiber
-  interrupted while parked on Jolt) gives up its place or passes on a lock
-  handed to it meanwhile, and the lock is taken before the bracket that
-  releases it. Under `clojure.core.async.go-checking`, a synchronous call
+  wait that does not complete (an interrupted thread; on Jolt a go block or
+  fiber interrupted or killed while parked) gives up its place or passes on a
+  lock handed to it meanwhile, and the lock is taken before the bracket that
+  releases it. On Jolt, an interrupt that lands between the lock's own steps
+  (after its state changes, before the caller's cleanup is installed) is not
+  covered. Under `clojure.core.async.go-checking`, a synchronous call
   inside a go block that would wait for a lock throws, as `<!!` does; one that
   finds the lock free proceeds. `get-lock`
   returns such a lock instead of a channel. JVM, Jolt and ClojureScript differ

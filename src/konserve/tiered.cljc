@@ -3,6 +3,7 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [go] :as async]
             [konserve.impl.mutex :as mutex]
+            #?@(:jolt [] :clj [[clojure.core.async.impl.dispatch]])
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
@@ -292,7 +293,13 @@
        (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
                        {:type :konserve/tiered-sync-cache-contention})))
      :default
-     (mutex/acquire-sync! cache-lock)))
+     (do
+       ;; The check `<!!` made here under `clojure.core.async.go-checking`,
+       ;; whether or not the lock was free.
+       #?(:jolt nil
+          :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
+                 (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
+       (mutex/acquire-sync! cache-lock))))
 
 (defn ^:private populate-frontend
   "Run a read-through cache fill unless a backend write completed since its read.
@@ -315,14 +322,15 @@
         (finally
           (mutex/release! cache-lock))))
     (go-try-
-     (let [wait (mutex/acquire cache-lock)]
-       ;; a go block interrupted while parked here (Jolt) gives up its place,
-       ;; or the release that reaches it would hand the lock to nobody
+     (let [wait (mutex/acquire cache-lock)
+           done (volatile! false)]
+       ;; a wait that does not complete (a go block or fiber interrupted or
+       ;; killed while parked, as Jolt can) gives up its place; see `go-locked`
        (try
-         (async/<! wait)
-         (catch #?(:clj Throwable :cljs :default) e
-           (mutex/abandon! cache-lock wait)
-           (throw e))))
+         (async/<! (mutex/wait-chan wait))
+         (vreset! done true)
+         (finally
+           (when-not @done (mutex/abandon! cache-lock wait)))))
      (try
        (if (= observed-generation @cache-generation)
          (do
@@ -406,14 +414,15 @@
         (finally
           (mutex/release! cache-lock))))
     (go-try-
-     (let [wait (mutex/acquire cache-lock)]
-       ;; a go block interrupted while parked here (Jolt) gives up its place,
-       ;; or the release that reaches it would hand the lock to nobody
+     (let [wait (mutex/acquire cache-lock)
+           done (volatile! false)]
+       ;; a wait that does not complete (a go block or fiber interrupted or
+       ;; killed while parked, as Jolt can) gives up its place; see `go-locked`
        (try
-         (async/<! wait)
-         (catch #?(:clj Throwable :cljs :default) e
-           (mutex/abandon! cache-lock wait)
-           (throw e))))
+         (async/<! (mutex/wait-chan wait))
+         (vreset! done true)
+         (finally
+           (when-not @done (mutex/abandon! cache-lock wait)))))
      (try
        (swap! cache-generation inc)
        (<?- (update-fn))

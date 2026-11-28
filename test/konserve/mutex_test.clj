@@ -25,7 +25,7 @@
           most (atom 0)
           work (fn [] (swap! most max (swap! inside inc)) (Thread/sleep 1) (swap! inside dec))
           gos (doall (for [_ (range 200)]
-                       (a/go (a/<! (mutex/acquire m))
+                       (a/go (a/<! (mutex/wait-chan (mutex/acquire m)))
                              (try (work) (finally (mutex/release! m)))
                              :go)))
           threads (doall (for [_ (range 8)]
@@ -43,7 +43,7 @@
         order (atom [])]
     (mutex/try-acquire! m)
     (let [chs (doall (for [i (range 10)]
-                       (let [c (mutex/acquire m)]
+                       (let [c (mutex/wait-chan (mutex/acquire m))]
                          (a/go (a/<! c) (swap! order conj i) (mutex/release! m)))))]
       (is (= 10 (await-queued m 10)))
       (mutex/release! m)
@@ -55,10 +55,13 @@
     (let [m (mutex/mutex)]
       (mutex/try-acquire! m)
       (let [chs (doall (for [_ (range 5000)]
-                         (a/go (a/<! (mutex/acquire m)) (mutex/release! m) :ok)))]
+                         (a/go (a/<! (mutex/wait-chan (mutex/acquire m))) (mutex/release! m) :ok)))]
         (is (= 5000 (await-queued m 5000)) "all of them wait at once")
         (mutex/release! m)
-        (is (= 5000 (count (filter #{:ok} (map take-within chs)))))))))
+        ;; one overall deadline: a lost handoff fails in seconds, not hours
+        (let [all (a/into [] (a/merge chs))
+              [v _] (a/alts!! [all (a/timeout 30000)])]
+          (is (= 5000 (count (filter #{:ok} v)))))))))
 
 (deftest an-abandoned-wait-leaves-the-lock-intact
   (testing "abandoned while still queued: the waiter is removed"
@@ -76,9 +79,9 @@
       (let [w1 (mutex/acquire m)
             w2 (mutex/acquire m)]
         (mutex/release! m)                        ; handed to w1
-        (is (true? (take-within w1)))
+        (is (true? (take-within (mutex/wait-chan w1))))
         (mutex/abandon! m w1)                     ; w1 gave up anyway
-        (is (true? (take-within w2)) "the next waiter gets it")
+        (is (true? (take-within (mutex/wait-chan w2))) "the next waiter gets it")
         (mutex/release! m)
         (is (not (mutex/held? m))))))
   (testing "a blocked thread whose wait ends in an exception (interrupt)"
@@ -95,6 +98,29 @@
       (is (not (mutex/held? m)))
       (is (true? (mutex/try-acquire! m)))
       (mutex/release! m))))
+
+(deftest abandoning-twice-does-nothing
+  (let [m (mutex/mutex)]
+    (mutex/try-acquire! m)
+    (let [w (mutex/acquire m)]
+      (mutex/abandon! m w)
+      (mutex/abandon! m w))
+    (is (mutex/held? m) "the holder still holds it")
+    (is (false? (mutex/try-acquire! m)) "and nobody else got in")
+    (mutex/release! m)
+    (is (not (mutex/held? m)))))
+
+(deftest a-release-skips-a-waiter-that-gave-up
+  (let [m (mutex/mutex)]
+    (mutex/try-acquire! m)
+    (let [w1 (mutex/acquire m)
+          w2 (mutex/acquire m)]
+      ;; w1 gives up without leaving the queue yet: mark only, as a race would
+      (reset! (:state w1) :abandoned)
+      (mutex/release! m)
+      (is (true? (take-within (mutex/wait-chan w2))) "w2 gets it, not the abandoned w1")
+      (mutex/release! m)
+      (is (not (mutex/held? m))))))
 
 (deftest go-checking-only-for-a-call-that-would-block
   (testing "with core.async's go-checking on, a synchronous acquire inside a go

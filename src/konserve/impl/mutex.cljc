@@ -18,8 +18,8 @@
    Here the lock state is an atom: whether the lock is held, and a queue of
    waiters. Only how a waiter waits depends on the caller:
 
-   * asynchronously (`acquire`), on either platform: a promise channel it
-     parks on, delivered when the lock is handed to it;
+   * asynchronously (`acquire`, `wait-chan`), on either platform: a promise
+     channel it parks on, delivered when the lock is handed to it;
    * synchronously where a thread can block (JVM, Jolt; `acquire-sync!`): a
      promise it blocks on. An interrupted waiter withdraws from the queue, or,
      if the lock was handed to it in the meantime, releases it;
@@ -56,67 +56,91 @@
   (let [[old _] (swap-vals! m (fn [s] (if (:held? s) s (assoc s :held? true))))]
     (not (:held? old))))
 
-(defn- acquire-or-enqueue!
-  "Take `m` if it is free, else queue `waiter`. True when taken."
-  [m waiter]
+(defn- waiter
+  "A wait for the lock. `:state` moves once from :waiting to :granted (the lock
+   is handed to it) or to :abandoned (it gave up), so a handoff and a give-up
+   cannot both win, and giving up twice does nothing."
+  [notify]
+  {:state (atom :waiting) :notify notify})
+
+(defn- grant!
+  "Hand the lock to `w`. False if `w` already gave up."
+  [w]
+  (when (compare-and-set! (:state w) :waiting :granted)
+    ((:notify w))
+    true))
+
+(defn- enqueue!
+  "Take `m` for `w` if it is free, else queue `w`."
+  [m w]
   (let [[old _] (swap-vals! m (fn [s]
                                 (if (:held? s)
-                                  (update s :waiters conj waiter)
+                                  (update s :waiters conj w)
                                   (assoc s :held? true))))]
-    (not (:held? old))))
+    (when-not (:held? old)
+      (grant! w))))
 
 (defn release!
-  "Release `m`: hand it to the longest-waiting waiter, or free it. Releasing a
-   lock that is not held throws; that is a caller's bug, and ignoring it would
-   hide a second holder."
+  "Release `m`: hand it to the longest-waiting waiter that has not given up, or
+   free it. Releasing a lock that is not held throws; that is a caller's bug,
+   and ignoring it would hide a second holder."
   [m]
-  (let [[old _] (swap-vals! m (fn [s]
-                                (cond
-                                  (not (:held? s)) s
-                                  (seq (:waiters s)) (update s :waiters pop)
-                                  :else (assoc s :held? false))))]
-    (when-not (:held? old)
-      (throw (ex-info "Released a konserve lock that is not held."
-                      {:type :konserve/lock-not-held})))
-    ;; still held: ownership passes to the waiter taken off the queue
-    (when-let [w (peek (:waiters old))]
-      ((:grant w)))
-    nil))
-
-(defn acquire
-  "A channel that yields `true` once `m` is held by the caller. Park on it in a
-   go block. The caller must `release!` afterwards, and if the wait itself ends
-   in an exception (a go block interrupted while parked, as Jolt can), must call
-   `(abandon! m ch)` before rethrowing."
-  [m]
-  (let [ch (async/promise-chan)
-        w {:token ch :grant #(async/put! ch true)}]
-    (when (acquire-or-enqueue! m w)
-      (async/put! ch true))
-    ch))
+  (loop []
+    (let [[old _] (swap-vals! m (fn [s]
+                                  (cond
+                                    (not (:held? s)) s
+                                    (seq (:waiters s)) (update s :waiters pop)
+                                    :else (assoc s :held? false))))]
+      (when-not (:held? old)
+        (throw (ex-info "Released a konserve lock that is not held."
+                        {:type :konserve/lock-not-held})))
+      ;; still held: ownership passes to the waiter taken off the queue, unless
+      ;; it gave up meanwhile; then on to the next one
+      (when-let [w (peek (:waiters old))]
+        (when-not (grant! w)
+          (recur)))))
+  nil)
 
 (defn abandon!
-  "Give up the wait identified by `token` (the channel `acquire` returned).
-   A waiter still in the queue is removed. One the lock was already handed to
-   holds it, so it is released, to the next waiter or free. Without this an
-   abandoned waiter keeps its place, and the release that reaches it hands the
-   lock to nobody: every later caller waits forever."
-  [m token]
-  (let [[old _] (swap-vals! m update :waiters
-                            (fn [q] (into empty-queue (remove #(identical? (:token %) token)) q)))]
-    (when-not (some #(identical? (:token %) token) (:waiters old))
-      (release! m))
-    nil))
+  "Give up wait `w`. One still waiting leaves the queue; one the lock was
+   already handed to releases it, to the next waiter or free; one already given
+   up does nothing. Call it from a `finally` whenever the wait did not complete:
+   an abandoned waiter left in the queue would receive the lock and hold it
+   for nobody, and every later caller would wait forever."
+  [m w]
+  (cond
+    (compare-and-set! (:state w) :waiting :abandoned)
+    (swap! m update :waiters (fn [q] (into empty-queue (remove #(identical? % w)) q)))
+
+    (compare-and-set! (:state w) :granted :abandoned)
+    (release! m))
+  nil)
+
+(defn acquire
+  "Start waiting for `m`. Returns the wait; `(wait-chan w)` yields `true` once
+   the caller holds the lock, to park on in a go block. The caller must
+   `release!` afterwards, and must `abandon!` the wait if it does not complete
+   (an exception, or a go block or fiber interrupted or killed while parked)."
+  [m]
+  (let [ch (async/promise-chan)
+        w (assoc (waiter #(async/put! ch true)) :ch ch)]
+    (enqueue! m w)
+    w))
+
+(defn wait-chan
+  "The channel of wait `w` (see `acquire`)."
+  [w]
+  (:ch w))
 
 #?(:cljs nil
    :default
    (defn acquire-sync!
      "Take `m`, blocking the calling thread until it is free. Returns `true`.
 
-      A wait that ends in an exception (an interrupted thread, an interrupted
-      Jolt fiber) abandons the lock (`abandon!`) and rethrows. The handoff
-      itself needs no core.async dispatch thread: `release!` delivers the
-      waiter's promise directly.
+      A wait that does not complete (an interrupted thread, an interrupted or
+      killed Jolt fiber) abandons its place (`abandon!`) on the way out. The
+      handoff itself needs no core.async dispatch thread: `release!` delivers
+      the waiter's promise directly.
 
       Under `clojure.core.async.go-checking` (JVM) a call that would block
       inside a go block throws, as `<!!` does; an uncontended one does not."
@@ -128,11 +152,12 @@
           :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
                  (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
        (let [p (promise)
-             w {:token p :grant #(deliver p true)}]
-         (when-not (acquire-or-enqueue! m w)
-           (try
-             @p
-             (catch Throwable e
-               (abandon! m p)
-               (throw e))))))
+             w (waiter #(deliver p true))
+             done? (volatile! false)]
+         (try
+           (enqueue! m w)
+           @p
+           (vreset! done? true)
+           (finally
+             (when-not @done? (abandon! m w))))))
      true))
