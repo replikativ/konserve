@@ -299,22 +299,26 @@
    post-write invalidation. Without both, a fire-and-forget fill can land after
    a newer backend write invalidated the frontend and resurrect the stale value."
   [cache-lock cache-generation observed-generation populate-fn opts]
+  ;; The lock is taken BEFORE the `try`: a take that fails (contention on
+  ;; ClojureScript, core.async's limit on pending takes) must not put back a
+  ;; token it never held, which would let two holders in at once.
   (if (:sync? opts)
-    (try
+    (do
       (take-cache-lock-sync! cache-lock)
-      (if (= observed-generation @cache-generation)
-        (do
-          (populate-fn opts)
-          true)
-        false)
-      (finally
-        (async/put! cache-lock :unlocked)))
+      (try
+        (if (= observed-generation @cache-generation)
+          (do
+            (populate-fn)
+            true)
+          false)
+        (finally
+          (async/put! cache-lock :unlocked))))
     (go-try-
+     (<?- cache-lock)
      (try
-       (<?- cache-lock)
        (if (= observed-generation @cache-generation)
          (do
-           (<?- (populate-fn opts))
+           (<?- (populate-fn))
            true)
          false)
        (finally
@@ -360,31 +364,70 @@
                                              observed-generation populate-fn opts))
                  (invoke-write-hooks! frontend-store hook-event)))))
 
-(defn- start-read-through!
-  "Await a cache fill when requested; otherwise preserve fire-and-forget reads.
+#?(:clj
+   (def ^:private max-parked-fills
+     "Detached fills parked on cache locks at once, process-wide. core.async
+      refuses more than 1024 pending takes on one channel; past this a fill is
+      skipped (it is a best-effort warm-up and the next miss reads through
+      again) rather than risk that limit for the writes that share the lock."
+     512))
 
-   `populate-fn` takes the opts of the fill, not of the read, because the two
-   need not run in the same mode. A detached fill always runs asynchronously,
-   even for a synchronous read: it runs inside a `go` block, and in sync mode
-   `populate-frontend` takes the cache lock with a BLOCKING take. That blocked
-   a core.async dispatch thread while an asynchronous operation held the lock,
-   and that operation needs a dispatch thread to release it. A burst of
-   synchronous cold reads could block every dispatch thread and stall the
-   whole pool. Asynchronously, the fill parks on the lock instead."
+#?(:clj (defonce ^:private parked-fills (atom 0)))
+
+#?(:clj
+   (defn- detached-fill!
+     "Run one detached read-through fill on the JVM. Returns its go channel.
+
+      It PARKS on the cache lock. The fill used to run `populate-frontend` in
+      the reader's mode, and for a synchronous read that took the lock with a
+      blocking take inside this go block: while an asynchronous holder kept
+      the lock, each cold read pinned a core.async dispatch thread, and the
+      holder needed one to release it, so a burst of cold reads stalled the
+      whole pool. The frontend write itself still runs in the reader's mode, so
+      a frontend that only supports synchronous writes still warms."
+     [frontend-store cache-lock cache-generation observed-generation
+      populate-fn hook-event opts]
+     (go
+       (try
+         (if (> (swap! parked-fills inc) max-parked-fills)
+           (swap! parked-fills dec)
+           (do
+             (async/<! cache-lock)
+             (swap! parked-fills dec)
+             (try
+               (when (= observed-generation @cache-generation)
+                 (if (:sync? opts)
+                   (populate-fn)
+                   (<?- (populate-fn)))
+                 (invoke-write-hooks! frontend-store hook-event))
+               (finally
+                 (async/put! cache-lock :unlocked)))))
+         (catch Exception e
+           (log/debug :konserve/tiered-frontend-populate-failed
+                      {:event hook-event :error e}))))))
+
+(defn- start-read-through!
+  "Await a cache fill when requested; otherwise preserve fire-and-forget reads."
   [frontend-store cache-lock cache-generation observed-generation
    populate-fn hook-event opts]
-  (let [fill (fn [fill-opts]
-               (complete-read-through frontend-store cache-lock cache-generation
-                                      observed-generation populate-fn hook-event fill-opts))]
+  (let [fill #(complete-read-through frontend-store cache-lock cache-generation
+                                     observed-generation populate-fn hook-event opts)]
     (if (:await-read-through? opts)
-      (fill opts)
+      (fill)
       (do
-        (go
-          (try
-            (<?- (fill (clojure.core/assoc opts :sync? false)))
-            (catch #?(:clj Exception :cljs js/Error) e
-              (log/debug :konserve/tiered-frontend-populate-failed
-                         {:event hook-event :error e}))))
+        #?(:clj
+           (detached-fill! frontend-store cache-lock cache-generation observed-generation
+                           populate-fn hook-event opts)
+           ;; On ClojureScript a synchronous fill takes the lock with `poll!`
+           ;; and holds it only for its synchronous frontend write; it never
+           ;; waits, so it cannot pin anything.
+           :cljs
+           (go
+             (try
+               (<?- (fill))
+               (catch js/Error e
+                 (log/debug :konserve/tiered-frontend-populate-failed
+                            {:event hook-event :error e})))))
         ;; The caller uniformly awaits this function. Deliver an immediate
         ;; completion in ordinary mode while the detached fill continues.
         (async+sync (:sync? opts) *default-sync-translation* (go-try- true))))))
@@ -392,18 +435,20 @@
 (defn ^:private update-frontend-after-backend
   "Order a frontend mutation after all older read-through cache fills."
   [cache-lock cache-generation update-fn opts]
+  ;; lock taken before the `try`, as in `populate-frontend`
   (if (:sync? opts)
-    (try
+    (do
       (take-cache-lock-sync! cache-lock)
-      ;; Invalidate every fill that observed the backend before this write
-      ;; committed, including fills still waiting for the lock.
-      (swap! cache-generation inc)
-      (update-fn)
-      (finally
-        (async/put! cache-lock :unlocked)))
+      (try
+        ;; Invalidate every fill that observed the backend before this write
+        ;; committed, including fills still waiting for the lock.
+        (swap! cache-generation inc)
+        (update-fn)
+        (finally
+          (async/put! cache-lock :unlocked))))
     (go-try-
+     (<?- cache-lock)
      (try
-       (<?- cache-lock)
        (swap! cache-generation inc)
        (<?- (update-fn))
        (finally
@@ -513,10 +558,9 @@
                            (when (not= backend-result ::missing)
                              (<?- (start-read-through!
                                    frontend-store cache-lock cache-generation observed-generation
-                                   (fn [fill-opts]
-                                     (-assoc-in frontend-store key-vec
-                                                (partial meta-update (first key-vec) :edn)
-                                                backend-result (frontend-opts fill-opts)))
+                                   #(-assoc-in frontend-store key-vec
+                                               (partial meta-update (first key-vec) :edn)
+                                               backend-result (frontend-opts opts))
                                    {:api-op :assoc-in
                                     :key (first key-vec)
                                     :key-vec key-vec
@@ -783,9 +827,8 @@
                          (when (seq backend-result)
                            (<?- (start-read-through!
                                  frontend-store cache-lock cache-generation observed-generation
-                                 (fn [fill-opts]
-                                   (-multi-assoc frontend-store backend-result meta-update
-                                                 (frontend-opts fill-opts)))
+                                 #(-multi-assoc frontend-store backend-result meta-update
+                                                (frontend-opts opts))
                                  {:api-op :multi-assoc :kvs backend-result}
                                  opts)))
                          ;; Merge frontend and backend results

@@ -26,13 +26,17 @@ All notable, user-visible changes to konserve are documented here.
   site.
 
 ### Fixed
-- **Synchronous cold reads on a tiered store no longer stall core.async.** A
-  read that missed the frontend started a background cache fill that, for a
+- **A burst of synchronous cold reads on a tiered store no longer stalls core.async (JVM).**
+  A read that missed the frontend started a detached cache fill that, for a
   synchronous read, took the tiered cache lock with a blocking take inside a
-  `go` block. While an asynchronous operation held the lock, every cold read
-  pinned a dispatch thread; a burst of them pinned the whole pool, and the
-  holder could not release the lock. Detached fills now always run
-  asynchronously and park on the lock.
+  `go` block. While an asynchronous operation held the lock, each cold read
+  pinned a dispatch thread; enough of them pinned the whole pool, and the
+  holder could not release the lock. A detached fill now parks on the lock
+  (at most 512 at once, process-wide; beyond that a fill is skipped and the
+  next miss reads through again) and still writes the frontend in the
+  reader's mode. Also: a cache-lock take that fails no longer releases a token
+  it never held. A synchronous awaited fill or synchronous write issued inside
+  a `go` block still blocks while the lock is held.
 - **A throwing write hook never reaches the writer.** Hooks run after the write
   has committed, but the catch covered `Exception` only (JVM) and `js/Error`
   only (CLJS), so an `Error` such as core.async's `AssertionError` on an
