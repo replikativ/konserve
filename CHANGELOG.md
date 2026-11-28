@@ -32,20 +32,22 @@ All notable, user-visible changes to konserve are documented here.
   most 1024 pending takes: with 3,000 async writers on one key of a memory
   store, 987 writes ended without a result and up to 958 ran inside the "lock"
   at once. A take that failed, or an interrupted synchronous waiter, released a
-  token it never held, and a ClojureScript synchronous operation that found its
-  key taken released a lock it did not hold. The locks are now
-  `konserve.impl.mutex`: an atom with a queue of waiters, no waiter limit, a
-  wait that does not complete (an interrupted thread; on Jolt a go block or
-  fiber interrupted or killed while parked) gives up its place or passes on a
-  lock handed to it meanwhile, and the lock is taken before the bracket that
-  releases it. On Jolt, an interrupt that lands between the lock's own steps
-  (after its state changes, before the caller's cleanup is installed) is not
-  covered. Under `clojure.core.async.go-checking`, a synchronous call
-  inside a go block that would wait for a lock throws, as `<!!` does; one that
-  finds the lock free proceeds. `get-lock`
-  returns such a lock instead of a channel. JVM, Jolt and ClojureScript differ
-  only in whether a synchronous caller can block. Unchanged: a ClojureScript
-  synchronous operation still proceeds without the lock when its key is taken.
+  token it never held. The locks are now `konserve.impl.mutex`: an atom with a
+  queue of waiters, no waiter limit, a wait that does not complete (an
+  interrupted thread; on Jolt a go block or fiber interrupted or killed while
+  parked) gives up its place or passes on a lock handed to it meanwhile, and
+  the lock is taken before the bracket that releases it. `get-lock` returns
+  such a lock instead of a channel. On Jolt, an interrupt that lands between
+  the lock's own steps is not covered.
+- **A synchronous ClojureScript operation on a key held by an asynchronous one
+  throws** (`:konserve/sync-lock-contention`). It used to run inside the
+  holder's critical section and then release the holder's lock. ClojureScript
+  cannot wait synchronously; the asynchronous API waits. The tiered cache
+  already refused this case.
+- **go-checking and per-key locks:** under `clojure.core.async.go-checking`, a
+  synchronous call inside a go block that would wait for a per-key lock throws,
+  as `<!!` does; one that finds the lock free proceeds. The tiered cache's
+  synchronous lock take checks whether or not the lock is free, as before.
 - **A throwing write hook never reaches the writer.** Hooks run after the write
   has committed, but the catch covered `Exception` only (JVM) and `js/Error`
   only (CLJS), so an `Error` such as core.async's `AssertionError` on an

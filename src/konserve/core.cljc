@@ -169,14 +169,19 @@
   (-release-lock (store-lock-registry store) key))
 
 (defn wait
-  "Take `lock` for a synchronous operation. Returns whether it is held, and only
-   a held lock may be released. On ClojureScript, which cannot block, a lock
-   that is taken is NOT held: the operation proceeds without it, as it always
-   did there, but no longer releases a lock it never had."
+  "Take `lock` for a synchronous operation; returns true once it is held.
+
+   Where a thread can block (JVM, Jolt) this waits. ClojureScript cannot wait
+   synchronously: the lock's holder is an asynchronous operation that can only
+   finish on the event loop the waiting caller would occupy. A key that is
+   taken is therefore a contention error there, as for the tiered cache, rather
+   than an operation run inside another's critical section."
   [lock]
   #?(:cljs (or (mutex/try-acquire! lock)
-               (do (log/debug :konserve/lock-not-active "WARNING: konserve lock is not active. Only use the synchronous variant with the memory store in JavaScript.")
-                   false))
+               (throw (ex-info (str "A synchronous konserve operation found its key locked by an "
+                                    "asynchronous one. ClojureScript cannot wait synchronously; use "
+                                    "the asynchronous API for this key.")
+                               {:type :konserve/sync-lock-contention})))
      :default (mutex/acquire-sync! lock)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
@@ -189,13 +194,13 @@
          l# (get-lock s# k#)]
      (try
        (let [t0# (konserve.metrics/start)
-             held?# (wait l#)]
+             _# (wait l#)]
          (try
            (konserve.metrics/finish! s# :lock :lock t0#)
            (log/trace :konserve/acquired-spin-lock {:key k#})
            ~@code
            (finally
-             (when held?# (konserve.impl.mutex/release! l#))
+             (konserve.impl.mutex/release! l#)
              (log/trace :konserve/released-spin-lock {:key k#}))))
        (finally
          (release-lock s# k#)))))
