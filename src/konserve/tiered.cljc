@@ -284,28 +284,9 @@
     (async/put! lock :unlocked)
     lock))
 
-(defn ^:private take-cache-lock-sync!
-  "Take the cache lock, blocking. On the JVM a wait that is abandoned (the
-   thread is interrupted) gives the token back as soon as its take completes:
-   `<!!` left the take queued, and the holder's release then handed the only
-   token to nobody."
-  [cache-lock]
+(defn ^:private take-cache-lock-sync! [cache-lock]
   #?(:clj
-     (let [p (promise)]
-       (async/take! cache-lock
-                    (fn [token]
-                      ;; `deliver` fails only when the waiter gave up first
-                      (when-not (deliver p token)
-                        (async/put! cache-lock :unlocked))))
-       (try
-         @p
-         (catch InterruptedException e
-           ;; Either the waiter gives up before the take completes, and the
-           ;; callback above returns the token, or the token arrived just now
-           ;; and it is returned here.
-           (when-not (deliver p ::abandoned)
-             (async/put! cache-lock :unlocked))
-           (throw e))))
+     (async/<!! cache-lock)
      :cljs
      (or (async/poll! cache-lock)
          (throw (ex-info "A synchronous tiered cache operation contended with an asynchronous one."
@@ -318,23 +299,19 @@
    post-write invalidation. Without both, a fire-and-forget fill can land after
    a newer backend write invalidated the frontend and resurrect the stale value."
   [cache-lock cache-generation observed-generation populate-fn opts]
-  ;; The lock is taken BEFORE the `try`: a take that fails (contention on
-  ;; ClojureScript, core.async's limit on pending takes) must not put back a
-  ;; token it never held, which would let two holders in at once.
   (if (:sync? opts)
-    (do
+    (try
       (take-cache-lock-sync! cache-lock)
-      (try
-        (if (= observed-generation @cache-generation)
-          (do
-            (populate-fn)
-            true)
-          false)
-        (finally
-          (async/put! cache-lock :unlocked))))
+      (if (= observed-generation @cache-generation)
+        (do
+          (populate-fn)
+          true)
+        false)
+      (finally
+        (async/put! cache-lock :unlocked)))
     (go-try-
-     (<?- cache-lock)
      (try
+       (<?- cache-lock)
        (if (= observed-generation @cache-generation)
          (do
            (<?- (populate-fn))
@@ -474,20 +451,18 @@
 (defn ^:private update-frontend-after-backend
   "Order a frontend mutation after all older read-through cache fills."
   [cache-lock cache-generation update-fn opts]
-  ;; lock taken before the `try`, as in `populate-frontend`
   (if (:sync? opts)
-    (do
+    (try
       (take-cache-lock-sync! cache-lock)
-      (try
-        ;; Invalidate every fill that observed the backend before this write
-        ;; committed, including fills still waiting for the lock.
-        (swap! cache-generation inc)
-        (update-fn)
-        (finally
-          (async/put! cache-lock :unlocked))))
+      ;; Invalidate every fill that observed the backend before this write
+      ;; committed, including fills still waiting for the lock.
+      (swap! cache-generation inc)
+      (update-fn)
+      (finally
+        (async/put! cache-lock :unlocked)))
     (go-try-
-     (<?- cache-lock)
      (try
+       (<?- cache-lock)
        (swap! cache-generation inc)
        (<?- (update-fn))
        (finally
