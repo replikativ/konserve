@@ -389,20 +389,29 @@
       populate-fn hook-event opts]
      (go
        (try
-         (if (> (swap! parked-fills inc) max-parked-fills)
-           (swap! parked-fills dec)
-           (do
-             (async/<! cache-lock)
-             (swap! parked-fills dec)
-             (try
-               (when (= observed-generation @cache-generation)
-                 (if (:sync? opts)
-                   (populate-fn)
-                   (<?- (populate-fn)))
-                 (invoke-write-hooks! frontend-store hook-event))
-               (finally
-                 (async/put! cache-lock :unlocked)))))
-         (catch Exception e
+         (let [;; the slot is given back whether the take succeeds or core.async
+               ;; refuses it (more than 1024 pending takes throws)
+               n (swap! parked-fills inc)
+               acquired? (try
+                           (when (<= n max-parked-fills)
+                             (async/<! cache-lock)
+                             true)
+                           (catch Throwable _ false)
+                           (finally (swap! parked-fills dec)))
+               filled? (when acquired?
+                         (try
+                           (when (= observed-generation @cache-generation)
+                             (if (:sync? opts)
+                               (populate-fn)
+                               (<?- (populate-fn)))
+                             true)
+                           (finally
+                             (async/put! cache-lock :unlocked))))]
+           ;; hooks after the lock is released, as `complete-read-through`
+           ;; runs them: a hook may write to this store
+           (when filled?
+             (invoke-write-hooks! frontend-store hook-event)))
+         (catch Throwable e
            (log/debug :konserve/tiered-frontend-populate-failed
                       {:event hook-event :error e}))))))
 

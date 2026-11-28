@@ -51,23 +51,49 @@
             read (fn [kk] (if sync?
                             (k/get store kk nil opts)
                             (take-within (k/get store kk nil opts))))
-            n (* 4 pool-size)
+            ;; past the pool, below the fill budget (512)
+            n (min (* 4 pool-size) 256)
             ks (mapv #(keyword (str "cold-" %)) (range n))]
         (doseq [kk ks] (k/assoc backend kk kk {:sync? true}))
         ;; the lock, held as an asynchronous operation would hold it
         (a/<!! (:cache-lock store))
-        (doseq [kk ks]
-          (is (= kk (read kk)) "the read itself answers"))
+        (let [live? (try
+                      (doseq [kk ks]
+                        (is (= kk (read kk)) "the read itself answers"))
+                      (is (go-block-runs?) "an unrelated go block still runs")
+                      (finally
+                        ;; released whatever happened, so a failure here does
+                        ;; not leave the lock held for later tests
+                        (a/put! (:cache-lock store) :unlocked)))]
         ;; stop here if the pool is stalled; anything further would hang
-        (when (is (go-block-runs?) "an unrelated go block still runs")
-        (a/>!! (:cache-lock store) :unlocked)
-        (is (go-block-runs?))
-        (testing "the parked fills complete once the lock is free, and leave
+          (when live?
+            (is (go-block-runs?))
+            (testing "the parked fills complete once the lock is free, and leave
                   exactly one lock token"
-          (let [deadline (+ (System/currentTimeMillis) 5000)]
-            (while (and (< (count (filter #(k/exists? frontend % {:sync? true}) ks)) n)
-                        (< (System/currentTimeMillis) deadline))
-              (Thread/sleep 20)))
-          (is (= n (count (filter #(k/exists? frontend % {:sync? true}) ks))))
-          (Thread/sleep 100)
-          (is (= 1 (tokens (:cache-lock store))))))))))
+              (let [deadline (+ (System/currentTimeMillis) 5000)]
+                (while (and (< (count (filter #(k/exists? frontend % {:sync? true}) ks)) n)
+                            (< (System/currentTimeMillis) deadline))
+                  (Thread/sleep 20)))
+              (is (= n (count (filter #(k/exists? frontend % {:sync? true}) ks))))
+              (Thread/sleep 100)
+              (is (= 1 (tokens (:cache-lock store)))))))))))
+
+(deftest a-frontend-hook-may-write-to-the-store
+  (testing "a detached fill runs the frontend's write hooks after releasing the
+            cache lock; a hook that writes to the tiered store must not wait
+            for a lock its own fill holds"
+    (let [frontend (new-mem-store (atom {}) {:sync? true})
+          backend (new-mem-store (atom {}) {:sync? true})
+          store (tiered/connect-tiered-store frontend backend :opts {:sync? true})
+          done (promise)]
+      (k/assoc backend :cold 1 {:sync? true})
+      (k/add-write-hook! frontend ::audit
+                         (fn [event]
+                           (when (= :cold (:key event))
+                             (k/assoc store :audit 2 {:sync? true})
+                             (deliver done :written))))
+      (is (= 1 (k/get store :cold nil {:sync? true})))
+      (is (= :written (deref done 2000 :blocked)))
+      (is (= 2 (k/get backend :audit nil {:sync? true})))
+      (is (= 1 (count (take-while some? (repeatedly #(a/poll! (:cache-lock store)))))))
+      (a/>!! (:cache-lock store) :unlocked))))
