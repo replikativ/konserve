@@ -3,6 +3,21 @@
             [clojure.test :refer [deftest is testing]]
             [konserve.impl.mutex :as mutex]))
 
+(defn- queued [m] (count (:waiters @m)))
+
+(defn- await-queued
+  "Wait until `n` waiters are queued on `m`, so a test exercises what it says."
+  [m n]
+  (let [deadline (+ (System/currentTimeMillis) 10000)]
+    (while (and (< (queued m) n) (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 5))
+    (queued m)))
+
+(defn- take-within [ch]
+  (let [p (promise)]
+    (a/take! ch #(deliver p %))
+    (deref p 10000 ::timeout)))
+
 (deftest one-holder-at-a-time
   (testing "async and sync acquirers mixed, on dispatch and plain threads"
     (let [m (mutex/mutex)
@@ -18,8 +33,8 @@
                                      (mutex/acquire-sync! m)
                                      (try (work) (finally (mutex/release! m))))
                                    :thread)))]
-      (is (every? #{:go} (map a/<!! gos)))
-      (is (every? #{:thread} (map deref threads)))
+      (is (every? #{:go} (map take-within gos)))
+      (is (every? #{:thread} (map #(deref % 10000 ::timeout) threads)))
       (is (= 1 @most))
       (is (not (mutex/held? m))))))
 
@@ -30,8 +45,9 @@
     (let [chs (doall (for [i (range 10)]
                        (let [c (mutex/acquire m)]
                          (a/go (a/<! c) (swap! order conj i) (mutex/release! m)))))]
+      (is (= 10 (await-queued m 10)))
       (mutex/release! m)
-      (run! a/<!! chs)
+      (run! take-within chs)
       (is (= (range 10) @order)))))
 
 (deftest no-limit-on-waiters
@@ -40,8 +56,9 @@
       (mutex/try-acquire! m)
       (let [chs (doall (for [_ (range 5000)]
                          (a/go (a/<! (mutex/acquire m)) (mutex/release! m) :ok)))]
+        (is (= 5000 (await-queued m 5000)) "all of them wait at once")
         (mutex/release! m)
-        (is (= 5000 (count (filter #{:ok} (map a/<!! chs)))))))))
+        (is (= 5000 (count (filter #{:ok} (map take-within chs)))))))))
 
 (deftest an-interrupted-waiter-leaves-the-lock-intact
   (testing "a waiter interrupted while queued withdraws; the holder's release

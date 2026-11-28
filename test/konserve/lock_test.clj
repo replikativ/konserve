@@ -59,8 +59,12 @@
                                       (<! (timeout 0))
                                       (swap! inside dec)
                                       :done)))]
+          (let [deadline (+ (System/currentTimeMillis) 10000)]
+            (while (and (< (count (:waiters @lock)) n) (< (System/currentTimeMillis) deadline))
+              (Thread/sleep 5)))
+          (is (= n (count (:waiters @lock))) "all of them wait at once")
           (mutex/release! lock)
-          (is (= (repeat n :done) (map <!! chs)))
+          (is (= (repeat n :done) (map #(first (alts!! [% (timeout 10000)])) chs)))
           (is (= 1 @most) "one holder at a time"))
         (finally (release-lock store :k))))))
 
@@ -203,3 +207,33 @@
           (is (:no-deadlock res)          (str "deadlock / lost wakeup: " tag))
           (is (zero? (:leaked res))       (str "registry not reclaimed: " tag))
           (is (zero? (:occ-residual res)) (str "occupancy residual: " tag)))))))
+
+(deftest a-throw-right-after-acquiring-releases-the-key
+  (testing "everything after the lock is taken runs inside the bracket that
+            releases it: a throwing metrics sink or logger must not leave the
+            key locked for the operation queued behind it"
+    (let [store (<!! (new-mem-store))
+          calls (atom 0)
+          real konserve.metrics/finish!
+          lock (get-lock store :k)
+          queued (fn [n] (let [deadline (+ (System/currentTimeMillis) 5000)]
+                           (while (and (< (count (:waiters @lock)) n)
+                                       (< (System/currentTimeMillis) deadline))
+                             (Thread/sleep 5))))]
+      (with-redefs [konserve.metrics/finish!
+                    (fn [& args]
+                      (if (= 1 (swap! calls inc))
+                        (throw (ex-info "sink failed" {}))
+                        (apply real args)))]
+        (try
+          (mutex/try-acquire! lock)
+          (let [first-op (future (try (locked store :k :first) (catch Exception e e)))
+                _ (queued 1)
+                second-op (go-locked store :k :second)]
+            (queued 2)
+            (mutex/release! lock)
+            (is (instance? Exception (deref first-op 5000 :blocked)) "the first operation throws")
+            (is (= :second (first (alts!! [second-op (timeout 5000)])))
+                "and the one queued behind it still gets the key"))
+          (finally (release-lock store :k))))
+      (is (zero? (count @(:locks store)))))))

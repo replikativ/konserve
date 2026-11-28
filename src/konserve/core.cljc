@@ -181,22 +181,22 @@
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defmacro locked [store key & code]
-  ;; The lock is taken outside the inner `try`: a wait that fails (an
-  ;; interrupted thread) must not release a lock it does not hold.
+  ;; The lock is taken outside the bracket that releases it: a wait that fails
+  ;; (an interrupted thread) must not release a lock it does not hold. Every
+  ;; step after the lock is taken, metrics and logging included, is inside it.
   `(let [s# ~store
          k# ~key
          l# (get-lock s# k#)]
      (try
-       (let [held?# (let [t0# (konserve.metrics/start)
-                          h# (wait l#)]
-                      (konserve.metrics/finish! s# :lock :lock t0#)
-                      h#)]
-         (log/trace :konserve/acquired-spin-lock {:key k#})
+       (let [t0# (konserve.metrics/start)
+             held?# (wait l#)]
          (try
+           (konserve.metrics/finish! s# :lock :lock t0#)
+           (log/trace :konserve/acquired-spin-lock {:key k#})
            ~@code
            (finally
-             (log/trace :konserve/releasing-spin-lock {:key k#})
-             (when held?# (konserve.impl.mutex/release! l#)))))
+             (when held?# (konserve.impl.mutex/release! l#))
+             (log/trace :konserve/released-spin-lock {:key k#}))))
        (finally
          (release-lock s# k#)))))
 
@@ -210,13 +210,14 @@
         ;; locked, and a go block per lock would blow up a method's size.
         (let [t0# (konserve.metrics/start)]
           (clojure.core.async/<! (konserve.impl.mutex/acquire l#))
-          (konserve.metrics/finish! s# :lock :lock t0#))
-        (log/trace :konserve/acquired-go-lock {:key k#})
-        (try
-          ~@code
-          (finally
-            (log/trace :konserve/releasing-go-lock {:key k#})
-            (konserve.impl.mutex/release! l#)))
+          ;; from here on the lock is held: everything is inside the bracket
+          (try
+            (konserve.metrics/finish! s# :lock :lock t0#)
+            (log/trace :konserve/acquired-go-lock {:key k#})
+            ~@code
+            (finally
+              (konserve.impl.mutex/release! l#)
+              (log/trace :konserve/released-go-lock {:key k#}))))
         (finally
           (release-lock s# k#))))))
 

@@ -27,25 +27,23 @@
 
    The only platform split is whether a thread can block, so a runtime that
    can takes the `:default` branch. Everything else is core: an atom,
-   `swap-vals!`, a vector as the waiter queue, promises.
+   `swap-vals!`, a persistent queue of waiters, promises.
 
    The queue has no size limit, and acquisition happens before the caller's
    `try`, so a failed acquisition never releases anything.
 
    The lock is handed to waiters in arrival order. It is not reentrant."
-  (:require [clojure.core.async :as async]))
+  (:require [clojure.core.async :as async]
+            #?@(:jolt [] :clj [[clojure.core.async.impl.dispatch]])))
+
+(def ^:private empty-queue
+  #?(:cljs cljs.core/PersistentQueue.EMPTY
+     :default clojure.lang.PersistentQueue/EMPTY))
 
 (defn mutex
   "A new, free lock."
   []
-  (atom {:held? false :waiters []}))
-
-(defn- dequeue
-  "`q` without its first waiter. A `subvec` keeps the vector it was cut from,
-   so a short queue is copied, which lets a long-busy lock drop the waiters it
-   has already served."
-  [q]
-  (if (> (count q) 32) (subvec q 1) (vec (rest q))))
+  (atom {:held? false :waiters empty-queue}))
 
 (defn held?
   "Whether `m` is held right now. For diagnostics and tests."
@@ -75,13 +73,13 @@
   (let [[old _] (swap-vals! m (fn [s]
                                 (cond
                                   (not (:held? s)) s
-                                  (seq (:waiters s)) (update s :waiters dequeue)
+                                  (seq (:waiters s)) (update s :waiters pop)
                                   :else (assoc s :held? false))))]
     (when-not (:held? old)
       (throw (ex-info "Released a konserve lock that is not held."
                       {:type :konserve/lock-not-held})))
     ;; still held: ownership passes to the waiter taken off the queue
-    (when-let [w (first (:waiters old))]
+    (when-let [w (peek (:waiters old))]
       ((:grant w)))
     nil))
 
@@ -102,7 +100,7 @@
       the lock had already been handed to it."
      [m waiter]
      (let [[old _] (swap-vals! m update :waiters
-                               (fn [q] (into [] (remove #(identical? % waiter)) q)))]
+                               (fn [q] (into empty-queue (remove #(identical? % waiter)) q)))]
        (boolean (some #(identical? % waiter) (:waiters old))))))
 
 #?(:cljs nil
@@ -115,6 +113,11 @@
       The handoff itself does not need a core.async dispatch thread: `release!`
       delivers the waiter's promise directly."
      [m]
+     ;; The check `<!!` makes under `clojure.core.async.go-checking`: blocking
+     ;; a dispatch thread here can stall the whole pool.
+     #?(:jolt nil
+        :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
+               (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
      (let [p (promise)
            w {:grant #(deliver p true)}]
        (when-not (acquire-or-enqueue! m w)
