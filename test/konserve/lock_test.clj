@@ -64,7 +64,10 @@
               (Thread/sleep 5)))
           (is (= n (count (:waiters @lock))) "all of them wait at once")
           (mutex/release! lock)
-          (is (= (repeat n :done) (map #(first (alts!! [% (timeout 10000)])) chs)))
+          ;; one overall deadline: a lost handoff fails in seconds
+          (let [[v _] (alts!! [(clojure.core.async/into [] (clojure.core.async/merge chs))
+                               (timeout 30000)])]
+            (is (= (repeat n :done) v)))
           (is (= 1 @most) "one holder at a time"))
         (finally (release-lock store :k))))))
 

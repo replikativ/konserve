@@ -3,7 +3,6 @@
   (:refer-clojure :exclude [get get-in update update-in assoc assoc-in exists? dissoc keys])
   (:require [clojure.core.async :refer [go] :as async]
             [konserve.impl.mutex :as mutex]
-            #?@(:jolt [] :clj [[clojure.core.async.impl.dispatch]])
             #?(:clj [konserve.nio-helpers :as nio])
             [clojure.set :as set]
             [konserve.memory :as memory]
@@ -294,11 +293,8 @@
                        {:type :konserve/tiered-sync-cache-contention})))
      :default
      (do
-       ;; The check `<!!` made here under `clojure.core.async.go-checking`,
-       ;; whether or not the lock was free.
-       #?(:jolt nil
-          :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
-                 (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
+       ;; The check `<!!` made here, whether or not the lock was free.
+       (mutex/check-would-block!)
        (mutex/acquire-sync! cache-lock))))
 
 (defn ^:private populate-frontend
@@ -399,20 +395,59 @@
         ;; completion in ordinary mode while the detached fill continues.
         (async+sync (:sync? opts) *default-sync-translation* (go-try- true))))))
 
+#?(:cljs
+   (defn- evict-after-holder!
+     "Evict `key` from the frontend once the cache lock's current holder is
+      done. See the ClojureScript branch of `update-frontend-after-backend`."
+     [frontend-store cache-lock cache-generation key opts]
+     (go
+       (try
+         (let [w (mutex/acquire cache-lock)]
+           (async/<! (mutex/wait-chan w))
+           (try
+             (swap! cache-generation inc)
+             (<?- (-dissoc frontend-store key (frontend-opts (clojure.core/assoc opts :sync? false))))
+             (finally
+               (mutex/release! cache-lock))))
+         (catch :default e
+           (log/warn :konserve/tiered-deferred-eviction-failed {:key key :error e}))))))
+
 (defn ^:private update-frontend-after-backend
-  "Order a frontend mutation after all older read-through cache fills."
-  [cache-lock cache-generation update-fn opts]
+  "Order a frontend mutation after all older read-through cache fills. `key` is
+   the blob the mutation touches."
+  [frontend-store key cache-lock cache-generation update-fn opts]
   ;; lock taken before the `try`, as in `populate-frontend`
   (if (:sync? opts)
-    (do
-      (take-cache-lock-sync! cache-lock)
-      (try
-        ;; Invalidate every fill that observed the backend before this write
-        ;; committed, including fills still waiting for the lock.
-        (swap! cache-generation inc)
-        (update-fn)
-        (finally
-          (mutex/release! cache-lock))))
+    #?(:cljs
+       ;; ClojureScript cannot wait for the lock synchronously, and the backend
+       ;; write has already committed, so refusing would leave the frontend
+       ;; serving the old value. A holder is an asynchronous fill or write
+       ;; parked on the event loop: it cannot run while this does. So: advance
+       ;; the generation (a fill that has not checked it yet skips its write),
+       ;; apply the mutation now, and evict the key again once the holder is
+       ;; done, in case the holder was a fill past its check that writes the
+       ;; old value when it resumes.
+       (if (mutex/try-acquire! cache-lock)
+         (try
+           (swap! cache-generation inc)
+           (update-fn)
+           (finally
+             (mutex/release! cache-lock)))
+         (do
+           (swap! cache-generation inc)
+           (let [result (update-fn)]
+             (evict-after-holder! frontend-store cache-lock cache-generation key opts)
+             result)))
+       :default
+       (do
+         (take-cache-lock-sync! cache-lock)
+         (try
+           ;; Invalidate every fill that observed the backend before this write
+           ;; committed, including fills still waiting for the lock.
+           (swap! cache-generation inc)
+           (update-fn)
+           (finally
+             (mutex/release! cache-lock)))))
     (go-try-
      (let [wait (mutex/acquire cache-lock)
            done (volatile! false)]
@@ -442,7 +477,7 @@
               (go-try-
                (try
                  (<?- (update-frontend-after-backend
-                       cache-lock cache-generation
+                       frontend-store key cache-lock cache-generation
                        #(-dissoc frontend-store key (frontend-opts opts))
                        opts))
                  (catch #?(:clj Exception :cljs js/Error) e
@@ -567,7 +602,7 @@
                        (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts))
                        (try
                          (<?- (update-frontend-after-backend
-                               cache-lock cache-generation
+                               frontend-store (first key-vec) cache-lock cache-generation
                                #(-update-in frontend-store key-vec meta-up-fn up-fn (frontend-opts opts))
                                opts))
                          (catch #?(:clj Exception :cljs js/Error) e
@@ -610,7 +645,7 @@
                        (<?- (invalidate-frontend frontend-store cache-lock cache-generation (first key-vec) opts))
                        (try
                          (<?- (update-frontend-after-backend
-                               cache-lock cache-generation
+                               frontend-store (first key-vec) cache-lock cache-generation
                                #(-assoc-in frontend-store key-vec meta-up-fn val (frontend-opts opts))
                                opts))
                          (catch #?(:clj Exception :cljs js/Error) e

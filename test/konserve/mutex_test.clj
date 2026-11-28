@@ -124,29 +124,23 @@
       (is (not (mutex/held? m))))))
 
 (deftest go-checking-only-for-a-call-that-would-block
-  (testing "with core.async's go-checking on, a synchronous acquire runs the
-            dispatch-thread check only when it would wait; a free lock is
-            taken without it. The check itself is stubbed: whether core.async
-            honours a flag set after startup depends on its version."
+  (testing "with core.async's go-checking on (read at load, as for `<!!`), a
+            synchronous acquire runs the dispatch-thread check only when it
+            would wait; a free lock is taken without it"
     (let [m (mutex/mutex)
-          before (System/getProperty "clojure.core.async.go-checking")
           checked (atom 0)]
-      (System/setProperty "clojure.core.async.go-checking" "true")
-      (try
-        (with-redefs [clojure.core.async.impl.dispatch/check-blocking-in-dispatch
-                      (fn [] (swap! checked inc) (throw (IllegalStateException. "would block")))]
+      (with-redefs [konserve.impl.mutex/go-checking? true
+                    clojure.core.async.impl.dispatch/check-blocking-in-dispatch
+                    (fn [] (swap! checked inc) (throw (IllegalStateException. "would block")))]
+        (try
           (is (true? (mutex/acquire-sync! m)) "free: taken")
           (is (zero? @checked) "without the check")
           (is (instance? IllegalStateException
                          (try (mutex/acquire-sync! m) (catch Throwable e e)))
               "held: the check runs and refuses")
           (is (= 1 @checked))
-          (is (zero? (queued m)) "and the refused call left no waiter behind"))
-        (finally
-          (if before
-            (System/setProperty "clojure.core.async.go-checking" before)
-            (System/clearProperty "clojure.core.async.go-checking"))
-          (mutex/release! m))))))
+          (is (zero? (queued m)) "and the refused call left no waiter behind")
+          (finally (mutex/release! m)))))))
 
 (deftest releasing-a-free-lock-is-an-error
   (let [m (mutex/mutex)]

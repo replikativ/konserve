@@ -40,6 +40,23 @@
   #?(:cljs cljs.core/PersistentQueue.EMPTY
      :default clojure.lang.PersistentQueue/EMPTY))
 
+#?(:jolt nil
+   :clj
+   (def ^:private go-checking?
+     "Read once, at load, as core.async reads it for `<!!`."
+     (Boolean/getBoolean "clojure.core.async.go-checking")))
+
+(defn check-would-block!
+  "What `<!!` does under `clojure.core.async.go-checking` (JVM): throw if the
+   caller is a core.async dispatch thread, since blocking one can stall the
+   whole pool. Call it only where the caller is about to block. A no-op
+   elsewhere and when go-checking was off at load."
+  []
+  #?(:jolt nil
+     :clj (when go-checking?
+            (clojure.core.async.impl.dispatch/check-blocking-in-dispatch))
+     :cljs nil))
+
 (defn mutex
   "A new, free lock."
   []
@@ -146,11 +163,7 @@
       inside a go block throws, as `<!!` does; an uncontended one does not."
      [m]
      (when-not (try-acquire! m)
-       ;; The check `<!!` makes under `clojure.core.async.go-checking`:
-       ;; blocking a dispatch thread here can stall the whole pool.
-       #?(:jolt nil
-          :clj (when (Boolean/getBoolean "clojure.core.async.go-checking")
-                 (clojure.core.async.impl.dispatch/check-blocking-in-dispatch)))
+       (check-would-block!)
        (let [p (promise)
              w (waiter #(deliver p true))
              done? (volatile! false)]

@@ -42,12 +42,15 @@ All notable, user-visible changes to konserve are documented here.
 - **A synchronous ClojureScript operation on a key held by an asynchronous one
   throws** (`:konserve/sync-lock-contention`). It used to run inside the
   holder's critical section and then release the holder's lock. ClojureScript
-  cannot wait synchronously; the asynchronous API waits. The tiered cache
-  already refused this case.
+  cannot wait synchronously; the asynchronous API waits. A synchronous
+  write-through write to a tiered store whose cache lock an async fill holds
+  still succeeds: it updates the frontend at once and evicts the key again
+  once the fill is done.
 - **go-checking and per-key locks:** under `clojure.core.async.go-checking`, a
   synchronous call inside a go block that would wait for a per-key lock throws,
   as `<!!` does; one that finds the lock free proceeds. The tiered cache's
-  synchronous lock take checks whether or not the lock is free, as before.
+  synchronous lock take checks whether or not the lock is free, as before. The
+  flag is read at load, as core.async reads it.
 - **A throwing write hook never reaches the writer.** Hooks run after the write
   has committed, but the catch covered `Exception` only (JVM) and `js/Error`
   only (CLJS), so an `Error` such as core.async's `AssertionError` on an
